@@ -4,14 +4,17 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "DroneOptAI - Energy-Efficient Drone Delivery System"
     API_V1_STR: str = "/api/v1"
 
-    # Secret key for JWT auth (to be used by Auth module)
     SECRET_KEY: str = "tandeptrai123"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
-    # Database — điền vào file .env, ví dụ:
-    # DATABASE_URL=postgresql://user:password@host:5432/dbname
-    DATABASE_URL: str = "postgresql://user:password@localhost:5432/droneoptai"
+    DATABASE_URL: str = "postgresql+asyncpg://user:password@localhost:5432/droneoptai"
+
+    # Google OAuth2
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
 
     class Config:
         env_file = ".env"
