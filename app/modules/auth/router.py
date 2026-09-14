@@ -24,7 +24,7 @@ GOOGLE_AUTH_URL = (
 async def register(body: RegisterRequest, db: AsyncSession = Depends(get_async_db)):
     if await service.get_user_by_email(db, body.email):
         raise HTTPException(status_code=400, detail="Email already registered")
-    user = await service.register_user(db, body.email, body.full_name, body.password)
+    user = await service.register_user(db, body.email, body.username, body.full_name, body.password)
     return user
 
 

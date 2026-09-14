@@ -65,11 +65,11 @@ async def get_user_by_id(db: AsyncSession, user_id: str) -> Optional[User]:
 
 # ── Register ──────────────────────────────────────────────────────────────────
 
-async def register_user(db: AsyncSession, email: str, full_name: str, password: str) -> User:
+async def register_user(db: AsyncSession, email: str, username: str, full_name: str, password: str) -> User:
     user = User(
         email=email,
+        username=username,
         full_name=full_name,
-        username=email,
         hashed_password=hash_password(password),
         role_id=ROLE_NAME_TO_ID[UserRole.CUSTOMER],
     )
