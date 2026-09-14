@@ -5,10 +5,13 @@ import sys
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.database.db import async_engine, Base
+import app.modules.auth.models  # noqa: F401 — đảm bảo model được load trước create_all
 
 # Import routers từ các module
 from app.modules.auth.router import router as auth_router
@@ -21,9 +24,17 @@ from app.modules.ai_predictions.router import router as ai_router
 from app.database.router import router as db_router
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with async_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json"
+    openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
