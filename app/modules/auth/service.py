@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.modules.auth.models import User
+from app.modules.auth.models import User, ROLE_NAME_TO_ID
 from app.shared.roles import UserRole
 
 
@@ -70,7 +70,7 @@ async def register_user(db: AsyncSession, email: str, full_name: str, password: 
         email=email,
         full_name=full_name,
         hashed_password=hash_password(password),
-        role=UserRole.CUSTOMER,
+        role_id=ROLE_NAME_TO_ID[UserRole.CUSTOMER],
     )
     db.add(user)
     await db.commit()
@@ -105,26 +105,14 @@ async def exchange_google_code(code: str) -> dict:
 
 
 async def get_or_create_google_user(db: AsyncSession, google_info: dict) -> User:
-    google_id = google_info["sub"]
     email = google_info["email"]
     full_name = google_info.get("name", email)
 
-    # Tìm theo google_id
-    result = await db.execute(select(User).where(User.google_id == google_id))
-    user = result.scalar_one_or_none()
-    if user:
-        return user
-
-    # Tìm theo email (tài khoản đã tồn tại, liên kết Google)
     user = await get_user_by_email(db, email)
     if user:
-        user.google_id = google_id
-        await db.commit()
-        await db.refresh(user)
         return user
 
-    # Tạo mới
-    user = User(email=email, full_name=full_name, google_id=google_id, role=UserRole.CUSTOMER)
+    user = User(email=email, full_name=full_name, role_id=ROLE_NAME_TO_ID[UserRole.CUSTOMER])
     db.add(user)
     await db.commit()
     await db.refresh(user)

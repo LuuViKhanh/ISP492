@@ -38,7 +38,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_async_db)):
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account is disabled")
     return TokenResponse(
-        access_token=service.create_access_token(user.id, user.role),
+        access_token=service.create_access_token(user.id, user.role.value),
         refresh_token=service.create_refresh_token(user.id),
     )
 
@@ -63,7 +63,7 @@ async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_async
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="User not found or disabled")
     return TokenResponse(
-        access_token=service.create_access_token(user.id, user.role),
+        access_token=service.create_access_token(user.id, user.role.value),
         refresh_token=service.create_refresh_token(user.id),
     )
 
@@ -87,6 +87,6 @@ async def google_callback(code: str, db: AsyncSession = Depends(get_async_db)):
         raise HTTPException(status_code=400, detail="Failed to exchange Google code")
     user = await service.get_or_create_google_user(db, google_info)
     return TokenResponse(
-        access_token=service.create_access_token(user.id, user.role),
+        access_token=service.create_access_token(user.id, user.role.value),
         refresh_token=service.create_refresh_token(user.id),
     )
