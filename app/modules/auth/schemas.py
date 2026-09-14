@@ -4,6 +4,7 @@ from app.shared.roles import UserRole
 
 class RegisterRequest(BaseModel):
     email: EmailStr
+    username: str
     full_name: str
     password: str
 
