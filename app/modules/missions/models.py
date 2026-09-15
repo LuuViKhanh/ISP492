@@ -28,7 +28,7 @@ class Mission(Base):
     payload_weight: Mapped[float | None] = mapped_column(Float, nullable=True)
     distance_m: Mapped[float | None] = mapped_column(Float, nullable=True)
     delivery_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
-    status: Mapped[MissionStatus] = mapped_column(SAEnum(MissionStatus, name="missions_status", create_type=False))
+    status: Mapped[MissionStatus] = mapped_column(SAEnum(MissionStatus, name="missions_status", create_type=False, values_callable=lambda x: [e.value for e in x]))
     scheduled_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     start_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     end_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
