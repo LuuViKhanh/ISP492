@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.database.db import get_async_db
 from app.modules.auth import service
-from app.modules.auth.schemas import LoginRequest, RegisterRequest, TokenResponse, UserResponse
+from app.modules.auth.schemas import LoginRequest, RegisterRequest, TokenResponse, UserResponse, ForgotPasswordRequest, ResetPasswordRequest
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -41,6 +41,26 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_async_db)):
         access_token=service.create_access_token(user.id, user.role.value),
         refresh_token=service.create_refresh_token(user.id),
     )
+
+
+# ── Forgot / Reset Password ──────────────────────────────────────────────────
+
+@router.post("/forgot-password")
+async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depends(get_async_db)):
+    from app.core.email import send_reset_email
+    token = await service.create_reset_token(db, body.email)
+    if token:
+        reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+        send_reset_email(body.email, reset_link)
+    return {"message": "If this email exists, a reset link has been sent."}
+
+
+@router.post("/reset-password")
+async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(get_async_db)):
+    success = await service.reset_password(db, body.token, body.new_password)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+    return {"message": "Password reset successfully"}
 
 
 # ── Logout ────────────────────────────────────────────────────────────────────
