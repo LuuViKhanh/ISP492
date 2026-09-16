@@ -90,25 +90,26 @@ async def create_reset_token(db: AsyncSession, email: str) -> Optional[str]:
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
     await db.execute(text(
         "INSERT INTO public.password_reset_tokens (user_id, token, expires_at, used, created_at) "
-        "VALUES (0, :token, :expires_at, false, now())"
-    ), {"token": f"{email}:{token}", "expires_at": expires_at})
+        "VALUES (:user_id, :token, :expires_at, false, now())"
+    ), {"user_id": user.id, "token": token, "expires_at": expires_at})
     await db.commit()
     return token
 
 
 async def reset_password(db: AsyncSession, token: str, new_password: str) -> bool:
     result = await db.execute(text(
-        "SELECT * FROM public.password_reset_tokens "
-        "WHERE token LIKE :pattern AND used = false AND expires_at > now()"
-    ), {"pattern": f"%:{token}"})
+        "SELECT prt.id, u.id as user_id FROM public.password_reset_tokens prt "
+        "JOIN public.users u ON u.id = prt.user_id "
+        "WHERE prt.token = :token AND prt.used = false AND prt.expires_at > now()"
+    ), {"token": token})
     row = result.fetchone()
     if not row:
         return False
-    email = row.token.split(":")[0]
-    user = await get_user_by_email(db, email)
+    user = await get_user_by_id(db, str(row.user_id))
     if not user:
         return False
     user.hashed_password = hash_password(new_password)
+    db.add(user)
     await db.execute(text(
         "UPDATE public.password_reset_tokens SET used = true WHERE id = :id"
     ), {"id": row.id})
