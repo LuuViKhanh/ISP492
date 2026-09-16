@@ -21,7 +21,14 @@ project/
 │       ├── auth/                    # Đăng nhập, đăng xuất, JWT token management
 │       ├── users/                   # Quản lý tài khoản người dùng
 │       ├── missions/                # Quản lý chuyến bay, yêu cầu, duyệt lịch
-│       ├── fleet/                   # Quản lý Drone, Pin, Bảo trì
+│       │   ├── models.py
+│       │   ├── router.py
+│       │   ├── schemas.py
+│       │   ├── admin/               # (MỚI) API dành riêng cho Admin
+│       │   ├── operator/            # (MỚI) API dành riêng cho Operator
+│       │   ├── technician/          # (MỚI) API dành riêng cho Technician
+│       │   └── customer/            # (MỚI) API dành riêng cho Customer
+│       ├── fleet/                   # Quản lý Drone, Pin, Bảo trì (Có cấu trúc role tương tự)
 │       ├── ai_predictions/          # Dự đoán năng lượng, SHAP, đề xuất tuyến đường
 │       ├── payments/                # Cổng thanh toán, quản lý hóa đơn & hoàn tiền
 │       └── system/                  # Audit logs, cấu hình hệ thống, backup

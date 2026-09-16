@@ -71,6 +71,16 @@ app.include_router(fleet_router, prefix=settings.API_V1_STR)
 app.include_router(ai_router, prefix=settings.API_V1_STR)
 app.include_router(db_router)  # Dev DB API — không dùng API prefix, truy cập tại /dev/db/...
 
+# Tự động include các router của các roles
+import importlib
+for mod in ["auth", "users", "missions", "fleet", "ai_predictions"]:
+    for role in ["admin", "operator", "technician", "customer"]:
+        try:
+            router_mod = importlib.import_module(f"app.modules.{mod}.{role}.router")
+            app.include_router(router_mod.router, prefix=settings.API_V1_STR)
+        except ImportError:
+            pass
+
 
 @app.get("/")
 def root():
