@@ -43,13 +43,3 @@ async def update_profile(
     await db.refresh(user)
     return user
 
-
-# ── Admin ─────────────────────────────────────────────────────────────────────
-
-@router.get("/", dependencies=[Depends(require_admin)])
-async def get_all_users(db: AsyncSession = Depends(get_async_db)):
-    from sqlalchemy import select
-    from app.modules.auth.models import User
-    result = await db.execute(select(User))
-    users = result.scalars().all()
-    return [ProfileResponse.model_validate(u) for u in users]
