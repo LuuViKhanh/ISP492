@@ -14,7 +14,7 @@ async def log_action(
     import json
     await db.execute(text(
         "INSERT INTO public.audit_logs (user_id, action, resource_table, details_json, created_at) "
-        "VALUES (:user_id, :action::audit_logs_action, :resource_table, :details_json, now())"
+        "VALUES (:user_id, CAST(:action AS audit_logs_action), :resource_table, CAST(:details_json AS jsonb), now())"
     ), {
         "user_id": user_id,
         "action": action,
