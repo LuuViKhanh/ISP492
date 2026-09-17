@@ -22,6 +22,9 @@ from app.modules.missions.router import router as missions_router
 from app.modules.fleet.router import router as fleet_router
 from app.modules.ai_predictions.router import router as ai_router
 
+from app.modules.system.router import router as system_router
+from app.modules.system.admin.router import router as system_admin_router
+
 # Developer Database API (dùng chung server, prefix /dev/db/...)
 from app.database.router import router as db_router
 
@@ -69,6 +72,8 @@ app.include_router(users_router, prefix=settings.API_V1_STR)
 app.include_router(missions_router, prefix=settings.API_V1_STR)
 app.include_router(fleet_router, prefix=settings.API_V1_STR)
 app.include_router(ai_router, prefix=settings.API_V1_STR)
+app.include_router(system_router, prefix=settings.API_V1_STR)
+app.include_router(system_admin_router, prefix=settings.API_V1_STR)
 app.include_router(db_router)  # Dev DB API — không dùng API prefix, truy cập tại /dev/db/...
 
 # Tự động include các router của các roles
