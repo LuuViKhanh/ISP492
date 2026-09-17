@@ -6,6 +6,7 @@ from app.core.config import settings
 from app.database.db import get_async_db
 from app.modules.auth import service
 from app.modules.auth.schemas import LoginRequest, RegisterRequest, TokenResponse, UserResponse, ForgotPasswordRequest, ResetPasswordRequest
+from app.modules.system.service import log_action
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -24,7 +25,10 @@ GOOGLE_AUTH_URL = (
 async def register(body: RegisterRequest, db: AsyncSession = Depends(get_async_db)):
     if await service.get_user_by_email(db, body.email):
         raise HTTPException(status_code=400, detail="Email already registered")
+    if await service.get_user_by_username(db, body.username):
+        raise HTTPException(status_code=400, detail="Username already taken")
     user = await service.register_user(db, body.email, body.username, body.full_name, body.password)
+    await log_action(db, user.id, "REGISTER", "users", {"email": user.email})
     return user
 
 
@@ -37,6 +41,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_async_db)):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account is disabled")
+    await log_action(db, user.id, "LOGIN", "users", {"email": user.email})
     return TokenResponse(
         access_token=service.create_access_token(user.id, user.role.value),
         refresh_token=service.create_refresh_token(user.id),
@@ -60,6 +65,7 @@ async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(
     success = await service.reset_password(db, body.token, body.new_password)
     if not success:
         raise HTTPException(status_code=400, detail="Invalid or expired token")
+    await log_action(db, None, "PASSWORD_RESET", "users")
     return {"message": "Password reset successfully"}
 
 
