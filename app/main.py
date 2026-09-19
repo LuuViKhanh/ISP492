@@ -13,7 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.database.db import async_engine, Base
-import app.modules.auth.models  # noqa: F401 — đảm bảo model được load trước create_all
+import app.modules.auth.models  # noqa: F401
+import app.modules.fleet.models  # noqa: F401
 
 # Import routers từ các module
 from app.modules.auth.router import router as auth_router
