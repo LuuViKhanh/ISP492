@@ -53,7 +53,8 @@ def custom_openapi():
     }
     for path in schema["paths"].values():
         for method in path.values():
-            method["security"] = [{"BearerAuth": []}]
+            if isinstance(method, dict):
+                method["security"] = [{"BearerAuth": []}]
     app.openapi_schema = schema
     return schema
 
@@ -86,6 +87,8 @@ for mod in ["auth", "users", "missions", "fleet", "ai_predictions"]:
             app.include_router(router_mod.router, prefix=settings.API_V1_STR)
         except ImportError:
             pass
+        except Exception as e:
+            print(f"[WARN] Failed to load app.modules.{mod}.{role}.router: {e}")
 
 
 @app.get("/")
