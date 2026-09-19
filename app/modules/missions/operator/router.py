@@ -1,16 +1,71 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, and_, or_
+from datetime import timedelta
 
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
 from app.modules.missions.models import Mission, MissionStatus
 from app.modules.missions.schemas import MissionResponse, ApproveRejectRequest
+from app.modules.fleet.models import Drone, Battery, DroneStatus, batteries_status
+from app.modules.fleet.schemas import CheckAvailabilityRequest, AvailabilityResponse
 
 router = APIRouter(prefix="/operator/missions", tags=["Operator - Missions"])
 
 allow_operator = RoleChecker([UserRole.OPERATOR, UserRole.ADMIN])
+
+
+@router.post(
+    "/check-availability",
+    response_model=AvailabilityResponse,
+    summary="Kiểm tra Drone và Pin khả dụng cho chuyến bay",
+)
+async def check_fleet_availability(
+    request: CheckAvailabilityRequest,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    estimated_duration = timedelta(hours=1)
+    requested_start = request.scheduled_time.replace(tzinfo=None)
+    requested_end = requested_start + estimated_duration
+
+    busy_missions_query = await db.execute(
+        select(Mission.drone_id, Mission.battery_id).where(
+            and_(
+                Mission.status.in_([MissionStatus.APPROVED, MissionStatus.FLYING]),
+                Mission.scheduled_time.is_not(None),
+                Mission.scheduled_time < requested_end,
+                or_(
+                    and_(Mission.end_time.is_not(None), Mission.end_time > requested_start),
+                    and_(Mission.end_time.is_(None), Mission.scheduled_time + timedelta(hours=1) > requested_start)
+                )
+            )
+        )
+    )
+    busy_rows = busy_missions_query.all()
+    busy_drone_ids = [row[0] for row in busy_rows if row[0] is not None]
+    busy_battery_ids = [row[1] for row in busy_rows if row[1] is not None]
+
+    drones_query = select(Drone).where(
+        and_(
+            Drone.status == DroneStatus.AVAILABLE,
+            Drone.payload_capacity_kg >= request.payload_weight_kg,
+            Drone.id.not_in(busy_drone_ids) if busy_drone_ids else True
+        )
+    )
+    available_drones = (await db.execute(drones_query)).scalars().all()
+
+    battery_conditions = [
+        Battery.status == batteries_status.ACTIVE,
+        Battery.id.not_in(busy_battery_ids) if busy_battery_ids else True
+    ]
+    if request.estimated_energy_wh:
+        battery_conditions.append(Battery.capacity_wh >= request.estimated_energy_wh * 1.2)
+
+    available_batteries = (await db.execute(select(Battery).where(and_(*battery_conditions)))).scalars().all()
+
+    return AvailabilityResponse(available_drones=available_drones, available_batteries=available_batteries)
 
 
 @router.get("/planned", response_model=list[MissionResponse])
