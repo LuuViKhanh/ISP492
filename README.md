@@ -308,3 +308,27 @@ Admin
 * Chạy "python app\main.py"
 * Rồi vào "http://127.0.0.1:8000/docs" để xem và kiểm tra APIs
 * APIs dev/db là những api có thể tương tác trực tiếp với cloud database postgresql. Nên đừng đụng vô, chỉ sử dụng
+
+---
+
+## 🛠️ Hướng dẫn dành cho Backend (Dev/Test)
+
+### Cách vô hiệu hóa xác thực (Bypass Authentication) để test API cục bộ
+Nếu bạn muốn test các API yêu cầu quyền (ví dụ `/operator/fleet/check-availability`) qua Swagger UI/Postman mà không cần lấy Token, bạn có thể tạm thời tắt xác thực bằng cách comment dependency `CurrentUser`:
+
+1. Tìm đến hàm định nghĩa API tương ứng.
+2. Comment hoặc xóa tham số `user`. Ví dụ trong `app/modules/fleet/operator/router.py`:
+
+```python
+@router.post("/check-availability")
+async def check_fleet_availability(
+    request: CheckAvailabilityRequest,
+    # user: CurrentUser = Depends(allow_operator),  <--- Comment dòng này lại để tắt Auth
+    db: AsyncSession = Depends(get_async_db)
+):
+    ...
+```
+
+**⚠️ LƯU Ý QUAN TRỌNG:** 
+- Đừng quên **BẬT LẠI (uncomment)** dòng này trước khi commit code lên nhánh chính để không tạo ra lỗ hổng bảo mật.
+- Việc bypass này chỉ áp dụng với các API không dùng trực tiếp biến `user` (ví dụ `user.id`) để xử lý logic bên trong hàm.
