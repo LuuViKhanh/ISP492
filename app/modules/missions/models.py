@@ -19,8 +19,8 @@ class Mission(Base):
     __tablename__ = "missions"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    customer_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    operator_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    customer_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    operator_id: Mapped[str | None] = mapped_column(String, nullable=True)
     drone_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     battery_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     pickup_location_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
