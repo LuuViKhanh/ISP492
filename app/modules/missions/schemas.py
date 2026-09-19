@@ -31,8 +31,8 @@ class ActiveFlightsResponse(BaseModel):
 
 class MissionResponse(BaseModel):
     id: int
-    customer_id: Optional[int]
-    operator_id: Optional[int]
+    customer_id: Optional[str]
+    operator_id: Optional[str]
     drone_id: Optional[int]
     battery_id: Optional[int]
     pickup_location_id: Optional[int]
