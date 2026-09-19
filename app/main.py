@@ -75,7 +75,7 @@ app.include_router(fleet_router, prefix=settings.API_V1_STR)
 app.include_router(ai_router, prefix=settings.API_V1_STR)
 app.include_router(system_router, prefix=settings.API_V1_STR)
 app.include_router(system_admin_router, prefix=settings.API_V1_STR)
-app.include_router(db_router)  # Dev DB API — không dùng API prefix, truy cập tại /dev/db/...
+app.include_router(db_router)
 
 # Tự động include các router của các roles
 import importlib
