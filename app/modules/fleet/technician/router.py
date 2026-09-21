@@ -85,12 +85,26 @@ async def get_maintenance_records(
         select(MaintenanceRecord).where(MaintenanceRecord.drone_id == drone_id).order_by(MaintenanceRecord.id.desc())
     )
     records = result.scalars().all()
+    response = []
     for record in records:
         items_result = await db.execute(
             select(MaintenanceInspectionItem).where(MaintenanceInspectionItem.maintenance_record_id == record.id)
         )
-        record.inspection_items = items_result.scalars().all()
-    return records
+        items = items_result.scalars().all()
+        response.append(MaintenanceRecordResponse(
+            id=record.id,
+            work_order_id=record.work_order_id,
+            drone_id=record.drone_id,
+            performed_by=record.performed_by,
+            title=record.title,
+            diagnosis=record.diagnosis,
+            corrective_action=record.corrective_action,
+            resulting_drone_status=record.resulting_drone_status,
+            created_at=record.created_at,
+            completed_at=record.completed_at,
+            inspection_items=items,
+        ))
+    return response
 
 
 @router.post("/maintenance-records", response_model=MaintenanceRecordResponse, status_code=201)
