@@ -26,6 +26,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    hub_id: Mapped[int | None] = mapped_column(String, nullable=True)
 
     @property
     def role(self) -> UserRole:

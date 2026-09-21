@@ -65,3 +65,11 @@ class WorkOrder(Base):
         default=WorkOrderStatus.PENDING,
     )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    alert_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    title: Mapped[str | None] = mapped_column(String, nullable=True)
+    priority: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    assigned_to: Mapped[str | None] = mapped_column(String, nullable=True)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
