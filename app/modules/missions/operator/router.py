@@ -7,7 +7,7 @@ from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
 from app.modules.missions.models import Mission, MissionStatus
-from app.modules.missions.schemas import MissionResponse, ApproveRejectRequest
+from app.modules.missions.schemas import MissionResponse, ApproveRejectRequest, TelemetryDataCreate, TelemetryDataResponse
 from app.modules.fleet.models import Drone, Battery, DroneStatus, batteries_status
 from app.modules.fleet.schemas import CheckAvailabilityRequest, AvailabilityResponse
 
@@ -121,3 +121,43 @@ async def reject_mission(
     await db.commit()
     await db.refresh(mission)
     return mission
+
+
+@router.post("/{mission_id}/telemetry", response_model=list[TelemetryDataResponse])
+async def collect_telemetry(
+    mission_id: int,
+    telemetry_data: list[TelemetryDataCreate],
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    from app.modules.missions.models import TelemetryLog
+
+    mission = await db.get(Mission, mission_id)
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    
+    logs_to_insert = []
+    for data in telemetry_data:
+        # Convert timezone-aware datetime to naive datetime for asyncpg
+        naive_timestamp = data.timestamp.replace(tzinfo=None)
+        
+        log_entry = TelemetryLog(
+            mission_id=mission_id,
+            timestamp=naive_timestamp,
+            latitude=data.latitude,
+            longitude=data.longitude,
+            altitude=data.altitude,
+            speed=data.speed,
+            battery_voltage=data.battery_voltage,
+            energy_consumed_wh=data.energy_consumed_wh,
+            wind_speed=data.wind_speed,
+        )
+        logs_to_insert.append(log_entry)
+        db.add(log_entry)
+        
+    await db.commit()
+    
+    for log in logs_to_insert:
+        await db.refresh(log)
+        
+    return logs_to_insert
