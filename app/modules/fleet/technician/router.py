@@ -6,12 +6,64 @@ from sqlalchemy import select
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
-from app.modules.fleet.models import WorkOrder, WorkOrderStatus
+from app.modules.fleet.models import Drone, WorkOrder, WorkOrderStatus
 from app.modules.fleet.schemas import WorkOrderCreate, WorkOrderUpdate, InspectionUpdate, WorkOrderResponse
+from app.modules.fleet.technician.schemas import DroneProfileResponse, DroneStatusUpdate, MaintenanceHistoryItem
 
 router = APIRouter(prefix="/technician/fleet", tags=["Technician - Fleet"])
 
 allow_technician = RoleChecker([UserRole.TECHNICIAN, UserRole.ADMIN])
+
+
+# ── Drone Profile ─────────────────────────────────────────────────────────────
+
+@router.get("/drones", response_model=list[DroneProfileResponse])
+async def list_drones(
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    result = await db.execute(select(Drone).order_by(Drone.id))
+    return result.scalars().all()
+
+
+@router.get("/drones/{drone_id}", response_model=DroneProfileResponse)
+async def get_drone_profile(
+    drone_id: int,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    drone = await db.get(Drone, drone_id)
+    if not drone:
+        raise HTTPException(status_code=404, detail="Drone not found")
+    return drone
+
+
+@router.patch("/drones/{drone_id}/status", response_model=DroneProfileResponse)
+async def update_drone_status(
+    drone_id: int,
+    body: DroneStatusUpdate,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    drone = await db.get(Drone, drone_id)
+    if not drone:
+        raise HTTPException(status_code=404, detail="Drone not found")
+    drone.status = body.status
+    await db.commit()
+    await db.refresh(drone)
+    return drone
+
+
+@router.get("/drones/{drone_id}/maintenance-history", response_model=list[MaintenanceHistoryItem])
+async def get_drone_maintenance_history(
+    drone_id: int,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    result = await db.execute(
+        select(WorkOrder).where(WorkOrder.drone_id == drone_id).order_by(WorkOrder.id.desc())
+    )
+    return result.scalars().all()
 
 
 # ── Work Order CRUD ───────────────────────────────────────────────────────────
