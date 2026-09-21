@@ -139,8 +139,20 @@ async def create_maintenance_record(
 
     await db.commit()
     await db.refresh(record)
-    record.inspection_items = items
-    return record
+
+    return MaintenanceRecordResponse(
+        id=record.id,
+        work_order_id=record.work_order_id,
+        drone_id=record.drone_id,
+        performed_by=record.performed_by,
+        title=record.title,
+        diagnosis=record.diagnosis,
+        corrective_action=record.corrective_action,
+        resulting_drone_status=record.resulting_drone_status,
+        created_at=record.created_at,
+        completed_at=record.completed_at,
+        inspection_items=items,
+    )
 
 
 # ── Work Order Logs ───────────────────────────────────────────────────────────
