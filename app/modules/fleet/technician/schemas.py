@@ -32,6 +32,81 @@ class MaintenanceHistoryItem(BaseModel):
     action_taken: Optional[str]
     status: WorkOrderStatus
     resolved_at: Optional[datetime]
+    title: Optional[str]
+    priority: Optional[str]
+    scheduled_at: Optional[datetime]
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
+
+
+class InspectionItemResponse(BaseModel):
+    id: int
+    item_name: Optional[str]
+    is_completed: Optional[bool]
+    checked_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
+
+
+class InspectionItemCreate(BaseModel):
+    item_name: str
+    is_completed: bool = False
+
+
+class MaintenanceRecordCreate(BaseModel):
+    work_order_id: int
+    drone_id: int
+    title: Optional[str] = None
+    diagnosis: Optional[str] = None
+    corrective_action: Optional[str] = None
+    resulting_drone_status: Optional[str] = None
+    inspection_items: Optional[List[InspectionItemCreate]] = []
+
+
+class MaintenanceRecordResponse(BaseModel):
+    id: int
+    work_order_id: Optional[int]
+    drone_id: Optional[int]
+    performed_by: Optional[str]
+    title: Optional[str]
+    diagnosis: Optional[str]
+    corrective_action: Optional[str]
+    resulting_drone_status: Optional[str]
+    created_at: Optional[datetime]
+    completed_at: Optional[datetime]
+    inspection_items: List[InspectionItemResponse] = []
+
+    class Config:
+        from_attributes = True
+
+
+class WorkOrderLogResponse(BaseModel):
+    id: int
+    work_order_id: Optional[int]
+    action: Optional[str]
+    from_status: Optional[str]
+    to_status: Optional[str]
+    changed_by: Optional[str]
+    created_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
+
+
+class MaintenanceAlertResponse(BaseModel):
+    id: int
+    drone_id: Optional[int]
+    source: Optional[str]
+    title: Optional[str]
+    status: Optional[str]
+    work_order_id: Optional[int]
+    handled_by: Optional[str]
+    created_at: Optional[datetime]
+    handled_at: Optional[datetime]
 
     class Config:
         from_attributes = True

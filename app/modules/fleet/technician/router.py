@@ -6,9 +6,16 @@ from sqlalchemy import select
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
-from app.modules.fleet.models import Drone, WorkOrder, WorkOrderStatus
+from app.modules.fleet.models import (
+    Drone, WorkOrder, WorkOrderStatus,
+    MaintenanceRecord, MaintenanceInspectionItem, WorkOrderLog, MaintenanceAlert
+)
 from app.modules.fleet.schemas import WorkOrderCreate, WorkOrderUpdate, InspectionUpdate, WorkOrderResponse
-from app.modules.fleet.technician.schemas import DroneProfileResponse, DroneStatusUpdate, MaintenanceHistoryItem
+from app.modules.fleet.technician.schemas import (
+    DroneProfileResponse, DroneStatusUpdate, MaintenanceHistoryItem,
+    MaintenanceRecordCreate, MaintenanceRecordResponse,
+    WorkOrderLogResponse, MaintenanceAlertResponse
+)
 
 router = APIRouter(prefix="/technician/fleet", tags=["Technician - Fleet"])
 
@@ -64,6 +71,99 @@ async def get_drone_maintenance_history(
         select(WorkOrder).where(WorkOrder.drone_id == drone_id).order_by(WorkOrder.id.desc())
     )
     return result.scalars().all()
+
+
+# ── Maintenance Records ───────────────────────────────────────────────────────
+
+@router.get("/maintenance-records/{drone_id}", response_model=list[MaintenanceRecordResponse])
+async def get_maintenance_records(
+    drone_id: int,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    result = await db.execute(
+        select(MaintenanceRecord).where(MaintenanceRecord.drone_id == drone_id).order_by(MaintenanceRecord.id.desc())
+    )
+    records = result.scalars().all()
+    for record in records:
+        items_result = await db.execute(
+            select(MaintenanceInspectionItem).where(MaintenanceInspectionItem.maintenance_record_id == record.id)
+        )
+        record.inspection_items = items_result.scalars().all()
+    return records
+
+
+@router.post("/maintenance-records", response_model=MaintenanceRecordResponse, status_code=201)
+async def create_maintenance_record(
+    body: MaintenanceRecordCreate,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    record = MaintenanceRecord(
+        work_order_id=body.work_order_id,
+        drone_id=body.drone_id,
+        performed_by=user.id,
+        title=body.title,
+        diagnosis=body.diagnosis,
+        corrective_action=body.corrective_action,
+        resulting_drone_status=body.resulting_drone_status,
+        created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    db.add(record)
+    await db.flush()
+
+    items = []
+    for item in (body.inspection_items or []):
+        inspection_item = MaintenanceInspectionItem(
+            maintenance_record_id=record.id,
+            item_name=item.item_name,
+            is_completed=item.is_completed,
+            checked_at=datetime.now(timezone.utc).replace(tzinfo=None) if item.is_completed else None,
+        )
+        db.add(inspection_item)
+        items.append(inspection_item)
+
+    await db.commit()
+    await db.refresh(record)
+    record.inspection_items = items
+    return record
+
+
+# ── Work Order Logs ───────────────────────────────────────────────────────────
+
+@router.get("/work-orders/{work_order_id}/logs", response_model=list[WorkOrderLogResponse])
+async def get_work_order_logs(
+    work_order_id: int,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    result = await db.execute(
+        select(WorkOrderLog).where(WorkOrderLog.work_order_id == work_order_id).order_by(WorkOrderLog.id.desc())
+    )
+    return result.scalars().all()
+
+
+# ── Maintenance Alerts ────────────────────────────────────────────────────────
+
+@router.get("/maintenance-alerts", response_model=list[MaintenanceAlertResponse])
+async def list_maintenance_alerts(
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    result = await db.execute(select(MaintenanceAlert).order_by(MaintenanceAlert.id.desc()))
+    return result.scalars().all()
+
+
+@router.get("/maintenance-alerts/{alert_id}", response_model=MaintenanceAlertResponse)
+async def get_maintenance_alert(
+    alert_id: int,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    alert = await db.get(MaintenanceAlert, alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return alert
 
 
 # ── Work Order CRUD ───────────────────────────────────────────────────────────
@@ -152,10 +252,23 @@ async def update_inspection(
     wo = await db.get(WorkOrder, work_order_id)
     if not wo:
         raise HTTPException(status_code=404, detail="Work order not found")
+    old_status = wo.status.value
     wo.action_taken = body.action_taken
     wo.status = body.status
     if body.status == WorkOrderStatus.COMPLETED:
         wo.resolved_at = datetime.now(timezone.utc)
+
+    # Ghi log thay đổi status
+    log = WorkOrderLog(
+        work_order_id=wo.id,
+        action="inspection_update",
+        from_status=old_status,
+        to_status=body.status.value,
+        changed_by=user.id,
+        created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    db.add(log)
+
     await db.commit()
     await db.refresh(wo)
     return wo

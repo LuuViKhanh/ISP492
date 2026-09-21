@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.database.db import async_engine, Base
 import app.modules.auth.models  # noqa: F401
 import app.modules.fleet.models  # noqa: F401
+import app.modules.missions.models  # noqa: F401
 
 # Import routers từ các module
 from app.modules.auth.router import router as auth_router
