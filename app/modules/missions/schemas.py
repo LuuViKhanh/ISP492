@@ -44,6 +44,12 @@ class MissionResponse(BaseModel):
     scheduled_time: Optional[datetime]
     start_time: Optional[datetime]
     end_time: Optional[datetime]
+    origin_hub_id: Optional[int]
+    destination_hub_id: Optional[int]
+    departed_at: Optional[datetime]
+    arrived_at: Optional[datetime]
+    arrival_confirmed_by: Optional[str]
+    arrival_confirmed_at: Optional[datetime]
 
     class Config:
         from_attributes = True
@@ -54,3 +60,22 @@ class ApproveRejectRequest(BaseModel):
     battery_id: Optional[int] = None
     operator_id: Optional[int] = None
     reason: Optional[str] = None
+
+
+class TelemetryDataCreate(BaseModel):
+    timestamp: datetime
+    latitude: float
+    longitude: float
+    altitude: float
+    speed: float
+    battery_voltage: Optional[float] = None
+    energy_consumed_wh: Optional[float] = None
+    wind_speed: Optional[float] = None
+
+
+class TelemetryDataResponse(TelemetryDataCreate):
+    id: int
+    mission_id: int
+
+    class Config:
+        from_attributes = True

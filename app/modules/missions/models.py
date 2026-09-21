@@ -32,3 +32,24 @@ class Mission(Base):
     scheduled_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     start_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     end_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    origin_hub_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    destination_hub_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    departed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    arrived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    arrival_confirmed_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    arrival_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class TelemetryLog(Base):
+    __tablename__ = "telemetry_logs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    mission_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    altitude: Mapped[float] = mapped_column(Float, nullable=False)
+    speed: Mapped[float] = mapped_column(Float, nullable=False)
+    battery_voltage: Mapped[float | None] = mapped_column(Float, nullable=True)
+    energy_consumed_wh: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_speed: Mapped[float | None] = mapped_column(Float, nullable=True)
