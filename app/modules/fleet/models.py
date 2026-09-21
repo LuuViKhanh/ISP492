@@ -29,8 +29,11 @@ class Drone(Base):
     model: Mapped[str] = mapped_column(String(100), nullable=False)
     payload_capacity_kg: Mapped[float] = mapped_column(Float, nullable=False)
     max_speed: Mapped[float] = mapped_column(Float, nullable=False)
-    status: Mapped[DroneStatus] = mapped_column(SAEnum(DroneStatus, name="drone_status", create_type=False, values_callable=lambda x: [e.value for e in x]))
-    
+    status: Mapped[DroneStatus] = mapped_column("operational_status", SAEnum(DroneStatus, name="drone_status", create_type=False, values_callable=lambda x: [e.value for e in x]))
+    current_hub_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    battery_level_pct: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    utilization_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     batteries = relationship("Battery", back_populates="drone")
 
 
