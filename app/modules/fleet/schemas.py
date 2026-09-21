@@ -49,7 +49,7 @@ class InspectionUpdate(BaseModel):
 
 class WorkOrderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    
+
     id: int
     drone_id: int
     battery_id: int
@@ -58,3 +58,11 @@ class WorkOrderResponse(BaseModel):
     action_taken: Optional[str]
     status: WorkOrderStatus
     resolved_at: Optional[datetime]
+    alert_id: Optional[int] = None
+    title: Optional[str] = None
+    priority: Optional[str] = None
+    created_by: Optional[str] = None
+    assigned_to: Optional[str] = None
+    scheduled_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None

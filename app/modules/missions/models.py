@@ -32,6 +32,12 @@ class Mission(Base):
     scheduled_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     start_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     end_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    origin_hub_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    destination_hub_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    departed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    arrived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    arrival_confirmed_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    arrival_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class TelemetryLog(Base):
