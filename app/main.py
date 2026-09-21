@@ -29,12 +29,35 @@ from app.modules.system.admin.router import router as system_admin_router
 # Developer Database API (dùng chung server, prefix /dev/db/...)
 from app.database.router import router as db_router
 
+import asyncio
+from app.database.db import async_engine, Base, AsyncSessionLocal
+from app.modules.fleet.technician.service import run_maintenance_alerts_logic, run_battery_overdue_alerts_logic
+
+async def run_cronjobs():
+    """Vòng lặp chạy ngầm để sinh alerts"""
+    while True:
+        try:
+            async with AsyncSessionLocal() as session:
+                await run_maintenance_alerts_logic(session)
+                await run_battery_overdue_alerts_logic(session)
+        except Exception as e:
+            print(f"[CRON ERROR] Lỗi khi chạy cronjobs: {e}")
+        
+        # Đợi 3600 giây (1 tiếng) rồi chạy lại
+        await asyncio.sleep(3600)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        
+    # Bắt đầu cronjob ngầm
+    task = asyncio.create_task(run_cronjobs())
+    
     yield
+    
+    # Hủy cronjob khi tắt server
+    task.cancel()
 
 
 app = FastAPI(

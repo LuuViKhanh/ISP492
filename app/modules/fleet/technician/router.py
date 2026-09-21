@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
@@ -107,3 +107,34 @@ async def update_inspection(
     await db.commit()
     await db.refresh(wo)
     return wo
+
+
+from app.modules.fleet.technician.service import run_maintenance_alerts_logic, run_battery_overdue_alerts_logic
+
+# ── Background Workers / Cronjobs ─────────────────────────────────────────────
+
+@router.post("/cron/maintenance-alerts", summary="FDE-118: Worker sinh Maintenance Alert")
+async def worker_maintenance_alerts(
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db)
+):
+    inserted_ids = await run_maintenance_alerts_logic(db)
+    
+    return {
+        "message": "Maintenance alerts generated successfully",
+        "alerts_created": len(inserted_ids),
+        "alert_ids": inserted_ids
+    }
+
+@router.post("/cron/battery-overdue-alerts", summary="FDE-119: Worker cảnh báo Pin & Quá hạn")
+async def worker_battery_overdue_alerts(
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db)
+):
+    batt_ids, overdue_ids = await run_battery_overdue_alerts_logic(db)
+    
+    return {
+        "message": "Battery and overdue alerts generated successfully",
+        "battery_alerts_created": len(batt_ids),
+        "overdue_alerts_created": len(overdue_ids)
+    }
