@@ -86,19 +86,15 @@ class MaintenanceRecord(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-    inspection_items = relationship("MaintenanceInspectionItem", back_populates="record")
-
 
 class MaintenanceInspectionItem(Base):
     __tablename__ = "maintenance_inspection_items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    maintenance_record_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("maintenance_records.id"), nullable=True)
+    maintenance_record_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     item_name: Mapped[str | None] = mapped_column(String, nullable=True)
     is_completed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-    record = relationship("MaintenanceRecord", back_populates="inspection_items")
 
 
 class WorkOrderLog(Base):
