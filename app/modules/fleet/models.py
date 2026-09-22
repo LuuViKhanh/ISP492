@@ -124,3 +124,18 @@ class MaintenanceAlert(Base):
     handled_by: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     handled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class MaintenanceSchedule(Base):
+    __tablename__ = "maintenance_schedules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    drone_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    maintenance_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    interval_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    interval_flight_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_inspection_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_inspection_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

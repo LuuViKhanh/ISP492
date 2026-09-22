@@ -8,13 +8,14 @@ from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
 from app.modules.fleet.models import (
     Drone, WorkOrder, WorkOrderStatus,
-    MaintenanceRecord, MaintenanceInspectionItem, WorkOrderLog, MaintenanceAlert
+    MaintenanceRecord, MaintenanceInspectionItem, WorkOrderLog, MaintenanceAlert, MaintenanceSchedule
 )
 from app.modules.fleet.schemas import WorkOrderCreate, WorkOrderUpdate, InspectionUpdate, WorkOrderResponse
 from app.modules.fleet.technician.schemas import (
     DroneProfileResponse, DroneStatusUpdate, MaintenanceHistoryItem,
     MaintenanceRecordCreate, MaintenanceRecordResponse,
-    WorkOrderLogResponse, MaintenanceAlertResponse
+    WorkOrderLogResponse, MaintenanceAlertResponse,
+    MaintenanceScheduleResponse, MaintenanceScheduleCreate
 )
 
 router = APIRouter(prefix="/technician/fleet", tags=["Technician - Fleet"])
@@ -167,6 +168,51 @@ async def get_work_order_logs(
         select(WorkOrderLog).where(WorkOrderLog.work_order_id == work_order_id).order_by(WorkOrderLog.id.desc())
     )
     return result.scalars().all()
+
+
+# ── Maintenance Schedules ─────────────────────────────────────────────────────
+
+@router.get("/maintenance-schedules", response_model=list[MaintenanceScheduleResponse])
+async def list_maintenance_schedules(
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    result = await db.execute(select(MaintenanceSchedule).order_by(MaintenanceSchedule.next_inspection_at))
+    return result.scalars().all()
+
+
+@router.get("/maintenance-schedules/drone/{drone_id}", response_model=list[MaintenanceScheduleResponse])
+async def get_drone_maintenance_schedules(
+    drone_id: int,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    result = await db.execute(
+        select(MaintenanceSchedule)
+        .where(MaintenanceSchedule.drone_id == drone_id)
+        .order_by(MaintenanceSchedule.next_inspection_at)
+    )
+    return result.scalars().all()
+
+
+@router.post("/maintenance-schedules", response_model=MaintenanceScheduleResponse, status_code=201)
+async def create_maintenance_schedule(
+    body: MaintenanceScheduleCreate,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    schedule = MaintenanceSchedule(
+        drone_id=body.drone_id,
+        maintenance_type=body.maintenance_type,
+        interval_days=body.interval_days,
+        interval_flight_hours=body.interval_flight_hours,
+        status="active",
+        created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    db.add(schedule)
+    await db.commit()
+    await db.refresh(schedule)
+    return schedule
 
 
 # ── Maintenance Alerts ────────────────────────────────────────────────────────
