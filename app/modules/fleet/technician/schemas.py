@@ -110,3 +110,26 @@ class MaintenanceAlertResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class MaintenanceScheduleResponse(BaseModel):
+    id: int
+    drone_id: Optional[int]
+    maintenance_type: Optional[str]
+    interval_days: Optional[int]
+    interval_flight_hours: Optional[float]
+    last_inspection_at: Optional[datetime]
+    next_inspection_at: Optional[datetime]
+    status: Optional[str]
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
+
+
+class MaintenanceScheduleCreate(BaseModel):
+    drone_id: int
+    maintenance_type: str
+    interval_days: Optional[int] = None
+    interval_flight_hours: Optional[float] = None
