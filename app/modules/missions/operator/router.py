@@ -6,7 +6,8 @@ from datetime import timedelta
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
-from app.modules.missions.models import Mission, MissionStatus
+from app.modules.missions.models import Mission, MissionStatus, Location, LocationType
+from app.modules.system.models import Hub
 from app.modules.missions.schemas import MissionResponse, ApproveRejectRequest, TelemetryDataCreate, TelemetryDataResponse
 from app.modules.fleet.models import Drone, Battery, DroneStatus, batteries_status
 from app.modules.fleet.schemas import CheckAvailabilityRequest, AvailabilityResponse
@@ -161,3 +162,27 @@ async def collect_telemetry(
         await db.refresh(log)
         
     return logs_to_insert
+
+
+# ── Hubs & Locations ──────────────────────────────────────────────────────────────
+
+@router.get("/hubs")
+async def list_hubs(
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    result = await db.execute(select(Hub).order_by(Hub.id))
+    hubs = result.scalars().all()
+    return [{"id": h.id, "code": h.code, "name": h.name, "address": h.address, "latitude": h.latitude, "longitude": h.longitude, "status": h.status} for h in hubs]
+
+
+@router.get("/mini-hubs")
+async def list_mini_hubs(
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    result = await db.execute(
+        select(Location).where(Location.type == LocationType.HUB).order_by(Location.id)
+    )
+    locations = result.scalars().all()
+    return [{"id": l.id, "name": l.name, "latitude": l.latitude, "longitude": l.longitude, "type": l.type.value} for l in locations]
