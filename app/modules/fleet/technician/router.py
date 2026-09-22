@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
@@ -17,10 +17,59 @@ from app.modules.fleet.technician.schemas import (
     WorkOrderLogResponse, MaintenanceAlertResponse,
     MaintenanceScheduleResponse, MaintenanceScheduleCreate
 )
+from app.modules.missions.models import Mission, MissionStatus
 
 router = APIRouter(prefix="/technician/fleet", tags=["Technician - Fleet"])
 
 allow_technician = RoleChecker([UserRole.TECHNICIAN, UserRole.ADMIN])
+
+
+# ── Incoming & Confirm Arrival ───────────────────────────────────────────────
+
+@router.get("/incoming")
+async def get_incoming_drones(
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    result = await db.execute(
+        select(Mission).where(
+            Mission.status == MissionStatus.COMPLETED,
+            Mission.arrived_at != None,
+            Mission.arrival_confirmed_by == None,
+        ).order_by(Mission.arrived_at.desc())
+    )
+    missions = result.scalars().all()
+    return [
+        {
+            "mission_id": m.id,
+            "drone_id": m.drone_id,
+            "destination_hub_id": m.destination_hub_id,
+            "arrived_at": m.arrived_at,
+        }
+        for m in missions
+    ]
+
+
+@router.post("/missions/{mission_id}/confirm-arrival")
+async def confirm_arrival(
+    mission_id: int,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    mission = await db.get(Mission, mission_id)
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    if mission.arrival_confirmed_by:
+        raise HTTPException(status_code=400, detail="Arrival already confirmed")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    mission.arrival_confirmed_by = user.id
+    mission.arrival_confirmed_at = now
+    if mission.drone_id and mission.destination_hub_id:
+        drone = await db.get(Drone, mission.drone_id)
+        if drone:
+            drone.current_hub_id = mission.destination_hub_id
+    await db.commit()
+    return {"message": "Arrival confirmed", "mission_id": mission_id, "confirmed_by": user.id}
 
 
 # ── Drone Profile ─────────────────────────────────────────────────────────────
@@ -201,11 +250,8 @@ async def create_maintenance_schedule(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    from datetime import timedelta
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    next_inspection = None
-    if body.interval_days:
-        next_inspection = now + timedelta(days=body.interval_days)
+    next_inspection = now + timedelta(days=body.interval_days) if body.interval_days else None
     schedule = MaintenanceSchedule(
         drone_id=body.drone_id,
         maintenance_type=body.maintenance_type,
@@ -335,8 +381,6 @@ async def update_inspection(
     wo.status = body.status
     if body.status == WorkOrderStatus.COMPLETED:
         wo.resolved_at = datetime.now(timezone.utc)
-
-    # Ghi log thay đổi status
     log = WorkOrderLog(
         work_order_id=wo.id,
         action="inspection_update",
@@ -346,7 +390,6 @@ async def update_inspection(
         created_at=datetime.now(timezone.utc).replace(tzinfo=None),
     )
     db.add(log)
-
     await db.commit()
     await db.refresh(wo)
     return wo
@@ -362,12 +405,12 @@ async def worker_maintenance_alerts(
     db: AsyncSession = Depends(get_async_db)
 ):
     inserted_ids = await run_maintenance_alerts_logic(db)
-    
     return {
         "message": "Maintenance alerts generated successfully",
         "alerts_created": len(inserted_ids),
         "alert_ids": inserted_ids
     }
+
 
 @router.post("/cron/battery-overdue-alerts", summary="FDE-119: Worker cảnh báo Pin & Quá hạn")
 async def worker_battery_overdue_alerts(
@@ -375,7 +418,6 @@ async def worker_battery_overdue_alerts(
     db: AsyncSession = Depends(get_async_db)
 ):
     batt_ids, overdue_ids = await run_battery_overdue_alerts_logic(db)
-    
     return {
         "message": "Battery and overdue alerts generated successfully",
         "battery_alerts_created": len(batt_ids),
