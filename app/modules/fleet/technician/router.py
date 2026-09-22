@@ -201,13 +201,19 @@ async def create_maintenance_schedule(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
+    from datetime import timedelta
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    next_inspection = None
+    if body.interval_days:
+        next_inspection = now + timedelta(days=body.interval_days)
     schedule = MaintenanceSchedule(
         drone_id=body.drone_id,
         maintenance_type=body.maintenance_type,
         interval_days=body.interval_days,
         interval_flight_hours=body.interval_flight_hours,
+        next_inspection_at=next_inspection,
         status="active",
-        created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        created_at=now,
     )
     db.add(schedule)
     await db.commit()
