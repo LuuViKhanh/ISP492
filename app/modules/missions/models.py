@@ -1,8 +1,8 @@
-from sqlalchemy import BigInteger, Float, String, DateTime, Enum as SAEnum
+import enum
+from sqlalchemy import BigInteger, Float, String, DateTime, Integer, Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 from datetime import datetime
 from app.database.db import Base
-import enum
 
 
 class MissionStatus(str, enum.Enum):
@@ -13,6 +13,23 @@ class MissionStatus(str, enum.Enum):
     FLYING = "Flying"
     COMPLETED = "Completed"
     CANCELLED = "Cancelled"
+
+
+class LocationType(str, enum.Enum):
+    HUB = "Hub"
+    CUSTOMER_ADDRESS = "CustomerAddress"
+
+
+class Location(Base):
+    __tablename__ = "locations"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    type: Mapped[LocationType] = mapped_column(
+        SAEnum(LocationType, name="locations_type", create_type=False, values_callable=lambda x: [e.value for e in x])
+    )
 
 
 class Mission(Base):
