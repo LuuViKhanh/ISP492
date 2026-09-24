@@ -35,19 +35,29 @@ from app.database.router import router as db_router
 import asyncio
 from app.database.db import async_engine, Base, AsyncSessionLocal
 from app.modules.fleet.technician.service import run_maintenance_alerts_logic, run_battery_overdue_alerts_logic
+from app.shared.workers import run_approval_deadline_watcher, run_telemetry_signal_loss_watcher
 
-async def run_cronjobs():
-    """Vòng lặp chạy ngầm để sinh alerts"""
+async def run_hourly_cronjobs():
+    """Vòng lặp chạy ngầm mỗi tiếng (3600s)"""
     while True:
         try:
             async with AsyncSessionLocal() as session:
                 await run_maintenance_alerts_logic(session)
                 await run_battery_overdue_alerts_logic(session)
         except Exception as e:
-            print(f"[CRON ERROR] Lỗi khi chạy cronjobs: {e}")
-        
-        # Đợi 3600 giây (1 tiếng) rồi chạy lại
+            print(f"[CRON ERROR] Lỗi khi chạy hourly cronjobs: {e}")
         await asyncio.sleep(3600)
+
+async def run_realtime_cronjobs():
+    """Vòng lặp chạy ngầm mỗi 3s cho realtime monitoring"""
+    while True:
+        try:
+            async with AsyncSessionLocal() as session:
+                await run_approval_deadline_watcher(session)
+                await run_telemetry_signal_loss_watcher(session)
+        except Exception as e:
+            print(f"[CRON ERROR] Lỗi khi chạy realtime cronjobs: {e}")
+        await asyncio.sleep(3)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -55,12 +65,14 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
         
     # Bắt đầu cronjob ngầm
-    task = asyncio.create_task(run_cronjobs())
+    task_hourly = asyncio.create_task(run_hourly_cronjobs())
+    task_realtime = asyncio.create_task(run_realtime_cronjobs())
     
     yield
     
     # Hủy cronjob khi tắt server
-    task.cancel()
+    task_hourly.cancel()
+    task_realtime.cancel()
 
 
 app = FastAPI(
