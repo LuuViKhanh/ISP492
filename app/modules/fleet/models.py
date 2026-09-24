@@ -45,6 +45,8 @@ class Battery(Base):
     capacity_wh: Mapped[float] = mapped_column(Float, nullable=False)
     status: Mapped[batteries_status] = mapped_column(SAEnum(batteries_status, name="batteries_status", create_type=False, values_callable=lambda x: [e.value for e in x]))
     drone_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("drones.id"), nullable=True)
+    current_hub_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    charge_level_pct: Mapped[int | None] = mapped_column(Integer, nullable=True)
     drone = relationship("Drone", back_populates="batteries")
 
 

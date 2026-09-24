@@ -27,6 +27,12 @@ async def check_fleet_availability(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Kiểm tra và trả về danh sách các Drone và Pin (Battery) khả dụng cho một chuyến bay dự kiến.
+    
+    API này đánh giá thời gian bắt đầu, tải trọng, và năng lượng tiêu thụ ước tính của chuyến bay 
+    để lọc ra các thiết bị đang không bị bận trong khoảng thời gian đó, và đáp ứng đủ yêu cầu kỹ thuật.
+    """
     estimated_duration = timedelta(hours=1)
     requested_start = request.scheduled_time.replace(tzinfo=None)
     requested_end = requested_start + estimated_duration
@@ -74,6 +80,12 @@ async def get_planned_missions(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Lấy danh sách các nhiệm vụ bay đang chờ phê duyệt.
+    
+    API này trả về toàn bộ các chuyến bay có trạng thái PENDING_APPROVAL, được sắp xếp theo 
+    thời gian cất cánh dự kiến để người điều hành (operator) xem xét và xử lý.
+    """
     result = await db.execute(
         select(Mission)
         .where(Mission.status == MissionStatus.PENDING_APPROVAL)
@@ -89,6 +101,13 @@ async def approve_mission(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Phê duyệt một nhiệm vụ bay đang chờ xử lý.
+    
+    API này cho phép người điều hành chấp thuận chuyến bay (chuyển sang trạng thái APPROVED). 
+    Có thể đồng thời cập nhật thông tin thiết bị (drone, pin) và người điều hành chính (operator_id) 
+    chịu trách nhiệm cho nhiệm vụ này.
+    """
     mission = await db.get(Mission, mission_id)
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
@@ -113,6 +132,12 @@ async def reject_mission(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Từ chối một nhiệm vụ bay đang chờ xử lý.
+    
+    API này được sử dụng khi người điều hành phát hiện yêu cầu bay không hợp lệ hoặc thiếu 
+    an toàn, chuyển trạng thái chuyến bay sang REJECTED.
+    """
     mission = await db.get(Mission, mission_id)
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
@@ -131,6 +156,12 @@ async def collect_telemetry(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Thu thập và lưu trữ dữ liệu từ xa (telemetry) của nhiệm vụ bay.
+    
+    API này nhận một danh sách các điểm dữ liệu (tọa độ, độ cao, tốc độ, điện áp pin, v.v.) 
+    từ Drone trong quá trình bay và lưu vào cơ sở dữ liệu để phục vụ việc theo dõi và phân tích.
+    """
     from app.modules.missions.models import TelemetryLog
 
     mission = await db.get(Mission, mission_id)
@@ -171,6 +202,11 @@ async def list_hubs(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Lấy danh sách toàn bộ các trung tâm điều khiển (Hub) chính.
+    
+    Trích xuất dữ liệu của các Hub bao gồm mã, tên, địa chỉ, tọa độ địa lý và trạng thái hoạt động.
+    """
     result = await db.execute(select(Hub).order_by(Hub.id))
     hubs = result.scalars().all()
     return [{"id": h.id, "code": h.code, "name": h.name, "address": h.address, "latitude": h.latitude, "longitude": h.longitude, "status": h.status} for h in hubs]
@@ -181,6 +217,12 @@ async def list_mini_hubs(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Lấy danh sách các Hub phụ (Mini-hubs).
+    
+    API này truy vấn các địa điểm (Location) được đánh dấu là loại HUB, phục vụ cho việc 
+    định tuyến và quản lý các trạm dừng đỗ nhỏ của Drone.
+    """
     result = await db.execute(
         select(Location).where(Location.type == LocationType.HUB).order_by(Location.id)
     )

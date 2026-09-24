@@ -23,6 +23,11 @@ GOOGLE_AUTH_URL = (
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterRequest, db: AsyncSession = Depends(get_async_db)):
+    """
+    Đăng ký người dùng mới.
+    Nhận thông tin email, username, họ tên và mật khẩu.
+    Kiểm tra xem email hoặc username đã tồn tại chưa trước khi tạo tài khoản.
+    """
     if await service.get_user_by_email(db, body.email):
         raise HTTPException(status_code=400, detail="Email already registered")
     if await service.get_user_by_username(db, body.username):
@@ -36,6 +41,10 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_async_d
 
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: AsyncSession = Depends(get_async_db)):
+    """
+    Đăng nhập bằng email và mật khẩu.
+    Kiểm tra thông tin đăng nhập, nếu hợp lệ sẽ trả về access token và refresh token.
+    """
     user = await service.get_user_by_email(db, body.email)
     if not user or not user.hashed_password or not service.verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -52,6 +61,10 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_async_db)):
 
 @router.post("/forgot-password")
 async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depends(get_async_db)):
+    """
+    Yêu cầu đặt lại mật khẩu.
+    Tạo token đặt lại mật khẩu và gửi liên kết đặt lại qua email của người dùng.
+    """
     from app.core.email import send_reset_email
     token = await service.create_reset_token(db, body.email)
     if token:
@@ -62,6 +75,10 @@ async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depend
 
 @router.post("/reset-password")
 async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(get_async_db)):
+    """
+    Đặt lại mật khẩu bằng token.
+    Xác minh token nhận được từ email và tiến hành cập nhật mật khẩu mới.
+    """
     success = await service.reset_password(db, body.token, body.new_password)
     if not success:
         raise HTTPException(status_code=400, detail="Invalid or expired token")
@@ -73,6 +90,10 @@ async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(
 
 @router.post("/logout")
 async def logout():
+    """
+    Đăng xuất người dùng.
+    Client cần tự xóa token phía mình. (Sử dụng JWT stateless).
+    """
     # JWT là stateless — client xóa token phía mình là đủ.
     # Nếu cần blacklist token, thêm Redis ở đây sau.
     return {"message": "Logged out successfully"}
@@ -82,6 +103,10 @@ async def logout():
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_async_db)):
+    """
+    Cấp lại access token mới.
+    Xác minh refresh token và trả về cặp token (access và refresh token) mới.
+    """
     payload = service.decode_token(refresh_token)
     if not payload or payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid refresh token")
@@ -98,6 +123,10 @@ async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_async
 
 @router.get("/google")
 async def google_login():
+    """
+    Bắt đầu quá trình đăng nhập qua Google.
+    Chuyển hướng người dùng đến trang xác thực của Google.
+    """
     url = GOOGLE_AUTH_URL.format(
         client_id=settings.GOOGLE_CLIENT_ID,
         redirect_uri=settings.GOOGLE_REDIRECT_URI,
@@ -107,6 +136,10 @@ async def google_login():
 
 @router.get("/google/callback", response_model=TokenResponse)
 async def google_callback(code: str, db: AsyncSession = Depends(get_async_db)):
+    """
+    Xử lý callback từ Google sau khi xác thực thành công.
+    Nhận mã xác thực (code), lấy thông tin người dùng từ Google và cấp token đăng nhập hệ thống.
+    """
     try:
         google_info = await service.exchange_google_code(code)
     except Exception:
