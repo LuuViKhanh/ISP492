@@ -6,8 +6,9 @@ from datetime import timedelta
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
-from app.modules.missions.models import Mission, MissionStatus, Location, LocationType
+from app.modules.missions.models import Mission, MissionStatus, Location, LocationType, Incident, IncidentStatus, IncidentSeverity
 from app.modules.system.models import Hub
+from app.modules.fleet.models import MaintenanceAlert
 from app.modules.missions.schemas import MissionResponse, ApproveRejectRequest, TelemetryDataCreate, TelemetryDataResponse
 from app.modules.fleet.models import Drone, Battery, DroneStatus, batteries_status
 from app.modules.fleet.schemas import CheckAvailabilityRequest, AvailabilityResponse
@@ -186,3 +187,105 @@ async def list_mini_hubs(
     )
     locations = result.scalars().all()
     return [{"id": l.id, "name": l.name, "latitude": l.latitude, "longitude": l.longitude, "type": l.type.value} for l in locations]
+
+
+# ── Incidents ────────────────────────────────────────────────────────────────────────────────────
+
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+
+class IncidentCreate(BaseModel):
+    mission_id: Optional[int] = None
+    drone_id: Optional[int] = None
+    severity: IncidentSeverity
+    description: str
+    requires_technical_inspection: bool = False
+
+class IncidentResponse(BaseModel):
+    id: int
+    mission_id: Optional[int]
+    drone_id: Optional[int]
+    reporter_id: Optional[int]
+    severity: IncidentSeverity
+    description: str
+    status: IncidentStatus
+    reported_at: Optional[datetime]
+    requires_technical_inspection: bool
+
+    class Config:
+        from_attributes = True
+
+
+@router.get("/incidents", response_model=list[IncidentResponse])
+async def list_incidents(
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    result = await db.execute(select(Incident).order_by(Incident.id.desc()))
+    return result.scalars().all()
+
+
+@router.get("/incidents/{incident_id}", response_model=IncidentResponse)
+async def get_incident(
+    incident_id: int,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    incident = await db.get(Incident, incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return incident
+
+
+@router.post("/incidents", response_model=IncidentResponse, status_code=201)
+async def create_incident(
+    body: IncidentCreate,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    from datetime import timezone
+    now = datetime.now(timezone.utc)
+    incident = Incident(
+        mission_id=body.mission_id,
+        drone_id=body.drone_id,
+        severity=body.severity,
+        description=body.description,
+        status=IncidentStatus.OPEN,
+        reported_at=now,
+        requires_technical_inspection=body.requires_technical_inspection,
+    )
+    db.add(incident)
+    await db.flush()
+
+    # Tự động tạo maintenance_alert nếu cần kiểm tra kỹ thuật
+    if body.requires_technical_inspection:
+        alert = MaintenanceAlert(
+            drone_id=body.drone_id,
+            source="INCIDENT",
+            incident_id=incident.id,
+            title=f"Incident #{incident.id}: {body.description[:50]}",
+            status="PENDING",
+            created_at=now.replace(tzinfo=None),
+        )
+        db.add(alert)
+
+    await db.commit()
+    await db.refresh(incident)
+    return incident
+
+
+@router.patch("/incidents/{incident_id}/status", response_model=IncidentResponse)
+async def update_incident_status(
+    incident_id: int,
+    status: IncidentStatus,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    incident = await db.get(Incident, incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    incident.status = status
+    await db.commit()
+    await db.refresh(incident)
+    return incident
