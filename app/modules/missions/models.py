@@ -20,6 +20,18 @@ class LocationType(str, enum.Enum):
     CUSTOMER_ADDRESS = "CustomerAddress"
 
 
+class IncidentStatus(str, enum.Enum):
+    OPEN = "Open"
+    INVESTIGATING = "Investigating"
+    CLOSED = "Closed"
+
+
+class IncidentSeverity(str, enum.Enum):
+    LOW = "Low"
+    MEDIUM = "Medium"
+    HIGH = "High"
+
+
 class Location(Base):
     __tablename__ = "locations"
 
@@ -70,3 +82,21 @@ class TelemetryLog(Base):
     battery_voltage: Mapped[float | None] = mapped_column(Float, nullable=True)
     energy_consumed_wh: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_speed: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class Incident(Base):
+    __tablename__ = "incidents"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    mission_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    drone_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    reporter_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    severity: Mapped[IncidentSeverity] = mapped_column(
+        SAEnum(IncidentSeverity, name="risk_level", create_type=False, values_callable=lambda x: [e.value for e in x])
+    )
+    description: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[IncidentStatus] = mapped_column(
+        SAEnum(IncidentStatus, name="incidents_status", create_type=False, values_callable=lambda x: [e.value for e in x])
+    )
+    reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    requires_technical_inspection: Mapped[bool] = mapped_column(default=False)
