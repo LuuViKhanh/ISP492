@@ -130,3 +130,36 @@ async def run_telemetry_signal_loss_watcher(db: AsyncSession):
                     ))
     
     await db.commit()
+
+
+async def run_battery_charging_simulation(db: AsyncSession):
+    """
+    Worker 3: Giả lập trạm sạc tự động tại Hub.
+    Mỗi khi worker chạy, các viên pin đang ở Hub (drone_id is NULL) 
+    và chưa đầy (< 100%) sẽ được sạc thêm một lượng % nhất định (vd: +20%).
+    """
+    from app.modules.fleet.models import Battery
+    
+    # Tìm các pin đang ở Hub (drone_id IS NULL) và pin chưa đầy
+    result = await db.execute(
+        select(Battery).where(
+            and_(
+                Battery.current_hub_id.isnot(None),
+                Battery.drone_id.is_(None),
+                Battery.charge_level_pct < 100
+            )
+        )
+    )
+    charging_batteries = result.scalars().all()
+    
+    if not charging_batteries:
+        return
+        
+    CHARGE_RATE = 20  # Mỗi lần chạy giả lập sạc được 20%
+    
+    for battery in charging_batteries:
+        current_charge = battery.charge_level_pct if battery.charge_level_pct is not None else 0
+        new_charge = current_charge + CHARGE_RATE
+        battery.charge_level_pct = min(new_charge, 100) # Đảm bảo không vượt quá 100%
+        
+    await db.commit()
