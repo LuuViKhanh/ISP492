@@ -16,7 +16,7 @@ class NotificationType(str, enum.Enum):
 class Notification(Base):
     __tablename__ = "notifications"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
     message: Mapped[str] = mapped_column(String, nullable=False)

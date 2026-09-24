@@ -86,6 +86,8 @@ Tài liệu này định nghĩa cấu trúc cơ sở dữ liệu và các luồn
 | `status` | VARCHAR(50) | Enum | `Awaiting Payment`, `Approved`, `Flying`, `Completed`... |
 | `arrived_at` | TIMESTAMP | Nullable | **[MỚI]** Giờ hạ cánh tại Hub |
 | `arrival_confirmed_by`| VARCHAR(50)| **FK** -> `users.id`, Nullable| **[MỚI]** Technician xác nhận nhận Drone |
+| `approval_deadline`| TIMESTAMP| Nullable | Hỗ trợ dữ liệu cho API trả về làm hiệu ứng đếm ngược trên UI và làm mốc thời gian cho Worker tự động hủy đơn |
+
 
 *(Các bảng `payments` và `mission_reports` được giữ nguyên như thiết kế ban đầu)*
 
