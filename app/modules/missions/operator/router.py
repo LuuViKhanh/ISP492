@@ -206,7 +206,7 @@ class IncidentResponse(BaseModel):
     id: int
     mission_id: Optional[int]
     drone_id: Optional[int]
-    reporter_id: Optional[int]
+    reporter_id: Optional[str]
     severity: IncidentSeverity
     description: str
     status: IncidentStatus
@@ -249,6 +249,7 @@ async def create_incident(
     incident = Incident(
         mission_id=body.mission_id,
         drone_id=body.drone_id,
+        reporter_id=user.id,
         severity=body.severity,
         description=body.description,
         status=IncidentStatus.OPEN,
