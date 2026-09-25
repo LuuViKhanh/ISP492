@@ -1,0 +1,235 @@
+# config/feature_schema.yaml
+# Defines the contract, valid ranges, and target relations for features in Research V2
+
+speed:
+  dtype: float
+  unit: m/s
+  nullable: false
+  minimum: 0
+  target_relation: NONE
+  deployability: PRE_FLIGHT
+
+planned_speed:
+  dtype: float
+  unit: m/s
+  nullable: true
+  minimum: 0
+  target_relation: NONE
+  deployability: PRE_FLIGHT
+
+altitude:
+  dtype: float
+  unit: m
+  nullable: false
+  target_relation: NONE
+  deployability: PRE_FLIGHT
+
+payload:
+  dtype: float
+  unit: g
+  nullable: false
+  minimum: 0
+  target_relation: NONE
+  deployability: PRE_FLIGHT
+
+flight_duration:
+  dtype: float
+  unit: s
+  nullable: false
+  minimum: 0
+  target_relation: POST_OUTCOME
+  deployability: POST_FLIGHT
+
+distance:
+  dtype: float
+  unit: m
+  nullable: false
+  minimum: 0
+  target_relation: TARGET_COMPONENT
+  deployability: POST_FLIGHT
+
+planned_distance:
+  dtype: float
+  unit: m
+  nullable: true
+  minimum: 0
+  target_relation: TARGET_COMPONENT
+  deployability: PRE_FLIGHT
+
+temperature_c:
+  dtype: float
+  unit: celsius
+  nullable: false
+  target_relation: NONE
+  deployability: WEATHER_FORECAST_DERIVED
+
+humidity_pct:
+  dtype: float
+  unit: percent
+  minimum: 0
+  maximum: 100
+  nullable: false
+  target_relation: NONE
+  deployability: WEATHER_FORECAST_DERIVED
+
+avg_wind_speed:
+  dtype: float
+  unit: m/s
+  minimum: 0
+  nullable: false
+  target_relation: NONE
+  deployability: WEATHER_FORECAST_DERIVED
+
+wind_gust_ms:
+  dtype: float
+  unit: m/s
+  minimum: 0
+  nullable: false
+  target_relation: NONE
+  deployability: WEATHER_FORECAST_DERIVED
+
+wind_dir_deg:
+  dtype: float
+  unit: degree
+  minimum: 0
+  maximum: 360
+  nullable: false
+  target_relation: NONE
+  deployability: WEATHER_FORECAST_DERIVED
+
+pressure_hpa:
+  dtype: float
+  unit: hPa
+  minimum: 800
+  maximum: 1100
+  nullable: false
+  target_relation: NONE
+  deployability: WEATHER_FORECAST_DERIVED
+
+cloud_cover_pct:
+  dtype: float
+  unit: percent
+  minimum: 0
+  maximum: 100
+  nullable: false
+  target_relation: NONE
+  deployability: WEATHER_FORECAST_DERIVED
+
+relative_wind_angle:
+  dtype: float
+  unit: degree
+  minimum: 0
+  maximum: 180
+  nullable: true
+  target_relation: NONE
+  deployability: POST_FLIGHT
+  notes: "Legacy observed feature derived from actual trajectory; analysis only."
+
+planned_relative_wind_angle:
+  dtype: float
+  unit: degree
+  minimum: 0
+  maximum: 180
+  nullable: true
+  target_relation: NONE
+  deployability: ROUTE_PLAN_DERIVED
+  notes: "0=tailwind, 90=crosswind, 180=headwind. Historical flight-level values are endpoint route-direction proxies."
+
+planned_headwind_component:
+  dtype: float
+  unit: m/s
+  nullable: true
+  target_relation: NONE
+  deployability: ROUTE_PLAN_DERIVED
+  notes: "Positive=headwind, negative=tailwind."
+
+planned_crosswind_component:
+  dtype: float
+  unit: m/s
+  minimum: 0
+  nullable: true
+  target_relation: NONE
+  deployability: ROUTE_PLAN_DERIVED
+  notes: "Unsigned crosswind magnitude."
+
+battery_consumed_wh:
+  dtype: float
+  unit: Wh
+  minimum: 0
+  nullable: false
+  target_relation: TARGET_COMPONENT
+  deployability: POST_FLIGHT
+
+energy_efficiency:
+  dtype: float
+  unit: m/Wh
+  minimum: 0
+  nullable: false
+  target_relation: TARGET_COMPONENT
+  deployability: POST_FLIGHT
+
+# Physics Features (F2)
+headwind_component:
+  source:
+    - wind_speed_ms
+    - planned_relative_wind_angle
+  category: physics_weather
+  deployability: WEATHER_FORECAST_DERIVED
+  target_relation: NONE
+  units: m/s
+
+crosswind_component:
+  source:
+    - wind_speed_ms
+    - planned_relative_wind_angle
+  category: physics_weather
+  deployability: WEATHER_FORECAST_DERIVED
+  target_relation: NONE
+  units: m/s
+
+gust_delta:
+  source:
+    - wind_gust_ms
+    - avg_wind_speed
+  category: physics_weather
+  deployability: WEATHER_FORECAST_DERIVED
+  target_relation: NONE
+  units: m/s
+
+gust_ratio:
+  source:
+    - wind_gust_ms
+    - avg_wind_speed
+  category: physics_weather
+  deployability: WEATHER_FORECAST_DERIVED
+  target_relation: NONE
+  units: dimensionless
+
+air_density:
+  source:
+    - temperature_c
+    - humidity_pct
+    - pressure_hpa
+  category: physics_weather
+  deployability: WEATHER_FORECAST_DERIVED
+  target_relation: NONE
+  units: kg/m3
+
+effective_airspeed:
+  source:
+    - speed
+    - headwind_component
+    - crosswind_component
+  category: physics_weather
+  deployability: POST_FLIGHT
+  target_relation: NONE
+  units: m/s
+
+aerodynamic_power_proxy:
+  source:
+    - air_density
+    - effective_airspeed
+  category: physics_weather
+  deployability: POST_FLIGHT
+  target_relation: NONE
+  units: watts

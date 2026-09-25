@@ -12,3 +12,9 @@ bcrypt>=4.0.0
 httpx>=0.27.0
 greenlet>=3.0.0
 pandas>=2.0.0
+# ML Dependencies
+catboost>=1.2.0
+xgboost>=2.0.0
+shap>=0.44.0
+joblib>=1.3.0
+scikit-learn>=1.3.0
