@@ -1,0 +1,264 @@
+version: 2
+research_targets:
+  primary_flight_target:
+    column: energy_efficiency
+    unit: m/Wh
+    definition: distance / battery_consumed_wh
+  secondary_flight_target:
+    column: battery_consumed_wh
+    unit: Wh
+    purpose: Battery-consumption supporting analysis for RQ1/RQ2
+  multihub_segment_target:
+    column: segment_energy_wh
+    unit: Wh
+    purpose: Additive edge/segment cost for route-energy aggregation
+feature_groups:
+  operational:
+    description: 'Operational mission variables used by the primary flight-level Energy-Efficiency
+      validation model.
+
+      '
+    features:
+    - speed
+    - altitude
+    - payload
+  environmental:
+    description: 'Weather/environment variables harmonized across DJI and VTOL. Historical
+      flight-level relative_wind_angle is intentionally excluded.
+
+      '
+    features:
+    - temperature_c
+    - dew_point_c
+    - humidity_pct
+    - wind_speed_ms
+    - wind_gust_ms
+    - wind_dir_deg
+    - precipitation_mm
+    - pressure_hpa
+  platform:
+    description: 'Platform identity candidate used only in the COMBINED validation
+      case.
+
+      '
+    features:
+    - is_vtol
+  segment_engineered:
+    description: 'Features derived from a known candidate Multi-Hub edge. route_bearing
+      may be calculated internally to derive relative_wind_angle, but route_bearing
+      itself is not a model input.
+
+      '
+    features:
+    - relative_wind_angle
+    - segment_distance
+validation_feature_sets:
+  FS_OPS:
+    name: Operational Only
+    description: 'Minimal operational baseline. Used to quantify how much predictive
+      information is available before adding environmental variables.
+
+      '
+    groups:
+    - operational
+    features:
+    - speed
+    - altitude
+    - payload
+  FS_OPS_ENV:
+    name: Operational + Environmental
+    description: 'Clean common pre-flight baseline shared by DJI_ONLY, VTOL_ONLY and
+      COMBINED. This is the full non-platform baseline, not an automatically approved
+      winner.
+
+      '
+    groups:
+    - operational
+    - environmental
+    features:
+    - speed
+    - altitude
+    - payload
+    - temperature_c
+    - dew_point_c
+    - humidity_pct
+    - wind_speed_ms
+    - wind_gust_ms
+    - wind_dir_deg
+    - precipitation_mm
+    - pressure_hpa
+  FS_OPS_PLATFORM:
+    name: Operational + Platform
+    description: Platform-controlled operational baseline for COMBINED only. Used
+      to isolate the contribution of UAV identity from the additional contribution
+      of environmental variables.
+    groups:
+    - operational
+    - platform
+    features:
+    - speed
+    - altitude
+    - payload
+    - is_vtol
+  FS_OPS_ENV_PLATFORM:
+    name: Operational + Environmental + Platform
+    description: 'Platform-aware candidate for COMBINED validation only.
+
+      '
+    groups:
+    - operational
+    - environmental
+    - platform
+    features:
+    - speed
+    - altitude
+    - payload
+    - temperature_c
+    - dew_point_c
+    - humidity_pct
+    - wind_speed_ms
+    - wind_gust_ms
+    - wind_dir_deg
+    - precipitation_mm
+    - pressure_hpa
+    - is_vtol
+case_feature_set_options:
+  DJI_ONLY:
+  - FS_OPS
+  - FS_OPS_ENV
+  VTOL_ONLY:
+  - FS_OPS
+  - FS_OPS_ENV
+  COMBINED:
+  - FS_OPS
+  - FS_OPS_ENV
+  - FS_OPS_PLATFORM
+  - FS_OPS_ENV_PLATFORM
+multihub_segment_feature_set:
+  FS_SEGMENT_ENERGY:
+    name: Operational + Environmental + Segment Wind Relation + Distance
+    target: segment_energy_wh
+    description: 'Segment-level Energy-First feature set. Energy is predicted per
+      edge and summed over a route. Route EE is calculated only after route energy
+      has been aggregated.
+
+      '
+    features:
+    - speed
+    - altitude
+    - payload
+    - temperature_c
+    - dew_point_c
+    - humidity_pct
+    - wind_speed_ms
+    - wind_gust_ms
+    - wind_dir_deg
+    - precipitation_mm
+    - pressure_hpa
+    - relative_wind_angle
+    - segment_distance
+    intermediate_geometry_variables:
+    - route_bearing
+    model_feature_count: 13
+primary_ee_forbidden_inputs:
+  post_flight_or_observed:
+  - flight_duration
+  - avg_wind_speed
+  - relative_wind_angle
+  target_components_or_targets:
+  - distance
+  - battery_consumed_wh
+  - energy_efficiency
+  observed_trajectory_geometry:
+  - actual_3d_path_length
+  - actual_tortuosity
+  - actual_total_ascent
+  - actual_total_descent
+  - actual_heading_change
+  - actual_hover_ratio
+  - acceleration_rms
+  rationale: 'These variables may be retained for retrospective/supporting analyses,
+    but must not silently enter the primary pre-flight Energy-Efficiency model. In
+    particular, actual distance is part of EE = distance / energy and must not be
+    used as an input to predict that same EE target.
+
+    '
+legacy_retrospective:
+  observed_flight_context:
+    allowed_for_primary_ee: false
+    features:
+    - flight_duration
+    - distance
+    - avg_wind_speed
+    - relative_wind_angle
+  observed_trajectory_geometry:
+    allowed_for_primary_ee: false
+    features:
+    - actual_3d_path_length
+    - actual_tortuosity
+    - actual_total_ascent
+    - actual_total_descent
+    - actual_heading_change
+    - actual_hover_ratio
+    - acceleration_rms
+  planned_route_geometry_supporting_analysis:
+    allowed_for_primary_ee: false
+    note: 'These variables may be used in explicit route-planning sensitivity experiments
+      when they are truly known before flight. They are not part of the canonical
+      CP1 feature sets.
+
+      '
+    features:
+    - planned_distance
+    - planned_turn_count
+    - planned_heading_change
+    - planned_ascent
+    - planned_descent
+    - planned_tortuosity
+    - route_bearing
+  physics_weather_supporting_analysis:
+    allowed_for_primary_ee: false
+    note: 'Retained for extended/sensitivity experiments only. These engineered variables
+      are not part of the canonical CP1 comparison unless a later research checkpoint
+      explicitly introduces a new candidate set.
+
+      '
+    features:
+    - headwind_component
+    - crosswind_component
+    - gust_delta
+    - gust_ratio
+    - air_density
+    - effective_airspeed
+    - aerodynamic_power_proxy
+checkpoints:
+  CP1_FEATURE_SET_SELECTION:
+    input_evidence:
+    - CV_R2_mean
+    - CV_R2_std
+    - CV_MAE_mean
+    - CV_RMSE_mean
+    - CV_WMAPE_mean
+    - delta_R2
+    - delta_WMAPE
+    action: 'Stop after evidence generation. Continue by passing the selected feature-set
+      name to the next command.
+
+      '
+  CP2_MODEL_SELECTION:
+    action: 'Benchmark candidate models using the selected feature set, export fold
+      and out-of-fold evidence, then stop for explicit model selection.
+
+      '
+  CP3_VALIDATED_CONFIGURATION_SELECTION:
+    action: 'Compare DJI_ONLY, VTOL_ONLY and COMBINED validation evidence, then select
+      which validated configuration feeds the final Multi-Hub study.
+
+      '
+cp1_comparison_design:
+  combined_factorial_logic:
+    platform_contribution: FS_OPS vs FS_OPS_PLATFORM
+    environment_without_platform_control: FS_OPS vs FS_OPS_ENV
+    environment_after_platform_control: FS_OPS_PLATFORM vs FS_OPS_ENV_PLATFORM
+    purpose: Avoid attributing gains to weather when they may be caused by the UAV
+      platform indicator is_vtol.

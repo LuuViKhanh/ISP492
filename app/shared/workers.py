@@ -134,9 +134,16 @@ async def run_telemetry_signal_loss_watcher(db: AsyncSession):
 
 async def run_battery_charging_simulation(db: AsyncSession):
     """
-    Worker 3: Giả lập trạm sạc tự động tại Hub.
-    Mỗi khi worker chạy, các viên pin đang ở Hub (drone_id is NULL) 
-    và chưa đầy (< 100%) sẽ được sạc thêm một lượng % nhất định (vd: +20%).
+    Worker 3: Giả lập trạm sạc tự động tại Hub theo thuật toán CC-CV.
+    
+    Lý do áp dụng thuật toán CC-CV thay vì sạc tuyến tính (Linear Charging):
+    - Sạc tuyến tính (vd: cộng đều đặn 20% mỗi chu kỳ cho đến khi đầy) là phi thực tế với đặc tính vật lý của pin Li-Po/Li-ion.
+    - Trong thực tế, để chống cháy nổ và bảo vệ cell pin, hệ thống quản lý pin (BMS) áp dụng CC-CV:
+      1. Giai đoạn CC (Constant Current): Từ 0-80%, dòng điện được bơm tối đa, mức pin (SoC) tăng tuyến tính rất nhanh.
+      2. Giai đoạn CV (Constant Voltage): Từ 80-100%, điện áp giữ cố định, dòng điện phải giảm dần theo hàm mũ, 
+         làm cho tốc độ sạc chậm lại đáng kể khi tiến gần về 100% (Trickle charge).
+    - Việc áp dụng mô hình toán học này vào phần mềm giúp Digital Twin của hệ thống Drone mô phỏng chính xác
+      khoảng thời gian chết (downtime), giúp AI điều phối quyết định việc lấy pin 85% đi bay ngay thay vì đợi sạc đầy 100%.
     """
     from app.modules.fleet.models import Battery
     
@@ -155,11 +162,19 @@ async def run_battery_charging_simulation(db: AsyncSession):
     if not charging_batteries:
         return
         
-    CHARGE_RATE = 20  # Mỗi lần chạy giả lập sạc được 20%
-    
     for battery in charging_batteries:
         current_charge = battery.charge_level_pct if battery.charge_level_pct is not None else 0
-        new_charge = current_charge + CHARGE_RATE
-        battery.charge_level_pct = min(new_charge, 100) # Đảm bảo không vượt quá 100%
+        
+        if current_charge < 80:
+            # Giai đoạn 1 (CC): Sạc nhanh tuyến tính (ví dụ bơm 40% mỗi chu kỳ)
+            new_charge = current_charge + 40
+        else:
+            # Giai đoạn 2 (CV): Sạc chậm dần theo hàm mũ (Exponential decay)
+            # Tốc độ sạc tỷ lệ thuận với lượng pin còn thiếu: Delta_SoC = k * (100 - SoC_current)
+            # Ở đây chọn hệ số suy giảm k = 0.5 (mỗi chu kỳ sạc được 50% phần dung lượng còn trống)
+            new_charge = current_charge + 0.5 * (100 - current_charge)
+            
+        # Làm tròn số và chặn trần tối đa ở 100%
+        battery.charge_level_pct = min(round(new_charge), 100)
         
     await db.commit()
