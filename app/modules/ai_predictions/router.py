@@ -236,3 +236,74 @@ async def predict_energy(request: RouteEnergyRequest, db: AsyncSession = Depends
         recommended_route_id=routes[0].route_id,
         routes=routes
     )
+
+class ShapFeatureDetail(BaseModel):
+    feature_name: str
+    feature_value: float
+    shap_contribution_wh: float
+    description: str
+
+class ShapExplanationResponse(BaseModel):
+    prediction_id: str
+    base_value_wh: float
+    final_prediction_wh: float
+    features: List[ShapFeatureDetail]
+    summary_message: str
+
+@router.get("/explain/{prediction_id}", response_model=ShapExplanationResponse)
+async def get_prediction_explanation(prediction_id: str):
+    """
+    Trả về dữ liệu chi tiết của mô hình SHAP để hiển thị biểu đồ (Waterfall, Bar chart).
+    Giải thích tại sao AI đưa ra mức tiêu thụ năng lượng đó.
+    
+    Phase 1 (Hiện tại): Trả về mảng dữ liệu SHAP với các số liệu giả lập nhưng đúng form chuẩn, để team Frontend có data thật mà lập trình ngay giao diện vẽ biểu đồ (ví dụ dùng thư viện Recharts hay ECharts).
+    
+    Phase 2 (Tương lai): Khi hệ thống ghép nối hoàn chỉnh, bạn chỉ cần viết thêm hàm query vào Database tìm cái prediction_id đó, lôi mảng SHAP thật ra thay vào là xong!
+    """
+    # MOCK BASE VALUE (Trung bình năng lượng của toàn bộ tập mẫu CatBoost)
+    base_value = 150.0 
+    
+    # Giả lập lại một vài features quan trọng như gió, tải trọng, khoảng cách
+    features = [
+        ShapFeatureDetail(
+            feature_name="distance",
+            feature_value=12.5, # km
+            shap_contribution_wh=45.2,
+            description="Khoảng cách bay xa làm tăng tiêu hao pin."
+        ),
+        ShapFeatureDetail(
+            feature_name="payload",
+            feature_value=2.5, # kg
+            shap_contribution_wh=15.8,
+            description="Tải trọng hàng hóa lớn."
+        ),
+        ShapFeatureDetail(
+            feature_name="wind_speed",
+            feature_value=8.5, # m/s
+            shap_contribution_wh=-12.4,
+            description="Gió xuôi chiều giúp tiết kiệm pin."
+        ),
+        ShapFeatureDetail(
+            feature_name="temperature_c",
+            feature_value=32.0, # Độ C
+            shap_contribution_wh=3.1,
+            description="Nhiệt độ môi trường cao làm giảm hiệu suất pin nhẹ."
+        ),
+        ShapFeatureDetail(
+            feature_name="relative_wind_angle",
+            feature_value=25.0, # Độ
+            shap_contribution_wh=-8.5,
+            description="Góc đón gió tối ưu."
+        )
+    ]
+    
+    # Final prediction = Base Value + Sum(SHAP contributions)
+    final_prediction = base_value + sum([f.shap_contribution_wh for f in features])
+    
+    return ShapExplanationResponse(
+        prediction_id=prediction_id,
+        base_value_wh=round(base_value, 2),
+        final_prediction_wh=round(final_prediction, 2),
+        features=features,
+        summary_message="Chuyến bay có mức tiêu hao cao hơn trung bình chủ yếu do khoảng cách xa (đóng góp +45.2Wh), nhưng đã được bù đắp một phần nhờ bay xuôi chiều gió (-12.4Wh)."
+    )
