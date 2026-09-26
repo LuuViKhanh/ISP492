@@ -1,16 +1,13 @@
 """
 simulate_drone.py
 ─────────────────
-Giả lập một drone đang bay — gửi telemetry lên API (local hoặc Render)
-mỗi vài giây theo một lộ trình waypoint định sẵn.
+Giả lập drone bay — tự fetch hub từ API, tự tạo lộ trình đi QUA các hub,
+rồi stream telemetry lên server mỗi vài giây.
 
 Cách chạy:
     python simulate_drone.py
 
-Tuỳ chỉnh:
-    BASE_URL   → đổi sang URL Render của bạn để test production
-    TOKEN      → access_token của tài khoản operator/admin
-    MISSION_ID → ID của mission đang ở trạng thái APPROVED
+Chỉ cần sửa 3 dòng trong phần CẤU HÌNH bên dưới.
 """
 
 import time
@@ -18,52 +15,32 @@ import math
 import requests
 from datetime import datetime, timezone
 
-# ─── CẤU HÌNH ────────────────────────────────────────────────────────────────
-BASE_URL   = "http://localhost:8000/api/v1"   # ← đổi thành https://<app>.onrender.com/api/v1
+# ─── CẤU HÌNH (chỉ sửa 3 dòng này) ──────────────────────────────────────────
+BASE_URL   = "http://localhost:8000/api/v1"   # hoặc https://<app>.onrender.com/api/v1
 TOKEN      = "PASTE_YOUR_ACCESS_TOKEN_HERE"
-MISSION_ID = 1                                 # ← đổi thành mission_id thực tế (status APPROVED)
-
-INTERVAL_SEC    = 3      # Gửi mỗi N giây
-POINTS_PER_CALL = 1      # Số điểm gửi mỗi lần (batch)
-HUB_PROXIMITY_M = 200    # Phải khớp với config backend (để biết khi nào checkpoint được tạo)
+MISSION_ID = 1                                # mission đang ở trạng thái APPROVED
 # ─────────────────────────────────────────────────────────────────────────────
 
+INTERVAL_SEC = 3   # gửi mỗi N giây
 
-# ─── LỘ TRÌNH MẪU (TP.HCM) ───────────────────────────────────────────────────
-# Mỗi tuple: (latitude, longitude, tên mốc)
-# Lộ trình: Quận 1 → qua Hub Quận 3 → Hub Bình Thạnh → Quận 7
-# Thay lat/lng bằng toạ độ hub thực tế trong DB của bạn để trigger checkpoint
-WAYPOINTS = [
-    (10.7769, 106.7009, "Start - Quận 1"),
-    (10.7790, 106.6990, "..."),
-    (10.7810, 106.6975, "..."),
-    (10.7830, 106.6960, "Gần Hub Quận 3"),        # ← đặt gần lat/lng hub trong DB
-    (10.7850, 106.6945, "..."),
-    (10.7870, 106.6930, "..."),
-    (10.7900, 106.6910, "Gần Hub Bình Thạnh"),     # ← đặt gần lat/lng hub trong DB
-    (10.7920, 106.6895, "..."),
-    (10.7940, 106.6880, "..."),
-    (10.7960, 106.6865, "..."),
-    (10.7980, 106.6850, "End - Quận 7"),
-]
-# ─────────────────────────────────────────────────────────────────────────────
 
+# ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 def haversine_m(lat1, lon1, lat2, lon2) -> float:
     R = 6_371_000
     p1, p2 = math.radians(lat1), math.radians(lat2)
     dp = math.radians(lat2 - lat1)
     dl = math.radians(lon2 - lon1)
-    a = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-def interpolate_route(waypoints, steps_between=5):
-    """Nội suy thêm điểm giữa các waypoint để đường bay mịn hơn."""
+def interpolate_route(waypoints, steps_between=8):
+    """Nội suy điểm giữa các waypoint để đường bay mịn hơn."""
     route = []
     for i in range(len(waypoints) - 1):
         lat1, lon1, label1 = waypoints[i]
-        lat2, lon2, _      = waypoints[i + 1]
+        lat2, lon2, _ = waypoints[i + 1]
         for step in range(steps_between):
             t = step / steps_between
             route.append((
@@ -75,75 +52,163 @@ def interpolate_route(waypoints, steps_between=5):
     return route
 
 
+# ─── FETCH HUB TỪ API ─────────────────────────────────────────────────────────
+
+def fetch_hubs(headers) -> list[dict]:
+    """
+    Lấy danh sách hub thực tế từ DB qua API.
+    Gộp cả Hub lớn (/hubs) và Mini-hub (/mini-hubs).
+    Trả về list dict: { name, latitude, longitude }
+    """
+    hubs = []
+    for endpoint in ["/operator/missions/hubs", "/operator/missions/mini-hubs"]:
+        try:
+            resp = requests.get(f"{BASE_URL}{endpoint}", headers=headers, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                for h in data:
+                    lat = h.get("latitude")
+                    lng = h.get("longitude")
+                    if lat and lng:
+                        hubs.append({
+                            "name": h.get("name") or h.get("code") or f"Hub #{h.get('id')}",
+                            "latitude": lat,
+                            "longitude": lng,
+                        })
+        except Exception as e:
+            print(f"⚠️  Không fetch được {endpoint}: {e}")
+    return hubs
+
+
+def build_route_through_hubs(hubs: list[dict]) -> list[tuple]:
+    """
+    Tạo lộ trình đi qua TẤT CẢ hub theo thứ tự.
+
+    Logic:
+    - Điểm xuất phát = toạ độ hub đầu tiên (dịch nhẹ 0.001 độ để không trùng)
+    - Waypoint = toạ độ chính xác của mỗi hub (đảm bảo trong 200m → trigger checkpoint)
+    - Điểm kết thúc = toạ độ hub cuối (dịch nhẹ)
+    """
+    if not hubs:
+        # Fallback nếu DB không có hub nào
+        print("⚠️  Không tìm thấy hub nào trong DB. Dùng lộ trình mặc định TP.HCM.")
+        return [
+            (10.7769, 106.7009, "Start (fallback)"),
+            (10.7850, 106.6950, "Midpoint"),
+            (10.7980, 106.6850, "End (fallback)"),
+        ]
+
+    waypoints = []
+
+    # Điểm xuất phát: trước hub đầu tiên ~500m về phía tây-nam
+    start_lat = hubs[0]["latitude"] - 0.004
+    start_lng = hubs[0]["longitude"] - 0.004
+    waypoints.append((start_lat, start_lng, "🛫 Điểm xuất phát"))
+
+    # Đi qua từng hub (toạ độ chính xác → chắc chắn trigger checkpoint)
+    for h in hubs:
+        waypoints.append((h["latitude"], h["longitude"], f"📍 {h['name']}"))
+
+    # Điểm kết thúc: sau hub cuối ~500m về phía đông-bắc
+    end_lat = hubs[-1]["latitude"] + 0.004
+    end_lng = hubs[-1]["longitude"] + 0.004
+    waypoints.append((end_lat, end_lng, "🏁 Điểm đến"))
+
+    return waypoints
+
+
+# ─── MAIN SIMULATE ────────────────────────────────────────────────────────────
+
 def simulate():
     headers = {
         "Authorization": f"Bearer {TOKEN}",
         "Content-Type": "application/json",
     }
-    url = f"{BASE_URL}/operator/missions/{MISSION_ID}/telemetry"
 
-    route = interpolate_route(WAYPOINTS, steps_between=8)
+    # 1. Fetch hub từ DB
+    print("🔍  Đang fetch danh sách Hub từ DB...")
+    hubs = fetch_hubs(headers)
+
+    if hubs:
+        print(f"✅  Tìm thấy {len(hubs)} hub:")
+        for h in hubs:
+            print(f"    • {h['name']:30s} ({h['latitude']:.5f}, {h['longitude']:.5f})")
+    else:
+        print("⚠️  Không có hub nào — dùng lộ trình fallback")
+
+    print()
+
+    # 2. Build lộ trình đi qua các hub
+    waypoints = build_route_through_hubs(hubs)
+    route = interpolate_route(waypoints, steps_between=10)
     total = len(route)
 
-    print(f"🚁  Bắt đầu giả lập drone — {total} điểm, mission #{MISSION_ID}")
-    print(f"    Server: {BASE_URL}")
-    print(f"    Gửi mỗi {INTERVAL_SEC}s\n")
+    print(f"🚁  Bắt đầu giả lập — {total} điểm, mission #{MISSION_ID}")
+    print(f"    Server  : {BASE_URL}")
+    print(f"    Interval: {INTERVAL_SEC}s/điểm\n")
+
+    url = f"{BASE_URL}/operator/missions/{MISSION_ID}/telemetry"
 
     for idx, (lat, lng, label) in enumerate(route):
-        # Tốc độ và altitude thay đổi nhẹ theo thời gian
-        altitude      = 50 + math.sin(idx * 0.3) * 5          # 45–55m
-        speed         = 12 + math.cos(idx * 0.2) * 3          # 9–15 m/s
-        battery_volt  = max(18.0, 24.0 - idx * 0.05)          # giảm dần
-        energy_wh     = idx * 0.8                              # tăng dần
-        wind_speed    = 2.0 + math.sin(idx * 0.5) * 1.5       # 0.5–3.5 m/s
+        altitude     = 50 + math.sin(idx * 0.3) * 5       # 45–55m
+        speed        = 12 + math.cos(idx * 0.2) * 3       # 9–15 m/s
+        battery_volt = max(18.0, 24.0 - idx * 0.04)       # giảm dần
+        energy_wh    = idx * 0.8
+        wind_speed   = 2.0 + math.sin(idx * 0.5) * 1.5
 
         payload = [{
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "latitude":          round(lat, 6),
-            "longitude":         round(lng, 6),
-            "altitude":          round(altitude, 2),
-            "speed":             round(speed, 2),
-            "battery_voltage":   round(battery_volt, 2),
-            "energy_consumed_wh":round(energy_wh, 3),
-            "wind_speed":        round(wind_speed, 2),
+            "timestamp":          datetime.now(timezone.utc).isoformat(),
+            "latitude":           round(lat, 6),
+            "longitude":          round(lng, 6),
+            "altitude":           round(altitude, 2),
+            "speed":              round(speed, 2),
+            "battery_voltage":    round(battery_volt, 2),
+            "energy_consumed_wh": round(energy_wh, 3),
+            "wind_speed":         round(wind_speed, 2),
         }]
 
         try:
             resp = requests.post(url, json=payload, headers=headers, timeout=10)
 
             if resp.status_code == 200:
-                data = resp.json()
-                status  = data.get("mission_status", "?")
-                saved   = data.get("saved_count", 0)
-                cps     = data.get("new_checkpoints", [])
+                data   = resp.json()
+                status = data.get("mission_status", "?")
+                cps    = data.get("new_checkpoints", [])
 
-                tag = f"  📍 {label}" if label else ""
+                label_tag = f"  {label}" if label else ""
                 cp_tag = ""
                 if cps:
-                    names = [c.get("hub_name", "?") for c in cps]
-                    cp_tag = f"  ✅ CHECKPOINT: {', '.join(names)}"
+                    names  = [c.get("hub_name", "?") for c in cps]
+                    dists  = [f"{c.get('distance_to_hub_m', 0):.0f}m" for c in cps]
+                    cp_tag = f"  ✅ CHECKPOINT: {', '.join(f'{n} ({d})' for n, d in zip(names, dists))}"
 
-                print(f"[{idx+1:>3}/{total}] ({lat:.5f}, {lng:.5f})  "
-                      f"alt={altitude:.1f}m  spd={speed:.1f}m/s  "
-                      f"bat={battery_volt:.1f}V  status={status}"
-                      f"{tag}{cp_tag}")
+                print(
+                    f"[{idx+1:>3}/{total}] ({lat:.5f}, {lng:.5f})"
+                    f"  alt={altitude:.1f}m  spd={speed:.1f}m/s"
+                    f"  bat={battery_volt:.1f}V  [{status}]"
+                    f"{label_tag}{cp_tag}"
+                )
             else:
-                print(f"[{idx+1:>3}/{total}] ❌ HTTP {resp.status_code}: {resp.text[:120]}")
+                print(f"[{idx+1:>3}/{total}] ❌ HTTP {resp.status_code}: {resp.text[:150]}")
 
         except requests.exceptions.ConnectionError:
             print(f"[{idx+1:>3}/{total}] ❌ Không kết nối được tới {BASE_URL}")
             break
         except requests.exceptions.Timeout:
-            print(f"[{idx+1:>3}/{total}] ⏱  Timeout, thử lại lần sau")
+            print(f"[{idx+1:>3}/{total}] ⏱  Timeout")
 
         if idx < total - 1:
             time.sleep(INTERVAL_SEC)
 
     print("\n🏁  Giả lập hoàn thành.")
+    print(f"\n👉  Kiểm tra kết quả:")
+    print(f"    GET {BASE_URL}/operator/missions/{MISSION_ID}/hub-checkpoints")
+    print(f"    GET {BASE_URL}/operator/missions/{MISSION_ID}/telemetry")
+    print(f"    GET {BASE_URL}/operator/missions/live-tracking")
 
 
 if __name__ == "__main__":
     if TOKEN == "PASTE_YOUR_ACCESS_TOKEN_HERE":
-        print("❌  Chưa điền TOKEN. Mở file này và sửa biến TOKEN ở đầu file.")
+        print("❌  Chưa điền TOKEN. Sửa biến TOKEN ở đầu file.")
         exit(1)
     simulate()
