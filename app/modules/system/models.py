@@ -1,6 +1,6 @@
 import enum
 from datetime import datetime
-from sqlalchemy import BigInteger, Integer, String, Boolean, DateTime, Text, Enum as SAEnum
+from sqlalchemy import BigInteger, Integer, Float, String, Boolean, DateTime, Text, Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database.db import Base
 
@@ -16,7 +16,7 @@ class NotificationType(str, enum.Enum):
 class Notification(Base):
     __tablename__ = "notifications"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
     message: Mapped[str] = mapped_column(String, nullable=False)
@@ -39,8 +39,8 @@ class Hub(Base):
     code: Mapped[str | None] = mapped_column(String, nullable=True)
     name: Mapped[str | None] = mapped_column(String, nullable=True)
     address: Mapped[str | None] = mapped_column(String, nullable=True)
-    latitude: Mapped[float | None] = mapped_column(String, nullable=True)
-    longitude: Mapped[float | None] = mapped_column(String, nullable=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

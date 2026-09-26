@@ -19,6 +19,15 @@ async def get_profile(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Lấy thông tin cá nhân của người dùng hiện tại (profile).
+    
+    Yêu cầu:
+    - Người dùng phải đăng nhập (gửi kèm token).
+    
+    Trả về:
+    - Thông tin chi tiết của người dùng bao gồm id, họ tên, ...
+    """
     user = await get_user_by_id(db, current_user.id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -31,6 +40,17 @@ async def update_profile(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Cập nhật thông tin cá nhân của người dùng hiện tại.
+    
+    Có thể cập nhật các trường như họ tên (full_name) và tên hiển thị (username).
+    
+    Yêu cầu:
+    - Người dùng phải đăng nhập hợp lệ.
+    
+    Trả về:
+    - Thông tin người dùng sau khi đã được cập nhật thành công.
+    """
     user = await get_user_by_id(db, current_user.id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")

@@ -21,6 +21,12 @@ async def get_mission_kpi(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Lấy các chỉ số KPI của nhiệm vụ.
+    API này trả về tổng số nhiệm vụ, số lượng hoàn thành, bị hủy, bị từ chối,
+    tỷ lệ thành công, khoảng cách trung bình, tải trọng trung bình và tổng doanh thu.
+    Dành cho Operator hoặc Admin.
+    """
     result = await db.execute(select(Mission))
     missions = result.scalars().all()
 
@@ -51,6 +57,11 @@ async def get_mission_status(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Lấy thống kê trạng thái của các nhiệm vụ.
+    API này trả về số lượng nhiệm vụ được nhóm theo từng trạng thái (ví dụ: đang bay, hoàn thành, hủy bỏ).
+    Dành cho Operator hoặc Admin.
+    """
     result = await db.execute(
         select(Mission.status, func.count().label("count")).group_by(Mission.status)
     )
@@ -65,6 +76,11 @@ async def get_active_flights(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Lấy danh sách các chuyến bay đang hoạt động.
+    API này trả về các nhiệm vụ hiện có trạng thái là FLYING cùng với thông tin chi tiết.
+    Dành cho Operator hoặc Admin.
+    """
     result = await db.execute(
         select(Mission).where(Mission.status == MissionStatus.FLYING)
     )
@@ -89,6 +105,10 @@ async def get_active_flights(
 
 @router.post("/request")
 async def create_mission_request(user: CurrentUser = Depends(allow_operator_and_customer)):
+    """
+    Tạo một yêu cầu nhiệm vụ mới.
+    API này cho phép người điều khiển (Operator) hoặc khách hàng (Customer) tạo mới yêu cầu nhiệm vụ bay.
+    """
     return {"message": "Mission request created."}
 
 
@@ -97,5 +117,10 @@ async def get_missions(
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Lấy danh sách tất cả các nhiệm vụ.
+    API này trả về danh sách toàn bộ nhiệm vụ được sắp xếp theo ID giảm dần.
+    Yêu cầu người dùng phải đăng nhập.
+    """
     result = await db.execute(select(Mission).order_by(Mission.id.desc()))
     return result.scalars().all()

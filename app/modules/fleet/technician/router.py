@@ -7,7 +7,7 @@ from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
 from app.modules.fleet.models import (
-    Drone, WorkOrder, WorkOrderStatus,
+    Drone, Battery, WorkOrder, WorkOrderStatus,
     MaintenanceRecord, MaintenanceInspectionItem, WorkOrderLog, MaintenanceAlert, MaintenanceSchedule
 )
 from app.modules.fleet.schemas import WorkOrderCreate, WorkOrderUpdate, InspectionUpdate, WorkOrderResponse
@@ -109,6 +109,73 @@ async def update_drone_status(
     await db.commit()
     await db.refresh(drone)
     return drone
+
+
+@router.get("/batteries")
+async def get_hub_batteries(
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    if not user.hub_id:
+        return []
+    
+    hub_id = int(user.hub_id) if str(user.hub_id).isdigit() else user.hub_id
+
+    
+    result = await db.execute(
+        select(Battery).where(Battery.current_hub_id == hub_id).order_by(Battery.id)
+    )
+    batteries = result.scalars().all()
+    
+    return [
+        {
+            "id": b.id,
+            "serial_number": b.serial_number,
+            "capacity_wh": b.capacity_wh,
+            "status": b.status,
+            "drone_id": b.drone_id,
+            "current_hub_id": b.current_hub_id,
+            "charge_level_pct": b.charge_level_pct
+        }
+        for b in batteries
+    ]
+
+
+@router.post("/batteries/{battery_id}/mark-charged")
+async def mark_battery_charged(
+    battery_id: int,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Đánh dấu một viên pin đã sạc đầy (100%).
+    GHI CHÚ: Mặc dù hệ thống đã có Worker tự động sạc pin theo thời gian (background job), 
+    API này vẫn được giữ lại để đóng vai trò "Manual Override" (Ghi đè thủ công) phục vụ:
+    1. Xử lý ngoại lệ ngoài đời thực (cảm biến IoT hỏng, Technician nhập pin mới kho vào).
+    2. Sạc nhanh (Fast Charge) khẩn cấp.
+    3. Phục vụ việc Demo đồ án nhánh chóng (không cần chờ chu kỳ Cronjob tự sạc).
+    """
+    battery = await db.get(Battery, battery_id)
+    if not battery:
+        raise HTTPException(status_code=404, detail="Battery not found")
+        
+    # Tùy chọn: có thể kiểm tra xem pin có đúng ở hub của technician không
+    # if user.hub_id and str(battery.current_hub_id) != str(user.hub_id):
+    #     raise HTTPException(status_code=403, detail="Battery is not at your hub")
+        
+    battery.charge_level_pct = 100
+    await db.commit()
+    await db.refresh(battery)
+    
+    return {
+        "message": "Đã cập nhật pin sạc đầy 100%",
+        "battery": {
+            "id": battery.id,
+            "serial_number": battery.serial_number,
+            "charge_level_pct": battery.charge_level_pct,
+            "current_hub_id": battery.current_hub_id
+        }
+    }
 
 
 @router.get("/drones/{drone_id}/maintenance-history", response_model=list[MaintenanceHistoryItem])

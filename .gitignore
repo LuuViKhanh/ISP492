@@ -8,3 +8,7 @@ venv/
 .mypy_cache/
 .idea/
 .vscode/
+
+# Testing
+pytest.ini
+tests/

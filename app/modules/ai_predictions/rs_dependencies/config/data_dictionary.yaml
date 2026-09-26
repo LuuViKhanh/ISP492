@@ -1,0 +1,165 @@
+# =====================================================================
+# DATA DICTIONARY & POLICIES
+# =====================================================================
+# This file describes the expected structure, valid ranges, and 
+# missing/outlier handling policies for the dataset.
+
+flight:
+  description: "Unique flight identifier"
+  type: "categorical"
+  expected_range: [null, null]
+  missing_policy:
+    allowed: false
+
+route:
+  description: "Flight route identifier"
+  type: "categorical"
+  expected_range: [null, null]
+  missing_policy:
+    allowed: false
+
+date:
+  description: "Date of the flight"
+  type: "date"
+  expected_range: [null, null]
+  missing_policy:
+    allowed: false
+
+speed:
+  description: "Average flight speed"
+  unit: "m/s"
+  type: "continuous"
+  expected_range: [0, 30] # Drones rarely fly >30m/s in this context
+  missing_policy:
+    allowed: true
+    max_missing_rate: 0.10
+    candidate_methods: [impute_median, investigate_source, remove]
+
+altitude:
+  description: "Flight altitude above ground"
+  unit: "m"
+  type: "continuous"
+  expected_range: [0, 500]
+  missing_policy:
+    allowed: true
+    max_missing_rate: 0.10
+    candidate_methods: [impute_median, investigate_source, remove]
+
+payload:
+  description: "Payload weight carried by the drone"
+  unit: "g"
+  type: "continuous"
+  expected_range: [0, 5000]
+  missing_policy:
+    allowed: true
+    max_missing_rate: 0.05
+    candidate_methods: [impute_mode, investigate_source]
+
+flight_duration:
+  description: "Total duration of the flight"
+  unit: "s"
+  type: "continuous"
+  expected_range: [0, 7200] # max 2 hours
+  missing_policy:
+    allowed: false
+
+distance:
+  description: "Total distance traveled (3D)"
+  unit: "m"
+  type: "continuous"
+  expected_range: [0, 50000]
+  missing_policy:
+    allowed: false
+
+temperature_c:
+  description: "Ambient temperature"
+  unit: "Celsius"
+  type: "continuous"
+  expected_range: [-20, 60]
+  missing_policy:
+    allowed: true
+    max_missing_rate: 0.20
+    candidate_methods: [impute_group_median_by_date, impute_median]
+
+humidity_pct:
+  description: "Relative humidity"
+  unit: "%"
+  type: "continuous"
+  expected_range: [0, 100]
+  missing_policy:
+    allowed: true
+    max_missing_rate: 0.20
+    candidate_methods: [impute_group_median_by_date, impute_median]
+
+avg_wind_speed:
+  description: "Average wind speed during flight"
+  unit: "m/s"
+  type: "continuous"
+  expected_range: [0, 25] # >25m/s usually too dangerous to fly
+  missing_policy:
+    allowed: true
+    max_missing_rate: 0.15
+    candidate_methods: [impute_group_median_by_date, impute_median]
+
+wind_gust_ms:
+  description: "Maximum wind gust speed"
+  unit: "m/s"
+  type: "continuous"
+  expected_range: [0, 35]
+  missing_policy:
+    allowed: true
+    max_missing_rate: 0.15
+    candidate_methods: [impute_group_median_by_date, impute_median]
+
+wind_dir_deg:
+  description: "Wind direction"
+  unit: "Degrees"
+  type: "continuous"
+  expected_range: [0, 360]
+  missing_policy:
+    allowed: true
+    max_missing_rate: 0.15
+    candidate_methods: [impute_group_circular_mean, impute_median]
+
+pressure_hpa:
+  description: "Atmospheric pressure"
+  unit: "hPa"
+  type: "continuous"
+  expected_range: [800, 1100]
+  missing_policy:
+    allowed: true
+    max_missing_rate: 0.20
+    candidate_methods: [impute_group_median_by_date, impute_median]
+
+cloud_cover_pct:
+  description: "Cloud cover percentage"
+  unit: "%"
+  type: "continuous"
+  expected_range: [0, 100]
+  missing_policy:
+    allowed: true
+    max_missing_rate: 0.20
+    candidate_methods: [impute_group_median_by_date, impute_median]
+
+energy_efficiency:
+  description: "Distance traveled per unit of energy consumed (Target)"
+  unit: "m/Wh"
+  type: "target"
+  expected_range: [0, 1000]
+  missing_policy:
+    allowed: false
+
+# =====================================================================
+# FLIGHT QUALITY RULES
+# =====================================================================
+flight_quality_rules:
+  static:
+    max_altitude_m: 1.0
+    max_speed_ms: 0.1
+  hover:
+    routes:
+      - "H"
+    max_horizontal_displacement_m: 20.0
+    max_horizontal_path_length_m: 50.0
+    max_mean_horizontal_velocity_ms: 0.5
+    max_mean_altitude_m: 5.0

@@ -34,6 +34,10 @@ async def get_notifications(
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Lấy danh sách tất cả các thông báo của người dùng hiện tại.
+    Được sắp xếp theo thời gian tạo giảm dần.
+    """
     result = await db.execute(
         select(Notification)
         .where(Notification.user_id == user.id)
@@ -47,6 +51,9 @@ async def get_unread_count(
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Lấy số lượng thông báo chưa đọc của người dùng hiện tại.
+    """
     result = await db.execute(
         select(Notification).where(
             Notification.user_id == user.id,
@@ -62,6 +69,10 @@ async def mark_as_read(
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Đánh dấu một thông báo cụ thể là đã đọc.
+    Yêu cầu quyền sở hữu đối với thông báo (người dùng hiện tại phải là chủ của thông báo đó).
+    """
     notif = await db.get(Notification, notification_id)
     if not notif:
         raise HTTPException(status_code=404, detail="Notification not found")
@@ -78,6 +89,9 @@ async def mark_all_as_read(
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """
+    Đánh dấu tất cả các thông báo chưa đọc của người dùng hiện tại thành trạng thái đã đọc.
+    """
     await db.execute(
         update(Notification)
         .where(Notification.user_id == user.id, Notification.is_read == False)
