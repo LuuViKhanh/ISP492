@@ -327,34 +327,26 @@
 // ── MAP INIT ─────────────────────────────────────────────────
 const map = L.map('map', { zoomControl: true }).setView([10.7769, 106.7009], 12);
 
-// CartoDB Dark Matter — không cần API key, không bị OSM block
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-  attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/">CARTO</a>',
-  subdomains: 'abcd',
-  maxZoom: 19,
-}).addTo(map);
+// Stadia Maps — miễn phí, không cần API key, không bị block
+const tileLight = 'https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png';
+const tileDark  = 'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png';
+const tileAttr  = '© <a href="https://stadiamaps.com/">Stadia Maps</a>, © <a href="https://openmaptiles.org/">OpenMapTiles</a>, © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
 
-// Nút chuyển tile (Light / Dark)
+let currentTile = L.tileLayer(tileDark, { attribution: tileAttr, maxZoom: 20 }).addTo(map);
+let isDarkMode  = true;
+
+// Nút chuyển Light / Dark
 L.Control.TileSwitch = L.Control.extend({
   onAdd: function() {
     const div = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
-    div.style.cssText = 'background:#1a1d27;cursor:pointer;padding:4px 8px;font-size:11px;color:#a5b4fc;border:1px solid #2d3148;border-radius:6px;';
-    div.title = 'Chuyển theme bản đồ';
-    div.innerHTML = '🌙 Dark';
-    let isDark = true;
-    const dark  = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-    const light = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
-    let currentLayer = null;
-
-    // Lưu reference layer hiện tại
-    map.eachLayer(l => { if (l._url) currentLayer = l; });
-
+    div.style.cssText = 'background:#1a1d27;cursor:pointer;padding:5px 10px;font-size:12px;color:#a5b4fc;border:1px solid #2d3148;border-radius:6px;user-select:none;';
+    div.innerHTML = '☀️ Light';
     L.DomEvent.on(div, 'click', function(e) {
       L.DomEvent.stopPropagation(e);
-      map.eachLayer(l => { if (l._url) map.removeLayer(l); });
-      isDark = !isDark;
-      L.tileLayer(isDark ? dark : light, { subdomains: 'abcd', maxZoom: 19 }).addTo(map);
-      div.innerHTML = isDark ? '🌙 Dark' : '☀️ Light';
+      map.removeLayer(currentTile);
+      isDarkMode = !isDarkMode;
+      currentTile = L.tileLayer(isDarkMode ? tileDark : tileLight, { attribution: tileAttr, maxZoom: 20 }).addTo(map);
+      div.innerHTML = isDarkMode ? '☀️ Light' : '🌙 Dark';
     });
     return div;
   }
