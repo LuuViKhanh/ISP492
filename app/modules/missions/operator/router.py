@@ -87,18 +87,26 @@ async def get_planned_missions(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """
-    Lấy danh sách các nhiệm vụ bay đang chờ phê duyệt.
-    
-    API này trả về toàn bộ các chuyến bay có trạng thái PENDING_APPROVAL, được sắp xếp theo 
-    thời gian cất cánh dự kiến để người điều hành (operator) xem xét và xử lý.
-    """
+    """Lấy danh sách các nhiệm vụ bay đang chờ phê duyệt."""
     result = await db.execute(
         select(Mission)
         .where(Mission.status == MissionStatus.PENDING_APPROVAL)
         .order_by(Mission.scheduled_time)
     )
     return result.scalars().all()
+
+
+@router.get("/{mission_id}", response_model=MissionResponse, summary="Lấy thông tin chi tiết một mission")
+async def get_mission(
+    mission_id: int,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Trả về toàn bộ thông tin mission bao gồm pickup_location_id và dropoff_location_id."""
+    mission = await db.get(Mission, mission_id)
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    return mission
 
 
 @router.post("/{mission_id}/approve", response_model=MissionResponse)
