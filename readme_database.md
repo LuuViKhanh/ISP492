@@ -76,7 +76,9 @@ Tài liệu này định nghĩa cấu trúc cơ sở dữ liệu và các luồn
 **7. Bảng `missions`** (Luồng công việc chính yếu)
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc | Mô tả |
 | :--- | :--- | :--- | :--- |
-| `id` | UUID / INT | **PK** | ID chuyến bay |
+| `id` | UUID / INT | **PK** | ID nội bộ chuyến bay |
+| `order_code` | VARCHAR(50) | Unique | **[MỚI]** Mã đơn hàng (VD: ORD-1) |
+| `mission_code` | VARCHAR(50) | Unique | **[MỚI]** Mã chuyến bay (VD: MSN-1) |
 | `customer_id` | VARCHAR(50) | **FK** -> `users.id` | Người tạo yêu cầu |
 | `operator_id` | VARCHAR(50) | **FK** -> `users.id`, Nullable | Người duyệt |
 | `drone_id` | INT | **FK** -> `drones.id`, Nullable | Máy bay phân công |
@@ -85,7 +87,8 @@ Tài liệu này định nghĩa cấu trúc cơ sở dữ liệu và các luồn
 | `dropoff_location_id`| INT | **FK** -> `locations.id` | Điểm giao hàng |
 | `destination_hub_id`| INT / UUID | **FK** -> `hubs.id`, Nullable | **[MỚI]** Trạm đích (nếu cần Drone bay về Hub) |
 | `delivery_fee` | FLOAT | Not Null | Phí giao hàng |
-| `status` | VARCHAR(50) | Enum | `Awaiting Payment`, `Approved`, `Flying`, `Completed`... |
+| `status` | VARCHAR(50) | Enum | `Active mission`, `Mission completed`, `Incident return` |
+| `handling_status` | VARCHAR(50) | Enum | **[MỚI]** `Incoming`, `At hub`, `Ready`, `Cannot continue` |
 | `arrived_at` | TIMESTAMP | Nullable | **[MỚI]** Giờ hạ cánh tại Hub |
 | `arrival_confirmed_by`| VARCHAR(50)| **FK** -> `users.id`, Nullable| **[MỚI]** Technician xác nhận nhận Drone |
 | `approval_deadline`| TIMESTAMP| Nullable | Hỗ trợ dữ liệu cho API trả về làm hiệu ứng đếm ngược trên UI và làm mốc thời gian cho Worker tự động hủy đơn |
