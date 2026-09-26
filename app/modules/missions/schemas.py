@@ -79,3 +79,49 @@ class TelemetryDataResponse(TelemetryDataCreate):
 
     class Config:
         from_attributes = True
+
+
+class HubCheckpointResponse(BaseModel):
+    """Log mỗi lần drone đi qua Hub trung gian"""
+    id: int
+    mission_id: int
+    hub_id: Optional[int]
+    location_id: Optional[int]
+    hub_name: Optional[str]
+    hub_latitude: Optional[float]
+    hub_longitude: Optional[float]
+    drone_latitude: float
+    drone_longitude: float
+    distance_to_hub_m: Optional[float]
+    passed_at: datetime
+    checkpoint_order: Optional[int]
+
+    class Config:
+        from_attributes = True
+
+
+class TelemetryIngestResponse(BaseModel):
+    """Response của POST /telemetry — bao gồm logs đã lưu và checkpoint mới tạo (nếu có)"""
+    saved_count: int
+    logs: list[TelemetryDataResponse]
+    new_checkpoints: list[HubCheckpointResponse]
+    mission_status: MissionStatus
+
+
+class LiveTrackingDrone(BaseModel):
+    mission_id: int
+    drone_id: Optional[int]
+    status: MissionStatus
+    latest_lat: Optional[float]
+    latest_lng: Optional[float]
+    latest_altitude: Optional[float]
+    latest_speed: Optional[float]
+    latest_battery_voltage: Optional[float]
+    last_updated: Optional[datetime]
+    # Tổng số checkpoint đã qua trong chuyến bay này
+    checkpoints_passed: Optional[int] = 0
+
+
+class LiveTrackingResponse(BaseModel):
+    active_count: int
+    drones: list[LiveTrackingDrone]

@@ -1,7 +1,8 @@
-import enum
-from sqlalchemy import BigInteger, Float, String, DateTime, Integer, Enum as SAEnum
+ import enum
+from sqlalchemy import BigInteger, Float, String, DateTime, Integer, Boolean, Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 from datetime import datetime
+from typing import Optional
 from app.database.db import Base
 
 
@@ -82,6 +83,31 @@ class TelemetryLog(Base):
     battery_voltage: Mapped[float | None] = mapped_column(Float, nullable=True)
     energy_consumed_wh: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_speed: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class MissionHubCheckpoint(Base):
+    """
+    Ghi log mỗi khi Drone đi qua một Hub trung gian trong hành trình.
+    Được tạo tự động bởi telemetry endpoint khi phát hiện drone vào vùng proximity của Hub.
+    """
+    __tablename__ = "mission_hub_checkpoints"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    mission_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # hub_id tham chiếu tới bảng hubs (Hub trung gian lớn)
+    hub_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # location_id tham chiếu tới bảng locations type=HUB (mini-hub)
+    location_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    hub_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    hub_latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hub_longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Tọa độ thực tế của drone khi trigger checkpoint
+    drone_latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    drone_longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    distance_to_hub_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    passed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # Thứ tự checkpoint trong chuyến bay (1, 2, 3,...)
+    checkpoint_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Incident(Base):
