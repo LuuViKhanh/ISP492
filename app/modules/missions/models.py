@@ -6,13 +6,16 @@ from app.database.db import Base
 
 
 class MissionStatus(str, enum.Enum):
-    AWAITING_PAYMENT = "Awaiting Payment"
-    PENDING_APPROVAL = "Pending Approval"
-    APPROVED = "Approved"
-    REJECTED = "Rejected"
-    FLYING = "Flying"
-    COMPLETED = "Completed"
-    CANCELLED = "Cancelled"
+    ACTIVE_MISSION = "Active mission"
+    MISSION_COMPLETED = "Mission completed"
+    INCIDENT_RETURN = "Incident return"
+
+
+class HandlingStatus(str, enum.Enum):
+    INCOMING = "Incoming"
+    AT_HUB = "At hub"
+    READY = "Ready"
+    CANNOT_CONTINUE = "Cannot continue"
 
 
 class LocationType(str, enum.Enum):
@@ -48,6 +51,8 @@ class Mission(Base):
     __tablename__ = "missions"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    order_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    mission_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     customer_id: Mapped[str | None] = mapped_column(String, nullable=True)
     operator_id: Mapped[str | None] = mapped_column(String, nullable=True)
     drone_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
@@ -58,6 +63,7 @@ class Mission(Base):
     distance_m: Mapped[float | None] = mapped_column(Float, nullable=True)
     delivery_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[MissionStatus] = mapped_column(SAEnum(MissionStatus, name="missions_status", create_type=False, values_callable=lambda x: [e.value for e in x]))
+    handling_status: Mapped[HandlingStatus | None] = mapped_column(SAEnum(HandlingStatus, name="missions_handling_status", create_type=False, values_callable=lambda x: [e.value for e in x]), nullable=True)
     scheduled_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     start_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     end_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
