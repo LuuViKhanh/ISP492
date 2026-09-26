@@ -16,12 +16,12 @@ import requests
 from datetime import datetime, timezone
 
 # ─── CẤU HÌNH (chỉ sửa 3 dòng này) ──────────────────────────────────────────
-BASE_URL   = "http://localhost:8000/api/v1"   # hoặc https://<app>.onrender.com/api/v1
-TOKEN      = "PASTE_YOUR_ACCESS_TOKEN_HERE"
-MISSION_ID = 1                                # mission đang ở trạng thái APPROVED
+BASE_URL   = "https://isp492.onrender.com/api/v1"   # hoặc https://<app>.onrender.com/api/v1
+TOKEN      = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjM2U1YjI2Yy0yNTc1LTQzZjQtOTYzOC03Njk5MGM4NzgwYmIiLCJyb2xlIjoiT3BlcmF0b3IiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzkwNDAzMjUxfQ.KtmOx1fRypD_fQ8Vl1y2QKRshnIqOHstqK1l2VMz4eM"
+MISSION_ID = 4                                # mission đang ở trạng thái APPROVED
 # ─────────────────────────────────────────────────────────────────────────────
 
-INTERVAL_SEC = 3   # gửi mỗi N giây
+INTERVAL_SEC = 2   # gửi mỗi N giây — giảm xuống 2s để animation mượt hơn
 
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -140,7 +140,7 @@ def simulate():
 
     # 2. Build lộ trình đi qua các hub
     waypoints = build_route_through_hubs(hubs)
-    route = interpolate_route(waypoints, steps_between=10)
+    route = interpolate_route(waypoints, steps_between=15)  # nhiều điểm hơn → đường mượt hơn
     total = len(route)
 
     print(f"🚁  Bắt đầu giả lập — {total} điểm, mission #{MISSION_ID}")
