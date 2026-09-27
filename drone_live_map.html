@@ -338,8 +338,12 @@ async function poll(){
         animateMarker(mid, prev, [lat,lng]);
         drones[mid].prevLatLng=[lat,lng];
 
-        // Cập nhật đường trail nếu đang chọn drone này
-        if(isSel) drawPath(mid);
+        // Vẽ đường mỗi 10s để không spam API
+        const now=Date.now();
+        if(!drones[mid].lastDraw || now-drones[mid].lastDraw > 10000){
+          drawPath(mid);
+          drones[mid].lastDraw=now;
+        }
 
       } else {
         // Tạo marker mới
@@ -348,7 +352,10 @@ async function poll(){
           zIndexOffset:1000,
         }).addTo(map);
         marker.on('click',()=>selectDrone(mid));
-        drones[mid]={marker,trailLine:null,pathLine:null,prevLatLng:[lat,lng],animFrame:null};
+        drones[mid]={marker,trailLine:null,pathLine:null,prevLatLng:[lat,lng],animFrame:null,lastDraw:0};
+        // Vẽ đường ngay lần đầu xuất hiện
+        drawPath(mid);
+        drones[mid].lastDraw=Date.now();
       }
 
       // Popup
