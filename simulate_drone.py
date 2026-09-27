@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 # ─── CẤU HÌNH (chỉ sửa 3 dòng này) ──────────────────────────────────────────
 BASE_URL   = "https://isp492.onrender.com/api/v1"   # hoặc https://<app>.onrender.com/api/v1
-TOKEN      = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjM2U1YjI2Yy0yNTc1LTQzZjQtOTYzOC03Njk5MGM4NzgwYmIiLCJyb2xlIjoiT3BlcmF0b3IiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzkwNDg3NDIwfQ.ihdmPJEN90BcNAhHY4DABwHDVyQZbiBS7a2XxKzvP5w"
+TOKEN      = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjM2U1YjI2Yy0yNTc1LTQzZjQtOTYzOC03Njk5MGM4NzgwYmIiLCJyb2xlIjoiT3BlcmF0b3IiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzkwNDg5NDEzfQ.XZ9QcwL915qWKV9Pt2WpwDe2rQYS5t47q-XYo3paL50"
 MISSION_ID = 4                                # mission đang ở trạng thái APPROVED
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -89,7 +89,7 @@ def fetch_mission_route(headers) -> tuple[dict, dict] | None:
                 all_locations[loc["id"]] = loc
             print(f"    Hub IDs có trong DB: {sorted(all_locations.keys())}")
         else:
-            print(f"    /hubs status: {r.status_code}")
+            print(f"    /hubs status: {r.status_code} — {r.text[:200]}")
     except Exception as e:
         print(f"    /hubs lỗi: {e}")
 
