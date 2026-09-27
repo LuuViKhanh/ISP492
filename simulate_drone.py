@@ -80,16 +80,15 @@ def fetch_mission_route(headers) -> tuple[dict, dict] | None:
         print("⚠️   Mission không có pickup/dropoff location → dùng lộ trình hub fallback")
         return None
 
-    # Fetch tọa độ từng location qua /hubs + /mini-hubs
+    # Fetch tọa độ từng location qua /hubs
     all_locations = {}
-    for ep in ["/operator/missions/hubs", "/operator/missions/mini-hubs"]:
-        try:
-            r = requests.get(f"{BASE_URL}{ep}", headers=headers, timeout=10)
-            if r.ok:
-                for loc in r.json():
-                    all_locations[loc["id"]] = loc
-        except Exception:
-            pass
+    try:
+        r = requests.get(f"{BASE_URL}/operator/missions/hubs", headers=headers, timeout=10)
+        if r.ok:
+            for loc in r.json():
+                all_locations[loc["id"]] = loc
+    except Exception:
+        pass
 
     pickup  = all_locations.get(pickup_id)
     dropoff = all_locations.get(dropoff_id)
@@ -163,24 +162,19 @@ def simulate():
 
     # 2. Fetch tất cả hub để dùng làm trung gian
     all_hubs = []
-    for ep in ["/operator/missions/hubs", "/operator/missions/mini-hubs"]:
-        try:
-            r = requests.get(f"{BASE_URL}{ep}", headers=headers, timeout=10)
-            if r.ok:
-                for h in r.json():
-                    if h.get("latitude") and h.get("longitude"):
-                        # Chỉ lấy hub trong TP.HCM
-                        if 10.60 <= h["latitude"] <= 10.90 and 106.50 <= h["longitude"] <= 107.00:
-                            all_hubs.append({
-                                "id": h["id"],
-                                "name": h.get("name") or h.get("code") or f"Hub #{h['id']}",
-                                "latitude": h["latitude"],
-                                "longitude": h["longitude"],
-                            })
-                        else:
-                            print(f"⚠️   Bỏ qua hub ngoài TP.HCM: {h.get('name')} ({h.get('latitude')}, {h.get('longitude')})")
-        except Exception as e:
-            print(f"⚠️  {ep}: {e}")
+    try:
+        r = requests.get(f"{BASE_URL}/operator/missions/hubs", headers=headers, timeout=10)
+        if r.ok:
+            for h in r.json():
+                if h.get("latitude") and h.get("longitude"):
+                    all_hubs.append({
+                        "id": h["id"],
+                        "name": h.get("name") or h.get("code") or f"Hub #{h['id']}",
+                        "latitude": h["latitude"],
+                        "longitude": h["longitude"],
+                    })
+    except Exception as e:
+        print(f"⚠️  /hubs: {e}")
 
     # 3. Build lộ trình
     if route_result:
