@@ -96,7 +96,28 @@ async def get_planned_missions(
     return result.scalars().all()
 
 
-@router.get("/{mission_id}", response_model=MissionResponse, summary="Lấy thông tin chi tiết một mission")
+@router.get("/hubs")
+async def list_hubs(
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Lấy danh sách toàn bộ các trung tâm điều khiển (Hub) chính."""
+    result = await db.execute(select(Hub).order_by(Hub.id))
+    hubs = result.scalars().all()
+    return [{"id": h.id, "code": h.code, "name": h.name, "address": h.address, "latitude": h.latitude, "longitude": h.longitude, "status": h.status} for h in hubs]
+
+
+@router.get("/mini-hubs")
+async def list_mini_hubs(
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Lấy danh sách các Hub phụ (Mini-hubs)."""
+    result = await db.execute(
+        select(Location).where(Location.type == LocationType.HUB).order_by(Location.id)
+    )
+    locations = result.scalars().all()
+    return [{"id": l.id, "name": l.name, "latitude": l.latitude, "longitude": l.longitude, "type": l.type.value} for l in locations]
 async def get_mission(
     mission_id: int,
     user: CurrentUser = Depends(allow_operator),
@@ -492,39 +513,6 @@ async def get_hub_checkpoints(
 
 
 # ── Hubs & Locations ──────────────────────────────────────────────────────────────
-
-@router.get("/hubs")
-async def list_hubs(
-    user: CurrentUser = Depends(allow_operator),
-    db: AsyncSession = Depends(get_async_db),
-):
-    """
-    Lấy danh sách toàn bộ các trung tâm điều khiển (Hub) chính.
-    
-    Trích xuất dữ liệu của các Hub bao gồm mã, tên, địa chỉ, tọa độ địa lý và trạng thái hoạt động.
-    """
-    result = await db.execute(select(Hub).order_by(Hub.id))
-    hubs = result.scalars().all()
-    return [{"id": h.id, "code": h.code, "name": h.name, "address": h.address, "latitude": h.latitude, "longitude": h.longitude, "status": h.status} for h in hubs]
-
-
-@router.get("/mini-hubs")
-async def list_mini_hubs(
-    user: CurrentUser = Depends(allow_operator),
-    db: AsyncSession = Depends(get_async_db),
-):
-    """
-    Lấy danh sách các Hub phụ (Mini-hubs).
-    
-    API này truy vấn các địa điểm (Location) được đánh dấu là loại HUB, phục vụ cho việc 
-    định tuyến và quản lý các trạm dừng đỗ nhỏ của Drone.
-    """
-    result = await db.execute(
-        select(Location).where(Location.type == LocationType.HUB).order_by(Location.id)
-    )
-    locations = result.scalars().all()
-    return [{"id": l.id, "name": l.name, "latitude": l.latitude, "longitude": l.longitude, "type": l.type.value} for l in locations]
-
 
 # ── Incidents ────────────────────────────────────────────────────────────────────────────────────
 
