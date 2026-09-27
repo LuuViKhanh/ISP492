@@ -96,6 +96,106 @@ async def get_planned_missions(
     return result.scalars().all()
 
 
+@router.get("/hubs")
+async def list_hubs(
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Lấy danh sách toàn bộ các trung tâm điều khiển (Hub) chính."""
+    result = await db.execute(select(Hub).order_by(Hub.id))
+    hubs = result.scalars().all()
+    return [{"id": h.id, "code": h.code, "name": h.name, "address": h.address, "latitude": h.latitude, "longitude": h.longitude, "status": h.status} for h in hubs]
+
+
+@router.get("/mini-hubs")
+async def list_mini_hubs(
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Lấy danh sách các Hub phụ (Mini-hubs)."""
+    result = await db.execute(
+        select(Location).where(Location.type == LocationType.HUB).order_by(Location.id)
+    )
+    locations = result.scalars().all()
+    return [{"id": l.id, "name": l.name, "latitude": l.latitude, "longitude": l.longitude, "type": l.type.value} for l in locations]
+
+
+@router.get(
+    "/live-tracking",
+    response_model=LiveTrackingResponse,
+    summary="Live map — tất cả drone đang bay theo thời gian thực",
+)
+async def get_live_tracking(
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Trả về snapshot thời gian thực của **toàn bộ drone đang ở trạng thái FLYING**.
+    **Polling pattern**: Frontend gọi endpoint này mỗi **3–5 giây**.
+    Trả về `active_count = 0` và `drones = []` khi không có drone nào đang bay.
+    """
+    flying_result = await db.execute(
+        select(Mission).where(Mission.status == MissionStatus.FLYING)
+    )
+    flying_missions = flying_result.scalars().all()
+
+    if not flying_missions:
+        return LiveTrackingResponse(active_count=0, drones=[])
+
+    mission_ids = [m.id for m in flying_missions]
+
+    latest_log_subq = (
+        select(
+            TelemetryLog.mission_id,
+            func.max(TelemetryLog.id).label("max_id"),
+        )
+        .where(TelemetryLog.mission_id.in_(mission_ids))
+        .group_by(TelemetryLog.mission_id)
+        .subquery()
+    )
+
+    latest_logs_result = await db.execute(
+        select(TelemetryLog).join(
+            latest_log_subq,
+            and_(
+                TelemetryLog.mission_id == latest_log_subq.c.mission_id,
+                TelemetryLog.id == latest_log_subq.c.max_id,
+            ),
+        )
+    )
+    latest_logs = {log.mission_id: log for log in latest_logs_result.scalars().all()}
+
+    cp_counts_result = await db.execute(
+        select(
+            MissionHubCheckpoint.mission_id,
+            func.count(MissionHubCheckpoint.id).label("cnt"),
+        )
+        .where(MissionHubCheckpoint.mission_id.in_(mission_ids))
+        .group_by(MissionHubCheckpoint.mission_id)
+    )
+    cp_counts = {row.mission_id: row.cnt for row in cp_counts_result.all()}
+
+    drones = []
+    for mission in flying_missions:
+        log = latest_logs.get(mission.id)
+        drones.append(
+            LiveTrackingDrone(
+                mission_id=mission.id,
+                drone_id=mission.drone_id,
+                status=mission.status,
+                latest_lat=log.latitude if log else None,
+                latest_lng=log.longitude if log else None,
+                latest_altitude=log.altitude if log else None,
+                latest_speed=log.speed if log else None,
+                latest_battery_voltage=log.battery_voltage if log else None,
+                last_updated=log.timestamp if log else None,
+                checkpoints_passed=cp_counts.get(mission.id, 0),
+            )
+        )
+
+    return LiveTrackingResponse(active_count=len(drones), drones=drones)
+
+
 @router.get("/{mission_id}", response_model=MissionResponse, summary="Lấy thông tin chi tiết một mission")
 async def get_mission(
     mission_id: int,
@@ -492,39 +592,6 @@ async def get_hub_checkpoints(
 
 
 # ── Hubs & Locations ──────────────────────────────────────────────────────────────
-
-@router.get("/hubs")
-async def list_hubs(
-    user: CurrentUser = Depends(allow_operator),
-    db: AsyncSession = Depends(get_async_db),
-):
-    """
-    Lấy danh sách toàn bộ các trung tâm điều khiển (Hub) chính.
-    
-    Trích xuất dữ liệu của các Hub bao gồm mã, tên, địa chỉ, tọa độ địa lý và trạng thái hoạt động.
-    """
-    result = await db.execute(select(Hub).order_by(Hub.id))
-    hubs = result.scalars().all()
-    return [{"id": h.id, "code": h.code, "name": h.name, "address": h.address, "latitude": h.latitude, "longitude": h.longitude, "status": h.status} for h in hubs]
-
-
-@router.get("/mini-hubs")
-async def list_mini_hubs(
-    user: CurrentUser = Depends(allow_operator),
-    db: AsyncSession = Depends(get_async_db),
-):
-    """
-    Lấy danh sách các Hub phụ (Mini-hubs).
-    
-    API này truy vấn các địa điểm (Location) được đánh dấu là loại HUB, phục vụ cho việc 
-    định tuyến và quản lý các trạm dừng đỗ nhỏ của Drone.
-    """
-    result = await db.execute(
-        select(Location).where(Location.type == LocationType.HUB).order_by(Location.id)
-    )
-    locations = result.scalars().all()
-    return [{"id": l.id, "name": l.name, "latitude": l.latitude, "longitude": l.longitude, "type": l.type.value} for l in locations]
-
 
 # ── Incidents ────────────────────────────────────────────────────────────────────────────────────
 

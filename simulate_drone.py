@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 # ─── CẤU HÌNH (chỉ sửa 3 dòng này) ──────────────────────────────────────────
 BASE_URL   = "https://isp492.onrender.com/api/v1"   # hoặc https://<app>.onrender.com/api/v1
-TOKEN      = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjM2U1YjI2Yy0yNTc1LTQzZjQtOTYzOC03Njk5MGM4NzgwYmIiLCJyb2xlIjoiT3BlcmF0b3IiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzkwNDgzMDUyfQ.jLuQ5Mi38G8t3SYBBwa6BUW1xfRBrAqH6S-nbRUiA4I"
+TOKEN      = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjM2U1YjI2Yy0yNTc1LTQzZjQtOTYzOC03Njk5MGM4NzgwYmIiLCJyb2xlIjoiT3BlcmF0b3IiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzkwNDg5NDEzfQ.XZ9QcwL915qWKV9Pt2WpwDe2rQYS5t47q-XYo3paL50"
 MISSION_ID = 4                                # mission đang ở trạng thái APPROVED
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -80,16 +80,18 @@ def fetch_mission_route(headers) -> tuple[dict, dict] | None:
         print("⚠️   Mission không có pickup/dropoff location → dùng lộ trình hub fallback")
         return None
 
-    # Fetch tọa độ từng location qua /hubs + /mini-hubs
+    # pickup_location_id/dropoff_location_id trỏ vào bảng hubs
     all_locations = {}
-    for ep in ["/operator/missions/hubs", "/operator/missions/mini-hubs"]:
-        try:
-            r = requests.get(f"{BASE_URL}{ep}", headers=headers, timeout=10)
-            if r.ok:
-                for loc in r.json():
-                    all_locations[loc["id"]] = loc
-        except Exception:
-            pass
+    try:
+        r = requests.get(f"{BASE_URL}/operator/missions/hubs", headers=headers, timeout=10)
+        if r.ok:
+            for loc in r.json():
+                all_locations[loc["id"]] = loc
+            print(f"    Hub IDs có trong DB: {sorted(all_locations.keys())}")
+        else:
+            print(f"    /hubs status: {r.status_code} — {r.text[:200]}")
+    except Exception as e:
+        print(f"    /hubs lỗi: {e}")
 
     pickup  = all_locations.get(pickup_id)
     dropoff = all_locations.get(dropoff_id)
@@ -161,26 +163,21 @@ def simulate():
     print(f"🔍  Đang đọc mission #{MISSION_ID}...")
     route_result = fetch_mission_route(headers)
 
-    # 2. Fetch tất cả hub để dùng làm trung gian
+    # 2. Fetch hub trung gian từ bảng hubs
     all_hubs = []
-    for ep in ["/operator/missions/hubs", "/operator/missions/mini-hubs"]:
-        try:
-            r = requests.get(f"{BASE_URL}{ep}", headers=headers, timeout=10)
-            if r.ok:
-                for h in r.json():
-                    if h.get("latitude") and h.get("longitude"):
-                        # Chỉ lấy hub trong TP.HCM
-                        if 10.60 <= h["latitude"] <= 10.90 and 106.50 <= h["longitude"] <= 107.00:
-                            all_hubs.append({
-                                "id": h["id"],
-                                "name": h.get("name") or h.get("code") or f"Hub #{h['id']}",
-                                "latitude": h["latitude"],
-                                "longitude": h["longitude"],
-                            })
-                        else:
-                            print(f"⚠️   Bỏ qua hub ngoài TP.HCM: {h.get('name')} ({h.get('latitude')}, {h.get('longitude')})")
-        except Exception as e:
-            print(f"⚠️  {ep}: {e}")
+    try:
+        r = requests.get(f"{BASE_URL}/operator/missions/hubs", headers=headers, timeout=10)
+        if r.ok:
+            for h in r.json():
+                if h.get("latitude") and h.get("longitude"):
+                    all_hubs.append({
+                        "id": h["id"],
+                        "name": h.get("name") or h.get("code") or f"Hub #{h['id']}",
+                        "latitude": h["latitude"],
+                        "longitude": h["longitude"],
+                    })
+    except Exception as e:
+        print(f"⚠️  /hubs: {e}")
 
     # 3. Build lộ trình
     if route_result:
@@ -189,14 +186,14 @@ def simulate():
     else:
         # Fallback: bay qua tất cả hub TP.HCM
         if not all_hubs:
-            print("⚠️  Không có hub nào trong TP.HCM, dùng lộ trình cứng.")
+            print("⚠️  Không có location nào, dùng lộ trình cứng.")
             waypoints = [
                 (10.7769, 106.7009, "🛫 Start - Quận 1"),
                 (10.7850, 106.6950, "📍 Midpoint"),
                 (10.7980, 106.6850, "🏁 End - Quận 7"),
             ]
         else:
-            print(f"\n✅  Tìm thấy {len(all_hubs)} hub trong TP.HCM, bay qua tất cả:")
+            print(f"\n✅  Tìm thấy {len(all_hubs)} location, bay qua tất cả:")
             for h in all_hubs:
                 print(f"    • {h['name']:35s} ({h['latitude']:.5f}, {h['longitude']:.5f})")
             start_lat = all_hubs[0]["latitude"]  - 0.004
