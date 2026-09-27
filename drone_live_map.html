@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>DroneOptAI — Live Tracking</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',sans-serif;background:#0f1117;color:#e2e8f0;display:flex;height:100vh;overflow:hidden}
+
+    /* ── SIDEBAR ── */
+    #sidebar{width:320px;min-width:320px;background:#13161f;display:flex;flex-direction:column;border-right:1px solid #1e2235;z-index:1000}
+    #sidebar-header{padding:14px 16px;background:#0d0f18;border-bottom:1px solid #1e2235}
+    #sidebar-header h1{font-size:15px;font-weight:700;color:#818cf8}
+    #sidebar-header p{font-size:11px;color:#475569;margin-top:2px}
+
+    #config-bar{padding:10px 12px;background:#0d0f18;border-bottom:1px solid #1e2235;display:flex;flex-direction:column;gap:6px}
+    #config-bar input{width:100%;padding:6px 9px;background:#0f1117;border:1px solid #1e2235;border-radius:5px;color:#e2e8f0;font-size:11px}
+    #config-bar input:focus{outline:none;border-color:#818cf8}
+    #connect-btn{padding:7px;background:#818cf8;border:none;border-radius:5px;color:#fff;font-weight:600;cursor:pointer;font-size:12px;transition:background .2s}
+    #connect-btn:hover{background:#6366f1}
+    #connect-btn.on{background:#22c55e}
+    #connect-btn.on:hover{background:#16a34a}
+
+    #status-bar{padding:6px 12px;font-size:11px;color:#475569;border-bottom:1px solid #1e2235;display:flex;align-items:center;gap:5px}
+    .dot{width:7px;height:7px;border-radius:50%;background:#334155;flex-shrink:0}
+    .dot.live{background:#22c55e;animation:pulse 1.5s infinite}
+    .dot.err{background:#ef4444}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+    #drone-list{flex:1;overflow-y:auto;padding:6px}
+    #drone-list::-webkit-scrollbar{width:3px}
+    #drone-list::-webkit-scrollbar-thumb{background:#1e2235;border-radius:2px}
+
+    .card{background:#0d0f18;border:1px solid #1e2235;border-radius:7px;padding:10px;margin-bottom:6px;cursor:pointer;transition:border-color .15s}
+    .card:hover{border-color:#818cf8}
+    .card.sel{border-color:#818cf8;background:#12152a}
+    .card-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
+    .card-id{font-weight:700;font-size:12px;color:#a5b4fc}
+    .badge{font-size:10px;padding:2px 7px;border-radius:99px;font-weight:600}
+    .badge.fly{background:#14532d;color:#4ade80}
+    .badge.lost{background:#450a0a;color:#f87171}
+    .stats{display:grid;grid-template-columns:1fr 1fr;gap:3px}
+    .st{font-size:10px;color:#475569}.st span{color:#94a3b8;font-weight:500}
+    .bat-bar{height:3px;background:#1e2235;border-radius:2px;margin-top:5px;overflow:hidden}
+    .bat-fill{height:100%;border-radius:2px;transition:width .5s}
+    .upd{font-size:10px;color:#334155;margin-top:4px}
+
+    #detail{border-top:1px solid #1e2235;padding:10px 12px;max-height:180px;overflow-y:auto}
+    #detail h3{font-size:11px;color:#818cf8;margin-bottom:6px}
+    .cp{display:flex;align-items:flex-start;gap:6px;padding:3px 0;border-bottom:1px solid #0f1117}
+    .cp:last-child{border:none}
+    .cp-n{width:16px;height:16px;background:#818cf8;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;flex-shrink:0}
+    .cp-info .name{color:#e2e8f0;font-size:10px;font-weight:500}
+    .cp-info .meta{color:#475569;font-size:10px}
+
+    #empty{text-align:center;padding:36px 16px;color:#334155}
+    #empty .ico{font-size:28px;margin-bottom:6px}
+
+    /* ── MAP ── */
+    #map{flex:1}
+
+    /* Drone marker */
+    .dm{position:relative;width:36px;height:36px}
+    .dm-ring{position:absolute;inset:-6px;border-radius:50%;border:2px solid rgba(129,140,248,.4);animation:ring 2s infinite}
+    .dm-body{position:absolute;inset:0;background:#818cf8;border:2px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 0 14px rgba(129,140,248,.7);transition:transform .3s}
+    .dm-body.sel{transform:scale(1.2);box-shadow:0 0 20px rgba(129,140,248,1)}
+    @keyframes ring{0%{transform:scale(1);opacity:.8}100%{transform:scale(1.8);opacity:0}}
+
+    /* Hub marker */
+    .hm{background:#f59e0b;border:2px solid #fff;border-radius:5px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:11px;box-shadow:0 2px 6px rgba(0,0,0,.4)}
+
+    /* Popup dark */
+    .leaflet-popup-content-wrapper{background:#13161f;color:#e2e8f0;border:1px solid #1e2235;border-radius:8px;font-size:12px}
+    .leaflet-popup-tip{background:#13161f}
+    .pu-title{font-weight:700;color:#a5b4fc;margin-bottom:5px}
+    .pu-row{color:#64748b;margin:1px 0}.pu-row span{color:#cbd5e1}
+
+    /* Animated trail */
+    .trail-line{stroke-dasharray:8 6;animation:dash 1s linear infinite}
+    @keyframes dash{to{stroke-dashoffset:-14}}
+  </style>
+</head>
+<body>
+
+<div id="sidebar">
+  <div id="sidebar-header">
+    <h1>🚁 DroneOptAI Live Map</h1>
+    <p>Operator Dashboard · Real-time tracking</p>
+  </div>
+
+  <div id="config-bar">
+    <input id="inp-url"    type="text"     placeholder="API URL · https://isp492.onrender.com/api/v1" value="https://isp492.onrender.com/api/v1"/>
+    <input id="inp-token"  type="password" placeholder="Bearer token (operator / admin)"/>
+    <input id="inp-mapbox" type="password" placeholder="Mapbox token · pk.eyJ1..."/>
+    <button id="connect-btn" onclick="toggleConnect()">▶ Kết nối</button>
+  </div>
+
+  <div id="status-bar">
+    <div class="dot" id="sdot"></div>
+    <span id="stxt">Chưa kết nối</span>
+  </div>
+
+  <div id="drone-list">
+    <div id="empty"><div class="ico">📡</div>Nhập token và nhấn <strong>Kết nối</strong></div>
+  </div>
+
+  <div id="detail" style="display:none">
+    <h3>📍 Hành trình · Mission #<span id="det-id">-</span></h3>
+    <div id="cp-list"></div>
+  </div>
+</div>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ─── MAP ──────────────────────────────────────────────────────
+const map = L.map('map',{zoomControl:true}).setView([10.7769,106.7009],12);
+let baseTile = null;
+
+// ─── STATE ────────────────────────────────────────────────────
+let pollTimer   = null;
+let connected   = false;
+let selected    = null;        // mission_id đang chọn
+
+// Mỗi mission: { marker, trailLine, pathLine, prevLatLng, animFrame }
+let drones      = {};
+let hubMarkers  = [];
+
+// ─── UTILS ────────────────────────────────────────────────────
+const url   = () => document.getElementById('inp-url').value.trim().replace(/\/$/,'');
+const token = () => document.getElementById('inp-token').value.trim();
+const mbTok = () => document.getElementById('inp-mapbox').value.trim();
+const auth  = () => ({'Authorization':`Bearer ${token()}`,'Content-Type':'application/json'});
+
+function setStatus(cls,txt){
+  document.getElementById('sdot').className='dot '+cls;
+  document.getElementById('stxt').textContent=txt;
+}
+
+function batPct(v){return v?Math.min(100,Math.max(0,(v-16.8)/(25.2-16.8)*100)):0}
+function batColor(v){const p=batPct(v);return p>50?'#22c55e':p>20?'#f59e0b':'#ef4444'}
+function fmtT(ts){return ts?new Date(ts+'Z').toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—'}
+
+// ─── MAPBOX TILES ─────────────────────────────────────────────
+function loadTiles(tok){
+  if(baseTile) map.removeLayer(baseTile);
+  const opt={attribution:'© <a href="https://mapbox.com">Mapbox</a>',maxZoom:22,tileSize:512,zoomOffset:-1};
+  const urls={
+    dark:`https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=${tok}`,
+    streets:`https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}?access_token=${tok}`,
+    sat:`https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/tiles/{z}/{x}/{y}?access_token=${tok}`,
+  };
+  let cur='dark';
+  baseTile=L.tileLayer(urls.dark,opt).addTo(map);
+
+  // Nút chuyển theme
+  if(window._tsCtrl) map.removeControl(window._tsCtrl);
+  const order=['dark','streets','sat'];
+  const labels={'dark':'☀️ Streets','streets':'🛰️ Satellite','sat':'🌙 Dark'};
+  let idx=0;
+  L.Control.TS=L.Control.extend({onAdd:function(){
+    const d=L.DomUtil.create('div','leaflet-bar leaflet-control');
+    d.style.cssText='background:#13161f;cursor:pointer;padding:5px 10px;font-size:11px;color:#a5b4fc;border:1px solid #1e2235;border-radius:6px;user-select:none';
+    d.innerHTML=labels[order[0]];
+    L.DomEvent.on(d,'click',e=>{
+      L.DomEvent.stopPropagation(e);
+      map.removeLayer(baseTile);
+      idx=(idx+1)%order.length;
+      cur=order[idx];
+      baseTile=L.tileLayer(urls[cur],opt).addTo(map);
+      d.innerHTML=labels[order[(idx+1)%order.length]];
+    });
+    return d;
+  }});
+  window._tsCtrl=new L.Control.TS({position:'bottomright'});
+  window._tsCtrl.addTo(map);
+}
+
+// ─── HUB MARKERS ──────────────────────────────────────────────
+async function loadHubs(){
+  hubMarkers.forEach(m=>map.removeLayer(m));
+  hubMarkers=[];
+  for(const ep of['/operator/missions/hubs','/operator/missions/mini-hubs']){
+    try{
+      const r=await fetch(url()+ep,{headers:auth()});
+      if(!r.ok) continue;
+      const list=await r.json();
+      list.forEach(h=>{
+        if(!h.latitude||!h.longitude) return;
+        const m=L.marker([h.latitude,h.longitude],{
+          icon:L.divIcon({className:'',html:`<div class="hm">🏠</div>`,iconSize:[20,20],iconAnchor:[10,10]}),
+          zIndexOffset:500,
+        }).addTo(map).bindPopup(`
+          <div class="pu-title">🏠 ${h.name||h.code||'Hub'}</div>
+          <div class="pu-row">Tọa độ: <span>${h.latitude?.toFixed(5)}, ${h.longitude?.toFixed(5)}</span></div>
+          ${h.address?`<div class="pu-row">Địa chỉ: <span>${h.address}</span></div>`:''}
+        `);
+        hubMarkers.push(m);
+      });
+    }catch(e){console.warn(ep,e)}
+  }
+}
+
+// ─── DRONE ICON ───────────────────────────────────────────────
+function droneIcon(isSel){
+  return L.divIcon({
+    className:'',
+    html:`<div class="dm"><div class="dm-ring"></div><div class="dm-body${isSel?' sel':''}">🚁</div></div>`,
+    iconSize:[36,36],iconAnchor:[18,18],
+  });
+}
+
+// ─── SMOOTH MARKER MOVE (animation 60fps) ─────────────────────
+function animateMarker(mid, fromLatLng, toLatLng, durationMs=2800){
+  const state=drones[mid];
+  if(!state) return;
+  if(state.animFrame) cancelAnimationFrame(state.animFrame);
+
+  const start=performance.now();
+  const lat1=fromLatLng[0], lng1=fromLatLng[1];
+  const lat2=toLatLng[0],   lng2=toLatLng[1];
+
+  function step(now){
+    const t=Math.min((now-start)/durationMs,1);
+    // Ease out cubic
+    const e=1-Math.pow(1-t,3);
+    const lat=lat1+(lat2-lat1)*e;
+    const lng=lng1+(lng2-lng1)*e;
+    if(drones[mid]?.marker) drones[mid].marker.setLatLng([lat,lng]);
+    if(t<1) state.animFrame=requestAnimationFrame(step);
+    else state.animFrame=null;
+  }
+  state.animFrame=requestAnimationFrame(step);
+}
+
+// ─── VẼ ĐƯỜNG BAY (polyline + animated trail) ─────────────────
+async function drawPath(mid){
+  const state=drones[mid];
+  if(!state) return;
+
+  try{
+    const r=await fetch(`${url()}/operator/missions/${mid}/telemetry?limit=2000`,{headers:auth()});
+    if(!r.ok) return;
+    const logs=await r.json();
+    if(!logs.length) return;
+
+    const coords=logs.map(l=>[l.latitude,l.longitude]);
+
+    // Đường mờ đã bay (lịch sử)
+    if(state.pathLine) map.removeLayer(state.pathLine);
+    state.pathLine=L.polyline(coords,{
+      color:'rgba(129,140,248,0.35)',
+      weight:3,
+      lineJoin:'round',
+    }).addTo(map);
+
+    // Đường animated (10 điểm cuối — như Grab highlight đoạn đang đi)
+    if(state.trailLine) map.removeLayer(state.trailLine);
+    const tail=coords.slice(-Math.min(15,coords.length));
+    state.trailLine=L.polyline(tail,{
+      color:'#818cf8',
+      weight:5,
+      lineJoin:'round',
+      className:'trail-line',
+    }).addTo(map);
+
+    // Fit map nếu mới chọn
+    if(coords.length>1) map.fitBounds(state.pathLine.getBounds(),{padding:[40,40],maxZoom:15});
+
+  }catch(e){console.warn('path',e)}
+}
+
+// ─── CHỌN DRONE ───────────────────────────────────────────────
+async function selectDrone(mid){
+  // Deselect cũ
+  if(selected!==null && drones[selected]?.marker){
+    drones[selected].marker.setIcon(droneIcon(false));
+    if(drones[selected].pathLine)  map.removeLayer(drones[selected].pathLine);
+    if(drones[selected].trailLine) map.removeLayer(drones[selected].trailLine);
+    drones[selected].pathLine=null;
+    drones[selected].trailLine=null;
+  }
+  document.querySelectorAll('.card').forEach(c=>c.classList.remove('sel'));
+
+  selected=mid;
+  if(drones[mid]?.marker) drones[mid].marker.setIcon(droneIcon(true));
+
+  await drawPath(mid);
+
+  // Checkpoints
+  try{
+    const r=await fetch(`${url()}/operator/missions/${mid}/hub-checkpoints`,{headers:auth()});
+    if(r.ok) renderCPs(mid, await r.json());
+  }catch(e){}
+
+  const card=document.getElementById(`c${mid}`);
+  if(card) card.classList.add('sel');
+}
+
+// ─── POLL LIVE TRACKING ───────────────────────────────────────
+async function poll(){
+  try{
+    const r=await fetch(`${url()}/operator/missions/live-tracking`,{headers:auth()});
+    if(!r.ok){setStatus('err',`Lỗi ${r.status}`);return}
+    const data=await r.json();
+    setStatus('live',`${data.active_count} drone đang bay · ${new Date().toLocaleTimeString('vi-VN')}`);
+
+    const active=new Set(data.drones.map(d=>d.mission_id));
+
+    // Xóa drone đã hạ cánh
+    Object.keys(drones).forEach(id=>{
+      const mid=parseInt(id);
+      if(!active.has(mid)){
+        const s=drones[mid];
+        if(s.marker)    map.removeLayer(s.marker);
+        if(s.pathLine)  map.removeLayer(s.pathLine);
+        if(s.trailLine) map.removeLayer(s.trailLine);
+        if(s.animFrame) cancelAnimationFrame(s.animFrame);
+        delete drones[mid];
+        document.getElementById(`c${mid}`)?.remove();
+      }
+    });
+
+    for(const d of data.drones){
+      const {mission_id:mid,drone_id,latest_lat:lat,latest_lng:lng,
+             latest_altitude:alt,latest_speed:spd,latest_battery_voltage:bat,
+             last_updated,checkpoints_passed:cps}=d;
+      if(!lat||!lng) continue;
+
+      const isSel=selected===mid;
+
+      if(drones[mid]){
+        // Di chuyển mượt từ vị trí cũ → mới
+        const prev=drones[mid].prevLatLng||[lat,lng];
+        animateMarker(mid, prev, [lat,lng]);
+        drones[mid].prevLatLng=[lat,lng];
+
+        // Cập nhật đường trail nếu đang chọn drone này
+        if(isSel) drawPath(mid);
+
+      } else {
+        // Tạo marker mới
+        const marker=L.marker([lat,lng],{
+          icon:droneIcon(isSel),
+          zIndexOffset:1000,
+        }).addTo(map);
+        marker.on('click',()=>selectDrone(mid));
+        drones[mid]={marker,trailLine:null,pathLine:null,prevLatLng:[lat,lng],animFrame:null};
+      }
+
+      // Popup
+      drones[mid].marker.bindPopup(`
+        <div class="pu-title">🚁 Drone #${drone_id??'?'} · Mission #${mid}</div>
+        <div class="pu-row">Tọa độ <span>${lat?.toFixed(5)}, ${lng?.toFixed(5)}</span></div>
+        <div class="pu-row">Độ cao <span>${alt?.toFixed(1)??'—'} m</span></div>
+        <div class="pu-row">Tốc độ <span>${spd?.toFixed(1)??'—'} m/s</span></div>
+        <div class="pu-row">Pin <span>${bat?.toFixed(1)??'—'} V · ${batPct(bat).toFixed(0)}%</span></div>
+        <div class="pu-row">Checkpoints <span>${cps??0}</span></div>
+        <div class="pu-row">Cập nhật <span>${fmtT(last_updated)}</span></div>
+      `);
+    }
+
+    renderSidebar(data.drones);
+
+  }catch(e){setStatus('err','Mất kết nối · '+e.message)}
+}
+
+// ─── SIDEBAR ──────────────────────────────────────────────────
+function renderSidebar(list){
+  const el=document.getElementById('drone-list');
+
+  if(!list.length){
+    el.innerHTML='<div id="empty"><div class="ico">🛬</div>Không có drone đang bay</div>';
+    return;
+  }
+
+  // Tạo / cập nhật từng card
+  list.forEach(d=>{
+    const {mission_id:mid,drone_id,latest_lat:lat,latest_lng:lng,
+           latest_altitude:alt,latest_speed:spd,latest_battery_voltage:bat,
+           last_updated,checkpoints_passed:cps}=d;
+
+    const pct=batPct(bat);
+    const lostSig=last_updated&&(Date.now()-new Date(last_updated+'Z').getTime()>10000);
+    const isSel=selected===mid;
+
+    const inner=`
+      <div class="card-top">
+        <div class="card-id">🚁 Drone #${drone_id??'?'} <span style="color:#334155;font-size:10px">Mission #${mid}</span></div>
+        <div class="badge ${lostSig?'lost':'fly'}">${lostSig?'⚠ Lost':'● Flying'}</div>
+      </div>
+      <div class="stats">
+        <div class="st">Lat <span>${lat?.toFixed(4)??'—'}</span></div>
+        <div class="st">Lng <span>${lng?.toFixed(4)??'—'}</span></div>
+        <div class="st">Cao <span>${alt?.toFixed(0)??'—'} m</span></div>
+        <div class="st">Tốc <span>${spd?.toFixed(1)??'—'} m/s</span></div>
+        <div class="st">Pin <span>${bat?.toFixed(1)??'—'} V</span></div>
+        <div class="st">Hubs <span>${cps??0} ✅</span></div>
+      </div>
+      <div class="bat-bar"><div class="bat-fill" style="width:${pct}%;background:${batColor(bat)}"></div></div>
+      <div class="upd">Cập nhật ${fmtT(last_updated)}</div>
+    `;
+
+    let card=document.getElementById(`c${mid}`);
+    if(!card){
+      card=document.createElement('div');
+      card.id=`c${mid}`;
+      card.className='card'+(isSel?' sel':'');
+      card.onclick=()=>selectDrone(mid);
+      el.appendChild(card);
+    }
+    if(isSel) card.classList.add('sel'); else card.classList.remove('sel');
+    // Xóa empty state nếu còn
+    document.getElementById('empty')?.remove();
+    card.innerHTML=inner;
+  });
+}
+
+// ─── CHECKPOINTS ──────────────────────────────────────────────
+function renderCPs(mid,cps){
+  document.getElementById('det-id').textContent=mid;
+  const el=document.getElementById('cp-list');
+  el.innerHTML=cps.length
+    ? cps.map(c=>`
+        <div class="cp">
+          <div class="cp-n">${c.checkpoint_order??'?'}</div>
+          <div class="cp-info">
+            <div class="name">${c.hub_name??'Hub'}</div>
+            <div class="meta">${fmtT(c.passed_at)} · ${c.distance_to_hub_m?.toFixed(0)??'?'} m</div>
+          </div>
+        </div>`).join('')
+    : '<div style="color:#334155;font-size:11px">Chưa qua hub nào</div>';
+  document.getElementById('detail').style.display='block';
+}
+
+// ─── CONNECT / DISCONNECT ─────────────────────────────────────
+async function toggleConnect(){
+  const btn=document.getElementById('connect-btn');
+
+  if(connected){
+    clearInterval(pollTimer);
+    connected=false;
+    btn.textContent='▶ Kết nối';
+    btn.classList.remove('on');
+    setStatus('','Đã ngắt kết nối');
+    return;
+  }
+
+  if(!token()){alert('Nhập Bearer token');return}
+  const mb=mbTok();
+  if(!mb){alert('Nhập Mapbox token');return}
+
+  btn.textContent='⏳...';
+  btn.disabled=true;
+
+  loadTiles(mb);
+  await loadHubs();
+  await poll();
+
+  connected=true;
+  btn.textContent='⏹ Ngắt';
+  btn.classList.add('on');
+  btn.disabled=false;
+
+  // Poll mỗi 3s
+  pollTimer=setInterval(poll,3000);
+}
+
+document.getElementById('inp-token').addEventListener('keydown',e=>{if(e.key==='Enter')toggleConnect()});
+</script>
+</body>
+</html>
