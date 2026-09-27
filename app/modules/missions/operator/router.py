@@ -118,6 +118,9 @@ async def list_mini_hubs(
     )
     locations = result.scalars().all()
     return [{"id": l.id, "name": l.name, "latitude": l.latitude, "longitude": l.longitude, "type": l.type.value} for l in locations]
+
+
+@router.get("/{mission_id}", response_model=MissionResponse, summary="Lấy thông tin chi tiết một mission")
 async def get_mission(
     mission_id: int,
     user: CurrentUser = Depends(allow_operator),
