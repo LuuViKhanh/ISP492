@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 # ─── CẤU HÌNH (chỉ sửa 3 dòng này) ──────────────────────────────────────────
 BASE_URL   = "https://isp492.onrender.com/api/v1"   # hoặc https://<app>.onrender.com/api/v1
-TOKEN      = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjM2U1YjI2Yy0yNTc1LTQzZjQtOTYzOC03Njk5MGM4NzgwYmIiLCJyb2xlIjoiT3BlcmF0b3IiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzkwNDgzMDUyfQ.jLuQ5Mi38G8t3SYBBwa6BUW1xfRBrAqH6S-nbRUiA4I"
+TOKEN      = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjM2U1YjI2Yy0yNTc1LTQzZjQtOTYzOC03Njk5MGM4NzgwYmIiLCJyb2xlIjoiT3BlcmF0b3IiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzkwNDg3NDIwfQ.ihdmPJEN90BcNAhHY4DABwHDVyQZbiBS7a2XxKzvP5w"
 MISSION_ID = 4                                # mission đang ở trạng thái APPROVED
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -80,15 +80,18 @@ def fetch_mission_route(headers) -> tuple[dict, dict] | None:
         print("⚠️   Mission không có pickup/dropoff location → dùng lộ trình hub fallback")
         return None
 
-    # pickup_location_id/dropoff_location_id trỏ vào bảng locations (trả về qua /mini-hubs)
+    # pickup_location_id/dropoff_location_id trỏ vào bảng hubs
     all_locations = {}
     try:
-        r = requests.get(f"{BASE_URL}/operator/missions/mini-hubs", headers=headers, timeout=10)
+        r = requests.get(f"{BASE_URL}/operator/missions/hubs", headers=headers, timeout=10)
         if r.ok:
             for loc in r.json():
                 all_locations[loc["id"]] = loc
-    except Exception:
-        pass
+            print(f"    Hub IDs có trong DB: {sorted(all_locations.keys())}")
+        else:
+            print(f"    /hubs status: {r.status_code}")
+    except Exception as e:
+        print(f"    /hubs lỗi: {e}")
 
     pickup  = all_locations.get(pickup_id)
     dropoff = all_locations.get(dropoff_id)
@@ -160,21 +163,21 @@ def simulate():
     print(f"🔍  Đang đọc mission #{MISSION_ID}...")
     route_result = fetch_mission_route(headers)
 
-    # 2. Fetch locations làm hub trung gian (bảng locations type=Hub)
+    # 2. Fetch hub trung gian từ bảng hubs
     all_hubs = []
     try:
-        r = requests.get(f"{BASE_URL}/operator/missions/mini-hubs", headers=headers, timeout=10)
+        r = requests.get(f"{BASE_URL}/operator/missions/hubs", headers=headers, timeout=10)
         if r.ok:
             for h in r.json():
                 if h.get("latitude") and h.get("longitude"):
                     all_hubs.append({
                         "id": h["id"],
-                        "name": h.get("name") or f"Hub #{h['id']}",
+                        "name": h.get("name") or h.get("code") or f"Hub #{h['id']}",
                         "latitude": h["latitude"],
                         "longitude": h["longitude"],
                     })
     except Exception as e:
-        print(f"⚠️  /mini-hubs: {e}")
+        print(f"⚠️  /hubs: {e}")
 
     # 3. Build lộ trình
     if route_result:
