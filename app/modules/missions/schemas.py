@@ -76,6 +76,10 @@ class TelemetryDataCreate(BaseModel):
 class TelemetryDataResponse(TelemetryDataCreate):
     id: int
     mission_id: int
+    weather_temperature: Optional[float] = None
+    weather_humidity: Optional[float] = None
+    weather_wind_speed: Optional[float] = None
+    weather_precipitation: Optional[float] = None
 
     class Config:
         from_attributes = True
@@ -118,8 +122,11 @@ class LiveTrackingDrone(BaseModel):
     latest_speed: Optional[float]
     latest_battery_voltage: Optional[float]
     last_updated: Optional[datetime]
-    # Tổng số checkpoint đã qua trong chuyến bay này
     checkpoints_passed: Optional[int] = 0
+    weather_temperature: Optional[float] = None
+    weather_humidity: Optional[float] = None
+    weather_wind_speed: Optional[float] = None
+    weather_precipitation: Optional[float] = None
 
 
 class LiveTrackingResponse(BaseModel):

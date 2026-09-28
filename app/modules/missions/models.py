@@ -83,6 +83,11 @@ class TelemetryLog(Base):
     battery_voltage: Mapped[float | None] = mapped_column(Float, nullable=True)
     energy_consumed_wh: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_speed: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # ── Weather fields (từ Open-Meteo) ────────────────────────
+    weather_temperature: Mapped[float | None] = mapped_column(Float, nullable=True)   # °C
+    weather_humidity: Mapped[float | None] = mapped_column(Float, nullable=True)      # %
+    weather_wind_speed: Mapped[float | None] = mapped_column(Float, nullable=True)    # m/s
+    weather_precipitation: Mapped[float | None] = mapped_column(Float, nullable=True) # mm
 
 
 class MissionHubCheckpoint(Base):

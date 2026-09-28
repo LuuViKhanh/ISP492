@@ -190,6 +190,11 @@ async def get_live_tracking(
                 latest_battery_voltage=log.battery_voltage if log else None,
                 last_updated=log.timestamp if log else None,
                 checkpoints_passed=cp_counts.get(mission.id, 0),
+                # Weather t? telemetry log m?i nh?t
+                weather_temperature=log.weather_temperature if log else None,
+                weather_apparent_temp=log.weather_apparent_temp if log else None,
+                weather_cloud_cover=log.weather_cloud_cover if log else None,
+                weather_code=log.weather_code if log else None,
             )
         )
 
@@ -307,10 +312,16 @@ async def collect_telemetry(
         mission.start_time = now
         mission.departed_at = now
 
-    # ── 2. Lưu telemetry logs ──────────────────────────────────────────────────
+    # ── 2. Fetch weather + Lưu telemetry logs ─────────────────────────────────
+    from app.shared.weather import fetch_weather
+
     logs_to_insert: list[TelemetryLog] = []
     for data in telemetry_data:
         naive_timestamp = data.timestamp.replace(tzinfo=None) if data.timestamp.tzinfo else data.timestamp
+
+        # Fetch weather theo tọa độ điểm này (timeout 3s, không throw nếu lỗi)
+        weather = await fetch_weather(data.latitude, data.longitude)
+
         log_entry = TelemetryLog(
             mission_id=mission_id,
             timestamp=naive_timestamp,
@@ -321,6 +332,11 @@ async def collect_telemetry(
             battery_voltage=data.battery_voltage,
             energy_consumed_wh=data.energy_consumed_wh,
             wind_speed=data.wind_speed,
+            # Weather fields từ Open-Meteo
+            weather_temperature=weather.temperature if weather else None,
+            weather_humidity=weather.humidity if weather else None,
+            weather_wind_speed=weather.wind_speed if weather else None,
+            weather_precipitation=weather.precipitation if weather else None,
         )
         logs_to_insert.append(log_entry)
         db.add(log_entry)
