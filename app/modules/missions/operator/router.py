@@ -190,11 +190,11 @@ async def get_live_tracking(
                 latest_battery_voltage=log.battery_voltage if log else None,
                 last_updated=log.timestamp if log else None,
                 checkpoints_passed=cp_counts.get(mission.id, 0),
-                # Weather t? telemetry log m?i nh?t
+                # Weather từ telemetry log mới nhất
                 weather_temperature=log.weather_temperature if log else None,
-                weather_apparent_temp=log.weather_apparent_temp if log else None,
-                weather_cloud_cover=log.weather_cloud_cover if log else None,
-                weather_code=log.weather_code if log else None,
+                weather_humidity=log.weather_humidity if log else None,
+                weather_wind_speed=log.weather_wind_speed if log else None,
+                weather_precipitation=log.weather_precipitation if log else None,
             )
         )
 
