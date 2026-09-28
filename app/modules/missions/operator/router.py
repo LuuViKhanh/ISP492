@@ -24,6 +24,7 @@ router = APIRouter(prefix="/operator/missions", tags=["Operator - Missions"])
 allow_operator = RoleChecker([UserRole.OPERATOR, UserRole.ADMIN])
 
 
+'''
 @router.post(
     "/check-availability",
     response_model=AvailabilityResponse,
@@ -94,6 +95,7 @@ async def get_planned_missions(
         .order_by(Mission.scheduled_time)
     )
     return result.scalars().all()
+'''
 
 
 @router.get("/hubs")
@@ -218,6 +220,7 @@ async def get_mission(
     return mission
 
 
+'''
 @router.post("/{mission_id}/approve", response_model=MissionResponse)
 async def approve_mission(
     mission_id: int,
@@ -271,6 +274,7 @@ async def reject_mission(
     await db.commit()
     await db.refresh(mission)
     return mission
+'''
 
 
 @router.post("/{mission_id}/telemetry", response_model=TelemetryIngestResponse)
@@ -718,3 +722,117 @@ async def update_incident_status(
     await db.commit()
     await db.refresh(incident)
     return incident
+
+from app.modules.missions.schemas import MissionPlanningAnalyzeRequest, MissionPlanningAnalyzeResponse, RouteOptionSchema, MissionCreateRequest
+from app.modules.missions.models import Order, OrderStatus
+from app.modules.ai_predictions.service import predict_flight_energy, haversine_distance
+
+@router.post("/mission-planning/analyze", response_model=MissionPlanningAnalyzeResponse)
+async def analyze_mission_planning(
+    request: MissionPlanningAnalyzeRequest,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    **[Operator API] Phân tích & Dự đoán Năng lượng chuyến bay (Route & Energy Planning)**
+    
+    - **Mục đích**: Giúp Operator xem trước lộ trình và rủi ro hết pin trước khi thực sự quyết định tạo chuyến bay.
+    - **Hoạt động**:
+        1. Lấy thông tin tọa độ của Origin Hub và Destination Hub từ `Order`.
+        2. Tính khoảng cách đường chim bay (Haversine).
+        3. Dùng chung bộ "Core AI Prediction" (CatBoost Model) từ module `ai_predictions` để ước tính lượng điện năng tiêu thụ (Wh) và thời gian dựa trên khối lượng hàng hóa, thời tiết.
+        4. Trả về mức độ rủi ro (Risk) để Operator quyết định xem có nên cho Drone bay không hay cần đổi Drone pin "trâu" hơn.
+    """
+    order = await db.get(Order, request.orderId)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+        
+    origin_hub = await db.get(Hub, order.origin_hub_id)
+    dest_hub = await db.get(Hub, order.destination_hub_id)
+    
+    if not origin_hub or not dest_hub:
+        raise HTTPException(status_code=400, detail="Order is missing valid Hubs")
+
+    # Tính khoảng cách
+    distance = haversine_distance(
+        origin_hub.latitude or 0.0, origin_hub.longitude or 0.0,
+        dest_hub.latitude or 0.0, dest_hub.longitude or 0.0
+    )
+    
+    # Gọi AI Model
+    prediction = predict_flight_energy(distance, float(order.payload_kg or 0))
+    energy_wh = prediction["energy_wh"]
+    shap_vals = prediction["shap_values"]
+    wind_angle_shap = shap_vals.get('relative_wind_angle', 0.0)
+
+    # Đánh giá rủi ro
+    risk = "LOW"
+    if energy_wh > 100:
+        risk = "HIGH"
+    elif energy_wh > 60:
+        risk = "MEDIUM"
+
+    return MissionPlanningAnalyzeResponse(
+        routes=[
+            RouteOptionSchema(
+                routeId=f"R-{request.orderId}",
+                distanceKm=round(distance, 2),
+                relayHubs=[], # Tương lai có thể thêm logic chia Hub
+                predictedDurationMin=int(distance * 2),
+                predictedEnergyWh=energy_wh,
+                batteryConsumptionPct=int(energy_wh / 2), # Giả lập 1% = 2Wh
+                remainingBatteryPct=100 - int(energy_wh / 2),
+                confidencePct=88,
+                risk=risk,
+                recommended=True
+            )
+        ]
+    )
+
+
+@router.post("", response_model=MissionResponse)
+async def create_mission(
+    request: MissionCreateRequest,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    **[Operator API] Tạo nhiệm vụ bay (Create Mission)**
+    
+    - **Mục đích**: Chính thức xác nhận tạo chuyến bay để giao một Order cụ thể.
+    - **Hoạt động**:
+        1. Validate `Order` bắt buộc phải đang ở trạng thái `PENDING`.
+        2. Tạo bản ghi `Mission` trong Database với trạng thái `SCHEDULED` (Chờ cất cánh).
+        3. Lưu lại lịch sử ai là người tạo (operator_id) và lưu lại các dự đoán (predicted energy) để làm mốc so sánh (benchmarking) sau này khi chuyến bay kết thúc.
+    - **Ghi chú**: Chuyến bay lúc này chỉ ở dạng SCHEDULED, Drone sẽ CHƯA CẤT CÁNH cho đến khi Origin Hub bấm xác nhận "Đã nhận kiện hàng từ khách" (Final Validation).
+    """
+    order = await db.get(Order, request.orderId)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+        
+    if order.status != OrderStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Order is not in PENDING state")
+        
+    # Tạo Mission mới với các thông tin đã được giả lập
+    mission = Mission(
+        order_id=request.orderId,
+        drone_id=request.droneId,
+        route_id=request.routeId,
+        origin_hub_id=order.origin_hub_id,
+        destination_hub_id=order.destination_hub_id,
+        status=MissionStatus.SCHEDULED,
+        created_by=user.id,
+        # Default predictions for demo
+        predicted_duration_min=25,
+        estimated_energy_wh=28.1,
+        battery_consumption_pct=29,
+        predicted_remaining_battery_pct=71,
+        confidence_pct=88,
+        risk_level="LOW"
+    )
+    
+    db.add(mission)
+    await db.commit()
+    await db.refresh(mission)
+    return mission
+

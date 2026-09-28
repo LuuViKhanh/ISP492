@@ -6,7 +6,33 @@ from typing import Optional
 from app.database.db import Base
 
 
+class OrderStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    IN_DELIVERY = "IN_DELIVERY"
+    DELIVERED_TO_HUB = "DELIVERED_TO_HUB"
+    CANCELLED = "CANCELLED"
+
+class DeliveryMode(str, enum.Enum):
+    EXPRESS = "EXPRESS"
+    SCHEDULED = "SCHEDULED"
+
+class MissionLegStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+
 class MissionStatus(str, enum.Enum):
+    # FE Operator Spec VI Statuses
+    SCHEDULED = "SCHEDULED"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+    FAILED = "FAILED"
+    # Legacy Statuses (Kept for backwards compatibility)
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    APPROVED = "APPROVED"
+    FLYING = "FLYING"
+    REJECTED = "REJECTED"
     ACTIVE_MISSION = "Active mission"
     MISSION_COMPLETED = "Mission completed"
     INCIDENT_RETURN = "Incident return"
@@ -141,3 +167,53 @@ class Incident(Base):
     )
     reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     requires_technical_inspection: Mapped[bool] = mapped_column(default=False)
+
+class Order(Base):
+    __tablename__ = "orders"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    customer_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    package_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    package_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    payload_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    origin_hub_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    destination_hub_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    delivery_mode: Mapped[DeliveryMode | None] = mapped_column(SAEnum(DeliveryMode, name="delivery_mode_enum", create_type=False, values_callable=lambda x: [e.value for e in x]), nullable=True)
+    requested_delivery_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    estimated_window_start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    estimated_window_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    planning_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[OrderStatus | None] = mapped_column(SAEnum(OrderStatus, name="orders_status_enum", create_type=False, values_callable=lambda x: [e.value for e in x]), nullable=True)
+    origin_received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    origin_received_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    destination_received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    destination_received_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    replan_required_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+class MissionLeg(Base):
+    __tablename__ = "mission_legs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    mission_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    sequence_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    from_hub_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    to_hub_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    status: Mapped[MissionLegStatus | None] = mapped_column(SAEnum(MissionLegStatus, name="mission_leg_status_enum", create_type=False, values_callable=lambda x: [e.value for e in x]), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+class MissionDroneAssignmentHistory(Base):
+    __tablename__ = "mission_drone_assignment_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    mission_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    old_drone_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    new_drone_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    replaced_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    replaced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
