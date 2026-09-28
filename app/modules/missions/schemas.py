@@ -76,15 +76,10 @@ class TelemetryDataCreate(BaseModel):
 class TelemetryDataResponse(TelemetryDataCreate):
     id: int
     mission_id: int
-    # Weather fields từ Open-Meteo (None nếu không fetch được)
     weather_temperature: Optional[float] = None
     weather_humidity: Optional[float] = None
-    weather_apparent_temp: Optional[float] = None
-    weather_precipitation: Optional[float] = None
-    weather_cloud_cover: Optional[float] = None
     weather_wind_speed: Optional[float] = None
-    weather_wind_direction: Optional[float] = None
-    weather_code: Optional[int] = None
+    weather_precipitation: Optional[float] = None
 
     class Config:
         from_attributes = True
@@ -128,15 +123,10 @@ class LiveTrackingDrone(BaseModel):
     latest_battery_voltage: Optional[float]
     last_updated: Optional[datetime]
     checkpoints_passed: Optional[int] = 0
-    # Weather tại vị trí mới nhất
     weather_temperature: Optional[float] = None
     weather_humidity: Optional[float] = None
-    weather_apparent_temp: Optional[float] = None
-    weather_precipitation: Optional[float] = None
-    weather_cloud_cover: Optional[float] = None
     weather_wind_speed: Optional[float] = None
-    weather_wind_direction: Optional[float] = None
-    weather_code: Optional[int] = None
+    weather_precipitation: Optional[float] = None
 
 
 class LiveTrackingResponse(BaseModel):

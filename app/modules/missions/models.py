@@ -116,14 +116,10 @@ class TelemetryLog(Base):
     energy_consumed_wh: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_speed: Mapped[float | None] = mapped_column(Float, nullable=True)
     # ── Weather fields (từ Open-Meteo) ────────────────────────
-    weather_temperature: Mapped[float | None] = mapped_column(Float, nullable=True)       # °C
-    weather_humidity: Mapped[float | None] = mapped_column(Float, nullable=True)          # %
-    weather_apparent_temp: Mapped[float | None] = mapped_column(Float, nullable=True)     # °C (cảm giác)
-    weather_precipitation: Mapped[float | None] = mapped_column(Float, nullable=True)     # mm
-    weather_cloud_cover: Mapped[float | None] = mapped_column(Float, nullable=True)       # %
-    weather_wind_speed: Mapped[float | None] = mapped_column(Float, nullable=True)        # m/s (từ weather API)
-    weather_wind_direction: Mapped[float | None] = mapped_column(Float, nullable=True)    # độ
-    weather_code: Mapped[int | None] = mapped_column(Integer, nullable=True)              # WMO weather code
+    weather_temperature: Mapped[float | None] = mapped_column(Float, nullable=True)   # °C
+    weather_humidity: Mapped[float | None] = mapped_column(Float, nullable=True)      # %
+    weather_wind_speed: Mapped[float | None] = mapped_column(Float, nullable=True)    # m/s
+    weather_precipitation: Mapped[float | None] = mapped_column(Float, nullable=True) # mm
 
 
 class MissionHubCheckpoint(Base):
