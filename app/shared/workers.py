@@ -178,3 +178,140 @@ async def run_battery_charging_simulation(db: AsyncSession):
         battery.charge_level_pct = min(round(new_charge), 100)
         
     await db.commit()
+
+
+# ── Hằng số cấu hình cho nhắc nhận hàng ────────────────────────────
+PICKUP_REMINDER_REF = "PICKUP_REMINDER"          # Marker để nhận diện thông báo nhắc (dedup)
+PICKUP_REMINDER_INTERVAL = timedelta(hours=5)    # Cứ mỗi 5 tiếng nhắc 1 lần
+PICKUP_CANCEL_AFTER = timedelta(days=5)          # Quá 5 ngày không nhận thì hủy
+
+
+def _as_naive_utc(dt: datetime | None) -> datetime | None:
+    """
+    Chuẩn hóa datetime về naive UTC để so sánh nhất quán.
+    - Cột arrived_at là DateTime (không timezone) -> naive.
+    - Cột notifications.created_at là DateTime(timezone=True) -> có thể trả về aware.
+    So sánh naive với aware sẽ raise TypeError, nên phải quy về cùng dạng.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+async def run_pickup_reminder_watcher(db: AsyncSession):
+    """
+    Worker: Nhắc customer tới nhận hàng và tự hủy khi quá hạn.
+
+    Quét các kiện hàng drone đã chở tới Hub đích nhưng khách CHƯA tới nhận
+    (arrived_at đã set, arrival_confirmed_at còn trống, mission chưa bị hủy/hoàn tất).
+
+    Với mỗi kiện, tính thời gian chờ kể từ arrived_at:
+    - Nếu >= 5 ngày: tự hủy chuyến (status = CANCELLED) và thông báo cho Customer + Operators.
+    - Ngược lại: cứ mỗi 5 tiếng gửi 1 thông báo nhắc cho Customer.
+      Chống spam theo "Cách B": không thêm cột DB, mà truy vấn bảng notifications tìm
+      thông báo nhắc gần nhất của kiện (reference_id == PICKUP_REMINDER_REF); chỉ gửi
+      thông báo mới nếu đã đủ 5 tiếng kể từ lần nhắc gần nhất (hoặc kể từ arrived_at nếu chưa nhắc lần nào).
+    """
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    # Lấy các kiện đang chờ khách tới nhận
+    result = await db.execute(
+        select(Mission).where(
+            and_(
+                Mission.arrived_at.is_not(None),
+                Mission.arrival_confirmed_at.is_(None),
+                Mission.status.notin_([
+                    MissionStatus.CANCELLED,
+                    MissionStatus.MISSION_COMPLETED,
+                    MissionStatus.COMPLETED,
+                ]),
+            )
+        )
+    )
+    waiting_missions = result.scalars().all()
+
+    if not waiting_missions:
+        return
+
+    operator_ids = await get_operator_ids(db)
+
+    for mission in waiting_missions:
+        arrived_at = _as_naive_utc(mission.arrived_at)
+        if arrived_at is None:
+            continue
+
+        waited = now - arrived_at
+
+        # ── Vế 1: Quá 5 ngày -> hủy hàng ──────────────────────────
+        if waited >= PICKUP_CANCEL_AFTER:
+            mission.status = MissionStatus.CANCELLED
+
+            # Notify Customer
+            if mission.customer_id:
+                db.add(Notification(
+                    user_id=mission.customer_id,
+                    title="Kiện hàng đã bị hủy",
+                    message=(
+                        f"Kiện hàng của chuyến bay #{mission.id} đã bị hủy do bạn không "
+                        f"tới nhận trong vòng 5 ngày kể từ khi hàng về Hub."
+                    ),
+                    notifications_type=NotificationType.MISSION_STATUS,
+                    mission_id=str(mission.id),
+                    created_at=now,
+                ))
+
+            # Notify Operators
+            for op_id in operator_ids:
+                db.add(Notification(
+                    user_id=op_id,
+                    title="Hủy kiện hàng quá hạn nhận",
+                    message=(
+                        f"Chuyến bay #{mission.id} đã tự động hủy do khách không tới "
+                        f"nhận hàng sau 5 ngày."
+                    ),
+                    notifications_type=NotificationType.MISSION_STATUS,
+                    mission_id=str(mission.id),
+                    created_at=now,
+                ))
+            continue
+
+        # ── Vế 2: Chưa tới 5 ngày -> nhắc mỗi 5 tiếng ─────────────
+        # Không có customer thì không có ai để nhắc
+        if not mission.customer_id:
+            continue
+
+        # Cách B: tìm thông báo nhắc gần nhất của kiện này
+        last_reminder_result = await db.execute(
+            select(Notification)
+            .where(
+                and_(
+                    Notification.mission_id == str(mission.id),
+                    Notification.reference_id == PICKUP_REMINDER_REF,
+                )
+            )
+            .order_by(Notification.created_at.desc())
+            .limit(1)
+        )
+        last_reminder = last_reminder_result.scalar_one_or_none()
+
+        # Mốc tính 5 tiếng: lần nhắc gần nhất, hoặc arrived_at nếu chưa nhắc lần nào
+        anchor = _as_naive_utc(last_reminder.created_at) if last_reminder else arrived_at
+
+        if now - anchor >= PICKUP_REMINDER_INTERVAL:
+            db.add(Notification(
+                user_id=mission.customer_id,
+                title="Kiện hàng đang chờ bạn tới nhận",
+                message=(
+                    f"Kiện hàng của chuyến bay #{mission.id} đã về Hub và đang chờ bạn "
+                    f"tới nhận. Vui lòng tới nhận sớm; sau 5 ngày kể từ khi hàng về Hub, "
+                    f"đơn sẽ tự động bị hủy."
+                ),
+                notifications_type=NotificationType.MISSION_STATUS,
+                reference_id=PICKUP_REMINDER_REF,
+                mission_id=str(mission.id),
+                created_at=now,
+            ))
+
+    await db.commit()

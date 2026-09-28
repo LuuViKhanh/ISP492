@@ -36,7 +36,7 @@ from app.database.router import router as db_router
 import asyncio
 from app.database.db import async_engine, Base, AsyncSessionLocal
 from app.modules.fleet.technician.service import run_maintenance_alerts_logic, run_battery_overdue_alerts_logic
-from app.shared.workers import run_approval_deadline_watcher, run_telemetry_signal_loss_watcher, run_battery_charging_simulation
+from app.shared.workers import run_approval_deadline_watcher, run_telemetry_signal_loss_watcher, run_battery_charging_simulation, run_pickup_reminder_watcher
 
 async def run_hourly_cronjobs():
     """Vòng lặp chạy ngầm mỗi tiếng (3600s)"""
@@ -46,6 +46,7 @@ async def run_hourly_cronjobs():
                 await run_maintenance_alerts_logic(session)
                 await run_battery_overdue_alerts_logic(session)
                 await run_battery_charging_simulation(session)
+                await run_pickup_reminder_watcher(session)
         except Exception as e:
             print(f"[CRON ERROR] Lỗi khi chạy hourly cronjobs: {e}")
         await asyncio.sleep(3600)
