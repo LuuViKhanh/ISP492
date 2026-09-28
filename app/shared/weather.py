@@ -17,13 +17,9 @@ from dataclasses import dataclass
 @dataclass
 class WeatherData:
     temperature: Optional[float] = None        # °C
-    apparent_temperature: Optional[float] = None  # °C (cảm giác thực)
     humidity: Optional[float] = None           # %
-    precipitation: Optional[float] = None      # mm
-    cloud_cover: Optional[float] = None        # %
     wind_speed: Optional[float] = None         # m/s
-    wind_direction: Optional[float] = None     # độ (0-360)
-    weather_code: Optional[int] = None         # WMO code
+    precipitation: Optional[float] = None      # mm
 
 
 # WMO weather code → mô tả ngắn gọn
@@ -62,9 +58,8 @@ async def fetch_weather(lat: float, lng: float) -> Optional[WeatherData]:
     url = (
         f"https://api.open-meteo.com/v1/forecast"
         f"?latitude={lat}&longitude={lng}"
-        f"&current=temperature_2m,apparent_temperature,relative_humidity_2m,"
-        f"precipitation,cloud_cover,wind_speed_10m,wind_direction_10m,weather_code"
-        f"&wind_speed_unit=ms"  # m/s thay vì km/h
+        f"&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m"
+        f"&wind_speed_unit=ms"
         f"&timezone=Asia%2FHo_Chi_Minh"
     )
 
@@ -77,17 +72,12 @@ async def fetch_weather(lat: float, lng: float) -> Optional[WeatherData]:
             data = resp.json().get("current", {})
             return WeatherData(
                 temperature=data.get("temperature_2m"),
-                apparent_temperature=data.get("apparent_temperature"),
                 humidity=data.get("relative_humidity_2m"),
-                precipitation=data.get("precipitation"),
-                cloud_cover=data.get("cloud_cover"),
                 wind_speed=data.get("wind_speed_10m"),
-                wind_direction=data.get("wind_direction_10m"),
-                weather_code=data.get("weather_code"),
+                precipitation=data.get("precipitation"),
             )
 
     except Exception:
-        # Không throw — weather là optional, không được làm fail telemetry
         return None
 
 
