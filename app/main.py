@@ -28,6 +28,7 @@ from app.modules.ai_predictions.router import router as ai_router
 from app.modules.system.router import router as system_router
 from app.modules.system.admin.router import router as system_admin_router
 from app.modules.system.notifications.router import router as notifications_router
+from app.modules.orders.router import router as orders_router
 
 # Developer Database API (dùng chung server, prefix /dev/db/...)
 from app.database.router import router as db_router
@@ -102,7 +103,10 @@ app.openapi = custom_openapi
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # Chấp nhận mọi domain (localhost bất kỳ port nào, hoặc domain production)
+    # Cơ chế: FastAPI sẽ đọc header Origin của request và trả về đúng Origin đó 
+    # thay vì trả về "*" (giúp vượt qua lỗi block của browser khi allow_credentials=True).
+    allow_origin_regex=r"^https?://.*$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -116,6 +120,7 @@ app.include_router(ai_router, prefix=settings.API_V1_STR)
 app.include_router(system_router, prefix=settings.API_V1_STR)
 app.include_router(system_admin_router, prefix=settings.API_V1_STR)
 app.include_router(notifications_router, prefix=settings.API_V1_STR)
+app.include_router(orders_router, prefix=settings.API_V1_STR)
 app.include_router(db_router)
 
 # Tự động include các router của các roles
