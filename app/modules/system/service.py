@@ -2,7 +2,6 @@ from typing import Optional, Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-
 async def log_action(
     db: AsyncSession,
     user_id: Any,
@@ -16,7 +15,7 @@ async def log_action(
         "INSERT INTO public.audit_logs (user_id, action, resource_table, details_json, created_at) "
         "VALUES (:user_id, CAST(:action AS audit_logs_action), :resource_table, CAST(:details_json AS jsonb), now())"
     ), {
-        "user_id": user_id,
+        "user_id": str(user_id) if user_id else None,
         "action": action,
         "resource_table": resource_table,
         "details_json": json.dumps(details) if details else None,
