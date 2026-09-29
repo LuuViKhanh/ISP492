@@ -30,9 +30,7 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_async_d
     """
     if await service.get_user_by_email(db, body.email):
         raise HTTPException(status_code=400, detail="Email already registered")
-    if await service.get_user_by_username(db, body.username):
-        raise HTTPException(status_code=400, detail="Username already taken")
-    user = await service.register_user(db, body.email, body.username, body.full_name, body.password)
+    user = await service.register_user(db, body.email, body.full_name, body.password)
     await log_action(db, user.id, "REGISTER", "users", {"email": user.email})
     return user
 

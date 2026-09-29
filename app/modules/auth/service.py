@@ -71,10 +71,9 @@ async def get_user_by_username(db: AsyncSession, username: str) -> Optional[User
 
 # ── Register ──────────────────────────────────────────────────────────────────
 
-async def register_user(db: AsyncSession, email: str, username: str, full_name: str, password: str) -> User:
+async def register_user(db: AsyncSession, email: str, full_name: str, password: str) -> User:
     user = User(
         email=email,
-        username=username,
         full_name=full_name,
         hashed_password=hash_password(password),
         role_id=ROLE_NAME_TO_ID[UserRole.CUSTOMER],
@@ -156,7 +155,7 @@ async def get_or_create_google_user(db: AsyncSession, google_info: dict) -> User
     if user:
         return user
 
-    user = User(email=email, full_name=full_name, username=email, hashed_password="", role_id=ROLE_NAME_TO_ID[UserRole.CUSTOMER])
+    user = User(email=email, full_name=full_name, hashed_password="", role_id=ROLE_NAME_TO_ID[UserRole.CUSTOMER])
     db.add(user)
     await db.commit()
     await db.refresh(user)
