@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, Boolean
+from sqlalchemy import String, DateTime, Boolean, Integer
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database.db import Base
 from app.shared.roles import UserRole
@@ -26,7 +26,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    hub_id: Mapped[int | None] = mapped_column(String, nullable=True)
+    hub_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     @property
     def role(self) -> UserRole:
