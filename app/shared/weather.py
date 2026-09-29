@@ -17,9 +17,15 @@ from dataclasses import dataclass
 @dataclass
 class WeatherData:
     temperature: Optional[float] = None        # °C
+    apparent_temperature: Optional[float] = None  # °C cảm giác
+    dew_point: Optional[float] = None          # °C điểm sương
     humidity: Optional[float] = None           # %
     wind_speed: Optional[float] = None         # m/s
+    wind_gust: Optional[float] = None          # m/s gió giật
+    wind_direction: Optional[float] = None     # độ (0-360)
     precipitation: Optional[float] = None      # mm
+    pressure: Optional[float] = None           # hPa
+    cloud_cover: Optional[float] = None        # %
 
 
 # WMO weather code → mô tả ngắn gọn
@@ -58,7 +64,9 @@ async def fetch_weather(lat: float, lng: float) -> Optional[WeatherData]:
     url = (
         f"https://api.open-meteo.com/v1/forecast"
         f"?latitude={lat}&longitude={lng}"
-        f"&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m"
+        f"&current=temperature_2m,apparent_temperature,dew_point_2m,"
+        f"relative_humidity_2m,wind_speed_10m,wind_gusts_10m,wind_direction_10m,"
+        f"precipitation,surface_pressure,cloud_cover"
         f"&wind_speed_unit=ms"
         f"&timezone=Asia%2FHo_Chi_Minh"
     )
@@ -72,9 +80,15 @@ async def fetch_weather(lat: float, lng: float) -> Optional[WeatherData]:
             data = resp.json().get("current", {})
             return WeatherData(
                 temperature=data.get("temperature_2m"),
+                apparent_temperature=data.get("apparent_temperature"),
+                dew_point=data.get("dew_point_2m"),
                 humidity=data.get("relative_humidity_2m"),
                 wind_speed=data.get("wind_speed_10m"),
+                wind_gust=data.get("wind_gusts_10m"),
+                wind_direction=data.get("wind_direction_10m"),
                 precipitation=data.get("precipitation"),
+                pressure=data.get("surface_pressure"),
+                cloud_cover=data.get("cloud_cover"),
             )
 
     except Exception:
