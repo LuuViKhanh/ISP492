@@ -77,9 +77,15 @@ class TelemetryDataResponse(TelemetryDataCreate):
     id: int
     mission_id: int
     weather_temperature: Optional[float] = None
+    weather_apparent_temp: Optional[float] = None
+    weather_dew_point: Optional[float] = None
     weather_humidity: Optional[float] = None
     weather_wind_speed: Optional[float] = None
+    weather_wind_gust: Optional[float] = None
+    weather_wind_direction: Optional[float] = None
     weather_precipitation: Optional[float] = None
+    weather_pressure: Optional[float] = None
+    weather_cloud_cover: Optional[float] = None
 
     class Config:
         from_attributes = True
@@ -124,9 +130,15 @@ class LiveTrackingDrone(BaseModel):
     last_updated: Optional[datetime]
     checkpoints_passed: Optional[int] = 0
     weather_temperature: Optional[float] = None
+    weather_apparent_temp: Optional[float] = None
+    weather_dew_point: Optional[float] = None
     weather_humidity: Optional[float] = None
     weather_wind_speed: Optional[float] = None
+    weather_wind_gust: Optional[float] = None
+    weather_wind_direction: Optional[float] = None
     weather_precipitation: Optional[float] = None
+    weather_pressure: Optional[float] = None
+    weather_cloud_cover: Optional[float] = None
 
 
 class LiveTrackingResponse(BaseModel):

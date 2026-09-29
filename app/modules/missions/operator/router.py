@@ -194,9 +194,15 @@ async def get_live_tracking(
                 checkpoints_passed=cp_counts.get(mission.id, 0),
                 # Weather từ telemetry log mới nhất
                 weather_temperature=log.weather_temperature if log else None,
+                weather_apparent_temp=log.weather_apparent_temp if log else None,
+                weather_dew_point=log.weather_dew_point if log else None,
                 weather_humidity=log.weather_humidity if log else None,
                 weather_wind_speed=log.weather_wind_speed if log else None,
+                weather_wind_gust=log.weather_wind_gust if log else None,
+                weather_wind_direction=log.weather_wind_direction if log else None,
                 weather_precipitation=log.weather_precipitation if log else None,
+                weather_pressure=log.weather_pressure if log else None,
+                weather_cloud_cover=log.weather_cloud_cover if log else None,
             )
         )
 
@@ -338,9 +344,15 @@ async def collect_telemetry(
             wind_speed=data.wind_speed,
             # Weather fields từ Open-Meteo
             weather_temperature=weather.temperature if weather else None,
+            weather_apparent_temp=weather.apparent_temperature if weather else None,
+            weather_dew_point=weather.dew_point if weather else None,
             weather_humidity=weather.humidity if weather else None,
             weather_wind_speed=weather.wind_speed if weather else None,
+            weather_wind_gust=weather.wind_gust if weather else None,
+            weather_wind_direction=weather.wind_direction if weather else None,
             weather_precipitation=weather.precipitation if weather else None,
+            weather_pressure=weather.pressure if weather else None,
+            weather_cloud_cover=weather.cloud_cover if weather else None,
         )
         logs_to_insert.append(log_entry)
         db.add(log_entry)

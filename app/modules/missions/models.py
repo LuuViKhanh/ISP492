@@ -116,10 +116,16 @@ class TelemetryLog(Base):
     energy_consumed_wh: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_speed: Mapped[float | None] = mapped_column(Float, nullable=True)
     # ── Weather fields (từ Open-Meteo) ────────────────────────
-    weather_temperature: Mapped[float | None] = mapped_column(Float, nullable=True)   # °C
-    weather_humidity: Mapped[float | None] = mapped_column(Float, nullable=True)      # %
-    weather_wind_speed: Mapped[float | None] = mapped_column(Float, nullable=True)    # m/s
-    weather_precipitation: Mapped[float | None] = mapped_column(Float, nullable=True) # mm
+    weather_temperature: Mapped[float | None] = mapped_column(Float, nullable=True)      # °C
+    weather_apparent_temp: Mapped[float | None] = mapped_column(Float, nullable=True)    # °C cảm giác
+    weather_dew_point: Mapped[float | None] = mapped_column(Float, nullable=True)        # °C điểm sương
+    weather_humidity: Mapped[float | None] = mapped_column(Float, nullable=True)         # %
+    weather_wind_speed: Mapped[float | None] = mapped_column(Float, nullable=True)       # m/s
+    weather_wind_gust: Mapped[float | None] = mapped_column(Float, nullable=True)        # m/s gió giật
+    weather_wind_direction: Mapped[float | None] = mapped_column(Float, nullable=True)   # độ (0-360)
+    weather_precipitation: Mapped[float | None] = mapped_column(Float, nullable=True)    # mm
+    weather_pressure: Mapped[float | None] = mapped_column(Float, nullable=True)         # hPa
+    weather_cloud_cover: Mapped[float | None] = mapped_column(Float, nullable=True)      # %
 
 
 class MissionHubCheckpoint(Base):
