@@ -38,7 +38,7 @@ def import_rs_data():
             print("Khởi tạo Mock Customer...")
             customer_id = str(uuid.uuid4())
             conn.execute(text("""
-                INSERT INTO users (id, role_id, username, password_hash, full_name, email, is_active)
+                INSERT INTO users (id, role_id, password_hash, full_name, email, is_active)
                 VALUES (:id, :role_id, 'mock_customer', 'mock_hash', 'Mock Customer (RS)', 'rs_mock@drone.com', true)
             """), {"id": customer_id, "role_id": customer_role_id})
 

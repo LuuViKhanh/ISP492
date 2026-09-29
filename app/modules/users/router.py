@@ -56,8 +56,6 @@ async def update_profile(
         raise HTTPException(status_code=404, detail="User not found")
     if body.full_name is not None:
         user.full_name = body.full_name
-    if body.username is not None:
-        user.username = body.username
     db.add(user)
     await db.commit()
     await db.refresh(user)
