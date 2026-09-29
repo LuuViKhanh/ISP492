@@ -135,14 +135,22 @@ async def google_login():
 async def google_callback(code: str, db: AsyncSession = Depends(get_async_db)):
     """
     Xử lý callback từ Google sau khi xác thực thành công.
-    Nhận mã xác thực (code), lấy thông tin người dùng từ Google và cấp token đăng nhập hệ thống.
+    Redirect về FE tại localhost:5173 kèm access_token trong URL params.
     """
+    from fastapi.responses import RedirectResponse
     try:
         google_info = await service.exchange_google_code(code)
     except Exception:
-        raise HTTPException(status_code=400, detail="Failed to exchange Google code")
+        return RedirectResponse(url="http://localhost:5173/login?error=google_failed")
+
     user = await service.get_or_create_google_user(db, google_info)
-    return TokenResponse(
-        access_token=service.create_access_token(user.id, user.role.value),
-        refresh_token=service.create_refresh_token(user.id),
+    access_token  = service.create_access_token(user.id, user.role.value)
+    refresh_token = service.create_refresh_token(user.id)
+
+    redirect_url = (
+        f"{settings.FRONTEND_URL}/oauth/callback"
+        f"?access_token={access_token}"
+        f"&refresh_token={refresh_token}"
+        f"&token_type=bearer"
     )
+    return RedirectResponse(url=redirect_url)
