@@ -25,8 +25,7 @@ GOOGLE_AUTH_URL = (
 async def register(body: RegisterRequest, db: AsyncSession = Depends(get_async_db)):
     """
     Đăng ký người dùng mới.
-    Nhận thông tin email, username, họ tên và mật khẩu.
-    Kiểm tra xem email hoặc username đã tồn tại chưa trước khi tạo tài khoản.
+    Nhận thông tin email, họ tên và mật khẩu.
     """
     if await service.get_user_by_email(db, body.email):
         raise HTTPException(status_code=400, detail="Email already registered")

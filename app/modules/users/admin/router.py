@@ -44,7 +44,6 @@ async def create_user(
         
     new_user = User(
         email=body.email,
-        username=body.username,
         full_name=body.full_name,
         hashed_password=hash_password(body.password),
         role_id=ROLE_NAME_TO_ID[body.role]
@@ -84,14 +83,10 @@ async def update_user(
         raise HTTPException(status_code=404, detail="User not found")
         
     if body.email is not None:
-        # Kiểm tra email trùng lặp nếu có thay đổi
         existing = await get_user_by_email(db, body.email)
         if existing and existing.id != user_id:
             raise HTTPException(status_code=400, detail="Email already taken")
         user.email = body.email
-        
-    if body.username is not None:
-        user.username = body.username
     if body.full_name is not None:
         user.full_name = body.full_name
     if body.role is not None:

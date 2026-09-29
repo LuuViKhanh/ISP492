@@ -20,7 +20,6 @@ class ProfileUpdateRequest(BaseModel):
 
 class UserCreate(BaseModel):
     email: EmailStr
-    username: str
     full_name: str
     password: str
     role: UserRole
@@ -28,7 +27,6 @@ class UserCreate(BaseModel):
 
 class UserAdminUpdate(BaseModel):
     email: Optional[EmailStr] = None
-    username: Optional[str] = None
     full_name: Optional[str] = None
     role: Optional[UserRole] = None
     is_active: Optional[bool] = None
