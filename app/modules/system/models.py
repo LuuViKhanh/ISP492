@@ -1,6 +1,6 @@
 import enum
-from datetime import datetime
-from sqlalchemy import BigInteger, Integer, Float, String, Boolean, DateTime, Text, Enum as SAEnum
+from datetime import datetime, timezone
+from sqlalchemy import BigInteger, Integer, Float, String, Boolean, DateTime, Text, Enum as SAEnum, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database.db import Base
 
@@ -44,3 +44,13 @@ class Hub(Base):
     status: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    resource_table: Mapped[str | None] = mapped_column(String, nullable=True)
+    details_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
