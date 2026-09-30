@@ -40,7 +40,9 @@ async def get_mission_by_order_id(db: AsyncSession, orderId: str):
     return mission
 
 
-@deliveries_router.get("/outbound")
+from app.modules.missions.schemas import MissionResponse
+
+@deliveries_router.get("/outbound", response_model=list[MissionResponse])
 async def get_outbound_deliveries(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db)
@@ -94,7 +96,7 @@ async def prepare_battery_for_delivery(
     return {"message": "Battery prepared, ready to fly", "mission": mission}
 
 
-@deliveries_router.get("/confirmations")
+@deliveries_router.get("/confirmations", response_model=list[MissionResponse])
 async def get_confirmations(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db)
