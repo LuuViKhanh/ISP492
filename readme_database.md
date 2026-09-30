@@ -68,16 +68,48 @@ Tài liệu này định nghĩa cấu trúc cơ sở dữ liệu và các luồn
 **7. Bảng `missions`** (Chuyến bay do Operator lên lịch)
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc | Mô tả |
 | :--- | :--- | :--- | :--- |
-| `id` | INT / BIGINT | **PK** | ID nội bộ chuyến bay |
-| `order_id` | VARCHAR(50) | **FK** -> `orders.id` | Đơn hàng gốc |
-| `drone_id` | INT | **FK** -> `drones.id` | Máy bay phân công |
-| `route_id` | VARCHAR(50) | | ID lộ trình đã được AI chọn |
-| `status` | VARCHAR(50) | Enum | `SCHEDULED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`, `FAILED` |
-| `origin_hub_id` | INT | **FK** -> `hubs.id` | |
-| `destination_hub_id` | INT | **FK** -> `hubs.id` | |
-| `predicted_duration_min`| INT | | Thời gian bay dự kiến |
-| `estimated_energy_wh` | DECIMAL(6,2)| | Dự báo năng lượng |
-| `battery_consumption_pct`| INT | | Dự báo % pin tiêu thụ |
+| `id` | INT8 | Primary, Identity, Non-nullable |  |
+| `customer_id` | VARCHAR | Non-nullable |  |
+| `operator_id` | VARCHAR | Nullable |  |
+| `drone_id` | INT8 | Foreign key, Nullable |  |
+| `battery_id` | INT8 | Foreign key, Nullable |  |
+| `pickup_location_id` | INT4 | Foreign key, Nullable |  |
+| `dropoff_location_id` | INT4 | Foreign key, Nullable |  |
+| `payload_weight` | FLOAT8 | Non-nullable |  |
+| `distance_m` | FLOAT8 | Non-nullable | Khoảng cách tuyến đường (mét) |
+| `delivery_fee` | FLOAT8 | Nullable | Phí giao hàng tính toán cho đơn này |
+| `status` | MISSIONS_STATUS | Non-nullable |  |
+| `scheduled_time` | TIMESTAMP | Non-nullable | Thời gian bay dự kiến |
+| `start_time` | TIMESTAMP | Nullable | Thời gian cất cánh thực tế |
+| `end_time` | TIMESTAMP | Nullable | Thời gian hạ cánh thực tế |
+| `origin_hub_id` | INT4 | Nullable |  |
+| `destination_hub_id` | INT4 | Nullable |  |
+| `departed_at` | TIMESTAMP | Nullable |  |
+| `arrived_at` | TIMESTAMP | Nullable |  |
+| `arrival_confirmed_by` | VARCHAR | Nullable |  |
+| `arrival_confirmed_at` | TIMESTAMP | Nullable |  |
+| `approval_deadline` | TIMESTAMP | Nullable | Hỗ trợ dữ liệu cho API trả về làm hiệu ứng đếm ngược trên UI và làm mốc thời gian cho Worker tự động hủy đơn |
+| `handling_status` | MISSIONS_HANDLING_STATUS | Nullable |  |
+| `order_code` | VARCHAR | Nullable |  |
+| `mission_code` | VARCHAR | Nullable |  |
+| `order_id` | VARCHAR | Nullable |  |
+| `route_id` | VARCHAR | Nullable |  |
+| `planned_start_at` | TIMESTAMP | Nullable |  |
+| `package_receive_deadline_at` | TIMESTAMP | Nullable |  |
+| `estimated_arrival_at` | TIMESTAMP | Nullable |  |
+| `actual_started_at` | TIMESTAMP | Nullable |  |
+| `actual_completed_at` | TIMESTAMP | Nullable |  |
+| `predicted_duration_min` | INT4 | Nullable |  |
+| `estimated_energy_wh` | NUMERIC | Nullable |  |
+| `battery_consumption_pct` | INT4 | Nullable |  |
+| `predicted_remaining_battery_pct` | INT4 | Nullable |  |
+| `confidence_pct` | INT4 | Nullable |  |
+| `risk_level` | VARCHAR | Nullable |  |
+| `created_by` | VARCHAR | Nullable |  |
+| `created_at` | TIMESTAMP | Nullable |  |
+| `updated_at` | TIMESTAMP | Nullable |  |
+| `cancel_reason` | TEXT | Nullable |  |
+| `failure_reason` | TEXT | Nullable |  |
 
 **8. Bảng `mission_legs`** (Lộ trình qua các Hub trung chuyển)
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc | Mô tả |

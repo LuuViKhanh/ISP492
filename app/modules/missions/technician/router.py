@@ -42,22 +42,44 @@ async def get_mission_by_order_id(db: AsyncSession, orderId: str):
 
 from app.modules.missions.schemas import MissionResponse
 
-@deliveries_router.get("/outbound", response_model=list[MissionResponse])
+@deliveries_router.get("/outbound")
 async def get_outbound_deliveries(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db)
 ):
     """API lấy danh sách kiện hàng đang chờ bay đi."""
-    query = select(Mission).where(
-        Mission.departed_at.is_(None),
-        Mission.status != MissionStatus.MISSION_COMPLETED,
-        Mission.handling_status.in_([HandlingStatus.INCOMING, HandlingStatus.AT_HUB, HandlingStatus.READY])
-    )
-    if user.hub_id:
-        query = query.where(Mission.origin_hub_id == int(user.hub_id))
-        
-    result = await db.execute(query.order_by(Mission.id.desc()))
-    return result.scalars().all()
+    import traceback
+    try:
+        query = select(
+            Mission.id,
+            Mission.order_code,
+            Mission.status,
+            Mission.handling_status,
+            Mission.origin_hub_id,
+            Mission.destination_hub_id
+        ).where(
+            Mission.departed_at.is_(None),
+            Mission.status != MissionStatus.MISSION_COMPLETED,
+            Mission.handling_status.in_([HandlingStatus.INCOMING, HandlingStatus.AT_HUB, HandlingStatus.READY])
+        )
+        if user.hub_id and str(user.hub_id).isdigit():
+            query = query.where(Mission.origin_hub_id == int(user.hub_id))
+            
+        result = await db.execute(query.order_by(Mission.id.desc()))
+        rows = result.all()
+        return [
+            {
+                "id": row.id,
+                "order_code": row.order_code,
+                "status": getattr(row.status, "value", row.status),
+                "handling_status": getattr(row.handling_status, "value", row.handling_status),
+                "origin_hub_id": row.origin_hub_id,
+                "destination_hub_id": row.destination_hub_id
+            } for row in rows
+        ]
+    except Exception as e:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=500, content={"error": str(e), "trace": traceback.format_exc()})
 
 
 @deliveries_router.post("/outbound/{orderId}/receive")
@@ -96,22 +118,44 @@ async def prepare_battery_for_delivery(
     return {"message": "Battery prepared, ready to fly", "mission": mission}
 
 
-@deliveries_router.get("/confirmations", response_model=list[MissionResponse])
+@deliveries_router.get("/confirmations")
 async def get_confirmations(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db)
 ):
     """Lấy danh sách hàng drone đã chở tới, chờ khách tới Hub lấy."""
-    query = select(Mission).where(
-        Mission.arrived_at.is_not(None),
-        Mission.arrival_confirmed_at.is_(None),
-        Mission.status != MissionStatus.MISSION_COMPLETED
-    )
-    if user.hub_id:
-        query = query.where(Mission.destination_hub_id == int(user.hub_id))
-        
-    result = await db.execute(query.order_by(Mission.id.desc()))
-    return result.scalars().all()
+    import traceback
+    try:
+        query = select(
+            Mission.id,
+            Mission.order_code,
+            Mission.status,
+            Mission.handling_status,
+            Mission.origin_hub_id,
+            Mission.destination_hub_id
+        ).where(
+            Mission.arrived_at.is_not(None),
+            Mission.arrival_confirmed_at.is_(None),
+            Mission.status != MissionStatus.MISSION_COMPLETED
+        )
+        if user.hub_id and str(user.hub_id).isdigit():
+            query = query.where(Mission.destination_hub_id == int(user.hub_id))
+            
+        result = await db.execute(query.order_by(Mission.id.desc()))
+        rows = result.all()
+        return [
+            {
+                "id": row.id,
+                "order_code": row.order_code,
+                "status": getattr(row.status, "value", row.status),
+                "handling_status": getattr(row.handling_status, "value", row.handling_status),
+                "origin_hub_id": row.origin_hub_id,
+                "destination_hub_id": row.destination_hub_id
+            } for row in rows
+        ]
+    except Exception as e:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=500, content={"error": str(e), "trace": traceback.format_exc()})
 
 
 @deliveries_router.post("/confirmations/{orderId}/confirm-pickup")
