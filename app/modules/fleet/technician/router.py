@@ -29,57 +29,65 @@ allow_technician = RoleChecker([UserRole.TECHNICIAN, UserRole.ADMIN])
 
 # ── Incoming & Confirm Arrival ───────────────────────────────────────────────
 
-@router.get("/incoming", response_model=list[IncomingMissionResponse])
+@router.get("/incoming")
 async def get_incoming_drones(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    query = (
-        select(
-            Mission,
-            Drone.name.label("drone_code"),
-            Drone.model.label("model"),
-            Battery.serial_number.label("battery_code"),
-            Battery.charge_level_pct.label("battery_percent")
+    import traceback
+    try:
+        query = (
+            select(
+                Mission.id,
+                Mission.mission_code,
+                Mission.status,
+                Mission.handling_status,
+                Drone.name.label("drone_code"),
+                Drone.model.label("model"),
+                Battery.serial_number.label("battery_code"),
+                Battery.charge_level_pct.label("battery_percent")
+            )
+            .outerjoin(Drone, Mission.drone_id == Drone.id)
+            .outerjoin(Battery, Mission.battery_id == Battery.id)
+            .where(
+                Mission.handling_status.in_([
+                    HandlingStatus.INCOMING,
+                    HandlingStatus.AT_HUB,
+                    HandlingStatus.READY,
+                    HandlingStatus.CANNOT_CONTINUE
+                ])
+            )
         )
-        .outerjoin(Drone, Mission.drone_id == Drone.id)
-        .outerjoin(Battery, Mission.battery_id == Battery.id)
-        .where(
-            Mission.handling_status.in_([
-                HandlingStatus.INCOMING,
-                HandlingStatus.AT_HUB,
-                HandlingStatus.READY,
-                HandlingStatus.CANNOT_CONTINUE
-            ])
-        )
-    )
-    
-    if user.hub_id:
-        query = query.where(Mission.destination_hub_id == int(user.hub_id))
         
-    query = query.order_by(Mission.scheduled_time.desc().nullslast())
-    
-    result = await db.execute(query)
-    rows = result.all()
-    
-    response = []
-    for row in rows:
-        mission, drone_code, model, battery_code, battery_percent = row
+        if user.hub_id and str(user.hub_id).isdigit():
+            query = query.where(Mission.destination_hub_id == int(user.hub_id))
+            
+        query = query.order_by(Mission.scheduled_time.desc().nullslast())
         
-        status_val = mission.status.value if hasattr(mission.status, "value") else mission.status
-        handling_val = mission.handling_status.value if hasattr(mission.handling_status, "value") else mission.handling_status
+        result = await db.execute(query)
+        rows = result.all()
         
-        response.append({
-            "mission_code": mission.mission_code or f"MSN-{mission.id}",
-            "drone_code": drone_code,
-            "model": model,
-            "mission_state": status_val if mission.status else None,
-            "battery_code": battery_code,
-            "battery_percent": battery_percent,
-            "handling_status": handling_val if mission.handling_status else None
-        })
-        
-    return response
+        response = []
+        for row in rows:
+            m_id, m_code, m_status, m_handling, drone_code, model, battery_code, battery_percent = row
+            
+            status_val = m_status.value if hasattr(m_status, "value") else m_status
+            handling_val = m_handling.value if hasattr(m_handling, "value") else m_handling
+            
+            response.append({
+                "mission_code": m_code or f"MSN-{m_id}",
+                "drone_code": drone_code,
+                "model": model,
+                "mission_state": status_val if m_status else None,
+                "battery_code": battery_code,
+                "battery_percent": battery_percent,
+                "handling_status": handling_val if m_handling else None
+            })
+            
+        return response
+    except Exception as e:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=500, content={"error": str(e), "trace": traceback.format_exc()})
 
 
 @router.post("/missions/{mission_id}/confirm-arrival")

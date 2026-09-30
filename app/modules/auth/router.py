@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+﻿from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,8 +19,7 @@ GOOGLE_AUTH_URL = (
 )
 
 
-# ── Register ──────────────────────────────────────────────────────────────────
-
+# ── Register
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterRequest, db: AsyncSession = Depends(get_async_db)):
     """
@@ -101,7 +100,7 @@ async def logout():
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_async_db)):
     """
-    Cấp lại access token mới.
+    Cập nhật access token mới.
     Xác minh refresh token và trả về cặp token (access và refresh token) mới.
     """
     payload = service.decode_token(refresh_token)
@@ -116,7 +115,7 @@ async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_async
     )
 
 
-# ── Google OAuth ──────────────────────────────────────────────────────────────
+# ── Google OAuth ─────────────────────────────────────────────────────────────
 
 @router.get("/google")
 async def google_login():
@@ -131,18 +130,18 @@ async def google_login():
     return RedirectResponse(url)
 
 
-@router.get("/google/callback", response_model=TokenResponse)
+@router.get("/google/callback")
 async def google_callback(code: str, db: AsyncSession = Depends(get_async_db)):
-    """
-    Xử lý callback từ Google sau khi xác thực thành công.
-    Nhận mã xác thực (code), lấy thông tin người dùng từ Google và cấp token đăng nhập hệ thống.
-    """
     try:
         google_info = await service.exchange_google_code(code)
     except Exception:
         raise HTTPException(status_code=400, detail="Failed to exchange Google code")
     user = await service.get_or_create_google_user(db, google_info)
-    return TokenResponse(
-        access_token=service.create_access_token(user.id, user.role.value),
-        refresh_token=service.create_refresh_token(user.id),
-    )
+    
+    access_token = service.create_access_token(user.id, user.role.value)
+    refresh_token = service.create_refresh_token(user.id)
+    
+    frontend_url = settings.FRONTEND_URL.rstrip("/")
+    redirect_url = f"{frontend_url}?access_token={access_token}&refresh_token={refresh_token}"
+    return RedirectResponse(url=redirect_url)
+
