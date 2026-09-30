@@ -52,22 +52,31 @@ async def get_incoming_drones(
                 HandlingStatus.CANNOT_CONTINUE
             ])
         )
-        .order_by(Mission.scheduled_time.desc().nullslast())
     )
+    
+    if user.hub_id:
+        query = query.where(Mission.destination_hub_id == int(user.hub_id))
+        
+    query = query.order_by(Mission.scheduled_time.desc().nullslast())
+    
     result = await db.execute(query)
     rows = result.all()
     
     response = []
     for row in rows:
         mission, drone_code, model, battery_code, battery_percent = row
+        
+        status_val = mission.status.value if hasattr(mission.status, "value") else mission.status
+        handling_val = mission.handling_status.value if hasattr(mission.handling_status, "value") else mission.handling_status
+        
         response.append({
             "mission_code": mission.mission_code or f"MSN-{mission.id}",
             "drone_code": drone_code,
             "model": model,
-            "mission_state": mission.status.value if mission.status else None,
+            "mission_state": status_val if mission.status else None,
             "battery_code": battery_code,
             "battery_percent": battery_percent,
-            "handling_status": mission.handling_status.value if mission.handling_status else None
+            "handling_status": handling_val if mission.handling_status else None
         })
         
     return response
