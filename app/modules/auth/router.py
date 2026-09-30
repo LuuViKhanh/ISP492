@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -132,16 +132,27 @@ async def google_login():
 
 @router.get("/google/callback")
 async def google_callback(code: str, db: AsyncSession = Depends(get_async_db)):
+    """
+    Xử lý callback từ Google sau khi xác thực thành công.
+    Redirect về FE kèm access_token trong URL params.
+    """
     try:
         google_info = await service.exchange_google_code(code)
     except Exception:
-        raise HTTPException(status_code=400, detail="Failed to exchange Google code")
+        frontend_url = settings.FRONTEND_URL.rstrip("/")
+        return RedirectResponse(url=f"{frontend_url}/login?error=google_failed")
+
     user = await service.get_or_create_google_user(db, google_info)
     
     access_token = service.create_access_token(user.id, user.role.value)
     refresh_token = service.create_refresh_token(user.id)
     
     frontend_url = settings.FRONTEND_URL.rstrip("/")
-    redirect_url = f"{frontend_url}?access_token={access_token}&refresh_token={refresh_token}"
+    redirect_url = (
+        f"{frontend_url}/oauth/callback"
+        f"?access_token={access_token}"
+        f"&refresh_token={refresh_token}"
+        f"&token_type=bearer"
+    )
     return RedirectResponse(url=redirect_url)
 
