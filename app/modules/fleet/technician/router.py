@@ -34,14 +34,15 @@ async def get_incoming_drones(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
+    from sqlalchemy import cast, String
     import traceback
     try:
         query = (
             select(
                 Mission.id,
                 Mission.mission_code,
-                Mission.status,
-                Mission.handling_status,
+                cast(Mission.status, String).label("status"),
+                cast(Mission.handling_status, String).label("handling_status"),
                 Drone.name.label("drone_code"),
                 Drone.model.label("model"),
                 Battery.serial_number.label("battery_code"),

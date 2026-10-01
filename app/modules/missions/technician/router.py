@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, cast, String
 from datetime import datetime, timezone
 
 from app.database.db import get_async_db
@@ -53,8 +53,8 @@ async def get_outbound_deliveries(
         query = select(
             Mission.id,
             Mission.order_code,
-            Mission.status,
-            Mission.handling_status,
+            cast(Mission.status, String).label("status"),
+            cast(Mission.handling_status, String).label("handling_status"),
             Mission.origin_hub_id,
             Mission.destination_hub_id
         ).where(
@@ -129,8 +129,8 @@ async def get_confirmations(
         query = select(
             Mission.id,
             Mission.order_code,
-            Mission.status,
-            Mission.handling_status,
+            cast(Mission.status, String).label("status"),
+            cast(Mission.handling_status, String).label("handling_status"),
             Mission.origin_hub_id,
             Mission.destination_hub_id
         ).where(
