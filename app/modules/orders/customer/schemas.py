@@ -17,6 +17,7 @@ class OrderEstimateRequest(BaseModel):
     destination_hub_id: int
     payload_kg: float
     package_size: str
+    package_type: str = "Standard"
     delivery_mode: DeliveryMode
     requested_delivery_at: Optional[datetime] = None
 
