@@ -29,6 +29,7 @@ from app.modules.system.router import router as system_router
 from app.modules.system.admin.router import router as system_admin_router
 from app.modules.system.notifications.router import router as notifications_router
 from app.modules.orders.router import router as orders_router
+from app.modules.payments.router import router as payments_router
 
 # Developer Database API (dùng chung server, prefix /dev/db/...)
 from app.database.router import router as db_router
@@ -122,6 +123,7 @@ app.include_router(system_router, prefix=settings.API_V1_STR)
 app.include_router(system_admin_router, prefix=settings.API_V1_STR)
 app.include_router(notifications_router, prefix=settings.API_V1_STR)
 app.include_router(orders_router, prefix=settings.API_V1_STR)
+app.include_router(payments_router, prefix=settings.API_V1_STR)
 app.include_router(db_router)
 
 # Tự động include các router của các roles
