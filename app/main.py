@@ -128,7 +128,7 @@ app.include_router(db_router)
 
 # Tự động include các router của các roles
 import importlib
-for mod in ["auth", "users", "missions", "fleet", "ai_predictions"]:
+for mod in ["auth", "users", "missions", "fleet", "ai_predictions", "orders"]:
     for role in ["admin", "operator", "technician", "customer"]:
         try:
             router_mod = importlib.import_module(f"app.modules.{mod}.{role}.router")
