@@ -149,7 +149,7 @@ async def google_callback(code: str, db: AsyncSession = Depends(get_async_db)):
     
     frontend_url = settings.FRONTEND_URL.rstrip("/")
     redirect_url = (
-        f"{frontend_url}/oauth/callback"
+        f"{frontend_url}/auth/google/callback"
         f"?access_token={access_token}"
         f"&refresh_token={refresh_token}"
         f"&token_type=bearer"
