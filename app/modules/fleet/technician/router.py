@@ -120,6 +120,7 @@ async def list_drones(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
+    """Chỉ trả về drone tại hub của technician đang đăng nhập."""
     query = (
         select(
             Drone,
@@ -131,6 +132,11 @@ async def list_drones(
         .outerjoin(Battery, Battery.drone_id == Drone.id)
         .order_by(Drone.id)
     )
+
+    # Filter theo hub của technician
+    if user.hub_id:
+        query = query.where(Drone.current_hub_id == int(user.hub_id))
+
     result = await db.execute(query)
     rows = result.all()
     
@@ -163,10 +169,13 @@ async def get_drone_profile(
         .outerjoin(Battery, Battery.drone_id == Drone.id)
         .where(Drone.id == drone_id)
     )
+    # Technician chỉ xem drone tại hub của mình
+    if user.hub_id:
+        query = query.where(Drone.current_hub_id == int(user.hub_id))
     result = await db.execute(query)
     row = result.first()
     if not row:
-        raise HTTPException(status_code=404, detail="Drone not found")
+        raise HTTPException(status_code=404, detail="Drone not found or not at your hub")
         
     drone, hub_name, installed_battery_id, battery_code = row
     drone_dict = drone.__dict__.copy()
