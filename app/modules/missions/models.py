@@ -222,19 +222,51 @@ class MissionLeg(Base):
     sequence_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
     from_hub_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     to_hub_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    battery_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("batteries.id"), nullable=True)
     status: Mapped[MissionLegStatus | None] = mapped_column(SAEnum(MissionLegStatus, name="mission_leg_status_enum", create_type=False, values_callable=lambda x: [e.value for e in x]), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-class MissionDroneAssignmentHistory(Base):
-    __tablename__ = "mission_drone_assignment_history"
+class MissionBatterySwapHistory(Base):
+    __tablename__ = "mission_battery_swap_history"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    mission_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    old_drone_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    new_drone_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    reason: Mapped[str | None] = mapped_column(String, nullable=True)
-    replaced_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    replaced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    mission_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("missions.id"), nullable=True)
+    hub_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("hubs.id"), nullable=True)
+    old_battery_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("batteries.id"), nullable=True)
+    new_battery_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("batteries.id"), nullable=True)
+    swapped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+class PaymentMethod(str, enum.Enum):
+    VNPAY = "VNPay"
+    MOMO = "Momo"
+    CREDIT_CARD = "Credit Card"
+    CASH = "Cash"
+
+class Payment(Base):
+    __tablename__ = "payments"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    mission_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    payment_method: Mapped[PaymentMethod] = mapped_column(
+        SAEnum(PaymentMethod, name="payment_method", create_type=False, values_callable=lambda x: [e.value for e in x]),
+        nullable=False
+    )
+    transaction_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[PaymentStatus] = mapped_column(
+        SAEnum(PaymentStatus, name="payments_status", create_type=False, values_callable=lambda x: [e.value for e in x]),
+        nullable=False
+    )
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+class MissionReport(Base):
+    __tablename__ = "mission_reports"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    mission_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    report_url_path: Mapped[str] = mapped_column(String, nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

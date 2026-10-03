@@ -5,7 +5,8 @@ from sqlalchemy import select, func
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser, get_current_user
 from app.shared.roles import UserRole
-from app.modules.missions.models import Mission, MissionStatus
+from app.modules.system.models import Hub
+from app.modules.missions.models import Mission, MissionStatus, MissionLeg
 from app.modules.missions.schemas import MissionKPIResponse, MissionStatusResponse, ActiveFlightsResponse, MissionResponse
 
 router = APIRouter(prefix="/missions", tags=["Missions"])
@@ -120,7 +121,49 @@ async def get_missions(
     """
     Lấy danh sách tất cả các nhiệm vụ.
     API này trả về danh sách toàn bộ nhiệm vụ được sắp xếp theo ID giảm dần.
+    Kèm theo chuỗi hiển thị lộ trình (route_path_string).
     Yêu cầu người dùng phải đăng nhập.
     """
     result = await db.execute(select(Mission).order_by(Mission.id.desc()))
-    return result.scalars().all()
+    missions = result.scalars().all()
+    
+    if not missions:
+        return []
+        
+    mission_ids = [m.id for m in missions]
+    
+    # Lấy thông tin MissionLegs
+    legs_result = await db.execute(select(MissionLeg).where(MissionLeg.mission_id.in_(mission_ids)).order_by(MissionLeg.mission_id, MissionLeg.sequence_no))
+    legs = legs_result.scalars().all()
+    
+    # Lấy thông tin Hubs để map tên/mã
+    hub_result = await db.execute(select(Hub))
+    hub_dict = {h.id: (h.code or h.name) for h in hub_result.scalars().all()}
+    
+    legs_by_mission = {}
+    for leg in legs:
+        if leg.mission_id not in legs_by_mission:
+            legs_by_mission[leg.mission_id] = []
+        legs_by_mission[leg.mission_id].append(leg)
+        
+    response = []
+    for m in missions:
+        m_dict = {c.name: getattr(m, c.name) for c in m.__table__.columns}
+        
+        # Build route string
+        m_legs = legs_by_mission.get(m.id, [])
+        if m_legs:
+            # First leg from_hub
+            path_hubs = [hub_dict.get(m_legs[0].from_hub_id, str(m_legs[0].from_hub_id))]
+            for leg in m_legs:
+                path_hubs.append(hub_dict.get(leg.to_hub_id, str(leg.to_hub_id)))
+            m_dict["route_path_string"] = " -> ".join(path_hubs)
+        else:
+            # Fallback if no legs, just use origin and destination
+            o_hub = hub_dict.get(m.origin_hub_id, str(m.origin_hub_id)) if m.origin_hub_id else "?"
+            d_hub = hub_dict.get(m.destination_hub_id, str(m.destination_hub_id)) if m.destination_hub_id else "?"
+            m_dict["route_path_string"] = f"{o_hub} -> {d_hub}"
+            
+        response.append(MissionResponse(**m_dict))
+        
+    return response
