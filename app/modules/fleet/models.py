@@ -60,7 +60,7 @@ class WorkOrder(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     drone_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     battery_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    technician_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    technician_id: Mapped[str] = mapped_column(String, nullable=False)
     issue_description: Mapped[str] = mapped_column(Text, nullable=False)
     action_taken: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[WorkOrderStatus] = mapped_column(
