@@ -43,10 +43,21 @@ Tài liệu này định nghĩa cấu trúc cơ sở dữ liệu và các luồn
 | `name` | VARCHAR(100) | Not Null | Tên máy bay |
 | `model` | VARCHAR(100) | Not Null | Đời máy |
 | `current_hub_id`| INT / UUID | **FK** -> `hubs.id`, Nullable | Hiện đang nằm tại Hub nào |
-| `operational_status`| VARCHAR(50) | Enum | `AVAILABLE`, `MAINTENANCE`, `IN_MISSION` |
+| `operational_status`| VARCHAR(50) | Enum | `AVAILABLE`, `MAINTENANCE`, `IN_FLIGHT` |
 
 **5. Bảng `batteries`**
-*(Lưu kho pin, % pin, trạng thái thay thế, v.v.)*
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc | Mô tả |
+| :--- | :--- | :--- | :--- |
+| `id` | INT8 | **PK**, Identity, Non-nullable | |
+| `drone_id` | INT8 | **FK** -> `drones.id`, Nullable | Tượng trưng cho việc lắp trên Drone nào (Null = trong kho) |
+| `serial_number` | VARCHAR | Unique, Non-nullable | |
+| `capacity_wh` | FLOAT8 | Non-nullable | Dung lượng (Watt-hour) |
+| `status` | BATTERIES_STATUS | Non-nullable | |
+| `current_hub_id` | INT4 | **FK** -> `hubs.id`, Nullable | Pin đang nằm ở hub nào |
+| `charge_level_pct` | INT8 | Nullable | % pin đang có |
+| `create_at` | TIMESTAMPTZ | Nullable | |
+| `update_at` | TIMESTAMPTZ | Nullable | |
+| `battery_model` | VARCHAR | Nullable | |
 
 ### C. Nhóm Đơn hàng & Chuyến bay (Order & Mission - Tương thích Spec VI)
 
@@ -56,10 +67,12 @@ Tài liệu này định nghĩa cấu trúc cơ sở dữ liệu và các luồn
 | `id` | VARCHAR(50) | **PK** | Mã đơn (VD: ORD-1114) |
 | `customer_id` | VARCHAR(50) | **FK** -> `users.id` | Khách hàng |
 | `package_label` | VARCHAR(255) | | Tên kiện hàng |
+| `package_type` | VARCHAR(100) | | Loại kiện hàng (VD: Fragile, Standard) |
 | `payload_kg` | DECIMAL(5,2) | | Khối lượng |
 | `origin_hub_id` | INT | **FK** -> `hubs.id` | Trạm gửi hàng |
 | `destination_hub_id` | INT | **FK** -> `hubs.id` | Trạm nhận hàng |
 | `delivery_mode` | VARCHAR(50) | Enum | `EXPRESS`, `SCHEDULED` |
+| `delivery_fee` | DECIMAL / FLOAT | | Phí giao hàng (Total Fee tính toán) |
 | `status` | VARCHAR(50) | Enum | `PENDING`, `IN_DELIVERY`, `DELIVERED_TO_HUB`, `CANCELLED` |
 | `origin_received_at` | TIMESTAMP | | Hub gửi đã nhận kiện hàng |
 | `destination_received_at`| TIMESTAMP | | Hub nhận đã nhận kiện hàng |

@@ -32,6 +32,45 @@ async def get_hubs(db: AsyncSession = Depends(get_async_db)):
         hubs = result.scalars().all()
     return hubs
 
+def calculate_delivery_cost(dist_km: float, payload_kg: float, package_type: str, delivery_mode: DeliveryMode):
+    # Determine drone size based on payload
+    if payload_kg <= 1:
+        base_fee = 20000
+        rate_per_km = 4000
+        rate_per_kg = 3000
+    elif payload_kg <= 3:
+        base_fee = 30000
+        rate_per_km = 5000
+        rate_per_kg = 4000
+    elif payload_kg <= 5:
+        base_fee = 45000
+        rate_per_km = 6000
+        rate_per_kg = 5000
+    else: # XL
+        base_fee = 65000
+        rate_per_km = 8000
+        rate_per_kg = 6000
+        
+    distance_fee = dist_km * rate_per_km
+    payload_fee = payload_kg * rate_per_kg
+    
+    core_fee = base_fee + distance_fee + payload_fee
+    
+    # Surcharges
+    is_fragile = (package_type and package_type.lower() == 'fragile')
+    fragile_surcharge = core_fee * 0.15 if is_fragile else 0
+    
+    is_express = (delivery_mode == DeliveryMode.EXPRESS)
+    service_surcharge = core_fee * 0.25 if is_express else 0
+    
+    # Insurance 10%
+    insurance_fee = core_fee * 0.10
+    
+    total_fee = core_fee + fragile_surcharge + service_surcharge + insurance_fee
+    service_fee_total = fragile_surcharge + service_surcharge + insurance_fee
+    
+    return core_fee, service_fee_total, total_fee
+
 @router.post("/orders/estimate", response_model=OrderEstimateResponse)
 async def estimate_order(
     body: OrderEstimateRequest,
@@ -54,12 +93,14 @@ async def estimate_order(
     prediction = predict_flight_energy(dist_km, body.payload_kg)
     energy_wh = prediction.get("energy_wh", 0.0)
     
-    # Calculate fees based on energy consumed
-    express_multiplier = 1.5 if body.delivery_mode == DeliveryMode.EXPRESS else 1.0
-    
-    # Base calculation: e.g., 1000 VND per Wh for delivery, 200 VND for service
-    delivery_fee = (energy_wh * 1000) * express_multiplier
-    service_fee = energy_wh * 200
+    # Calculate fees using new logic
+    core_fee, service_fee, total_fee = calculate_delivery_cost(
+        dist_km=dist_km,
+        payload_kg=body.payload_kg,
+        package_type=getattr(body, "package_type", ""),
+        delivery_mode=body.delivery_mode
+    )
+    delivery_fee = core_fee
     
     now = datetime.now(timezone.utc)
     
@@ -100,6 +141,22 @@ async def create_order(
     order_id = f"DRO-{uuid.uuid4().hex[:6].upper()}"
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     
+    origin_hub = await db.get(Hub, body.origin_hub_id)
+    dest_hub = await db.get(Hub, body.destination_hub_id)
+    if not origin_hub or not dest_hub:
+        raise HTTPException(status_code=404, detail="Hub not found")
+        
+    lat1, lon1 = origin_hub.latitude or 0.0, origin_hub.longitude or 0.0
+    lat2, lon2 = dest_hub.latitude or 0.0, dest_hub.longitude or 0.0
+    dist_km = haversine_distance(lat1, lon1, lat2, lon2)
+    
+    core_fee, service_fee, total_fee = calculate_delivery_cost(
+        dist_km=dist_km,
+        payload_kg=body.payload_kg,
+        package_type=body.package_type,
+        delivery_mode=body.delivery_mode
+    )
+
     new_order = Order(
         id=order_id,
         customer_id=current_user.id,
@@ -110,6 +167,7 @@ async def create_order(
         delivery_mode=body.delivery_mode,
         requested_delivery_at=body.requested_delivery_at.replace(tzinfo=None) if body.requested_delivery_at else None,
         status=OrderStatus.PENDING, 
+        delivery_fee=total_fee,
         created_at=now,
         updated_at=now
     )
