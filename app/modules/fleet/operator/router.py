@@ -64,8 +64,18 @@ async def list_all_drones(
     rows = result.all()
     response = []
     for drone, hub_name in rows:
-        d = {c.key: getattr(drone, c.key) for c in drone.__table__.columns}
-        d["hub_name"] = hub_name
+        d = {
+            "id": drone.id,
+            "name": drone.name,
+            "model": drone.model,
+            "payload_capacity_kg": drone.payload_capacity_kg,
+            "max_speed": drone.max_speed,
+            "status": drone.status,
+            "current_hub_id": drone.current_hub_id,
+            "hub_name": hub_name,
+            "battery_level_pct": drone.battery_level_pct,
+            "utilization_pct": drone.utilization_pct,
+        }
         response.append(d)
     return response
 
@@ -86,9 +96,18 @@ async def get_drone(
     if not row:
         raise HTTPException(status_code=404, detail="Drone not found")
     drone, hub_name = row
-    d = {c.key: getattr(drone, c.key) for c in drone.__table__.columns}
-    d["hub_name"] = hub_name
-    return d
+    return {
+        "id": drone.id,
+        "name": drone.name,
+        "model": drone.model,
+        "payload_capacity_kg": drone.payload_capacity_kg,
+        "max_speed": drone.max_speed,
+        "status": drone.status,
+        "current_hub_id": drone.current_hub_id,
+        "hub_name": hub_name,
+        "battery_level_pct": drone.battery_level_pct,
+        "utilization_pct": drone.utilization_pct,
+    }
 
 
 # ── Battery endpoints ─────────────────────────────────────────────────────────
@@ -107,7 +126,14 @@ async def list_all_batteries(
     rows = result.all()
     response = []
     for battery, hub_name in rows:
-        b = {c.key: getattr(battery, c.key) for c in battery.__table__.columns}
-        b["hub_name"] = hub_name
-        response.append(b)
+        response.append({
+            "id": battery.id,
+            "serial_number": battery.serial_number,
+            "capacity_wh": battery.capacity_wh,
+            "status": battery.status,
+            "drone_id": battery.drone_id,
+            "current_hub_id": battery.current_hub_id,
+            "hub_name": hub_name,
+            "charge_level_pct": battery.charge_level_pct,
+        })
     return response
