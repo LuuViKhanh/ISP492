@@ -31,20 +31,22 @@ class MissionLegStatus(str, enum.Enum):
     COMPLETED = "COMPLETED"
 
 class MissionStatus(str, enum.Enum):
-    # FE Operator Spec VI Statuses
-    SCHEDULED = "SCHEDULED"
-    IN_PROGRESS = "IN_PROGRESS"
-    COMPLETED = "COMPLETED"
-    CANCELLED = "CANCELLED"
-    FAILED = "FAILED"
+    # FE Operator Spec VI Statuses — viết thường khớp với DB
+    SCHEDULED    = "Scheduled"
+    IN_PROGRESS  = "In Progress"
+    COMPLETED    = "Completed"
+    CANCELLED    = "Cancelled"
+    FAILED       = "Failed"
     # Legacy Statuses (Kept for backwards compatibility)
-    PENDING_APPROVAL = "PENDING_APPROVAL"
-    APPROVED = "APPROVED"
-    FLYING = "FLYING"
-    REJECTED = "REJECTED"
-    ACTIVE_MISSION = "Active mission"
+    PENDING_APPROVAL = "Pending Approval"
+    APPROVED         = "Approved"
+    FLYING           = "Flying"
+    REJECTED         = "Rejected"
+    ACTIVE_MISSION   = "Active mission"
     MISSION_COMPLETED = "Mission completed"
-    INCIDENT_RETURN = "Incident return"
+    INCIDENT_RETURN  = "Incident return"
+    # Awaiting Payment
+    AWAITING_PAYMENT = "Awaiting Payment"
 
 
 class HandlingStatus(str, enum.Enum):
