@@ -35,6 +35,7 @@ router = APIRouter(prefix="/payments", tags=["Payments - PayOS"])
 
 allow_customer = RoleChecker([UserRole.CUSTOMER, UserRole.ADMIN])
 allow_all      = RoleChecker([UserRole.CUSTOMER, UserRole.OPERATOR, UserRole.ADMIN])
+allow_admin    = RoleChecker([UserRole.ADMIN])
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -198,17 +199,34 @@ async def payos_webhook(
     received_sig = payload.get("signature", "")
     data = payload.get("data", {})
 
-    # Build canonical string (theo docs PayOS)
-    sorted_keys = sorted(data.keys())
-    canonical = "&".join(f"{k}={data[k]}" for k in sorted_keys)
-    expected_sig = hmac.new(settings.PAYOS_CHECKSUM_KEY.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+    # Build canonical string theo đúng thứ tự PayOS docs:
+    # amount, canceledAt, cancellationReason, code, counterAccountBankId,
+    # counterAccountBankName, counterAccountName, counterAccountNumber,
+    # currency, description, orderCode, paymentLinkId, reference,
+    # transactionDateTime, virtualAccountName, virtualAccountNumber
+    PAYOS_SIGNED_FIELDS = [
+        "amount", "canceledAt", "cancellationReason", "code",
+        "counterAccountBankId", "counterAccountBankName",
+        "counterAccountName", "counterAccountNumber",
+        "currency", "description", "orderCode", "paymentLinkId",
+        "reference", "transactionDateTime",
+        "virtualAccountName", "virtualAccountNumber",
+    ]
+    canonical = "&".join(
+        f"{k}={data[k]}" for k in PAYOS_SIGNED_FIELDS if k in data
+    )
+    expected_sig = hmac.new(
+        settings.PAYOS_CHECKSUM_KEY.encode(),
+        canonical.encode(),
+        hashlib.sha256,
+    ).hexdigest()
 
     if not hmac.compare_digest(received_sig, expected_sig):
         return JSONResponse(status_code=400, content={"error": "Invalid signature"})
 
     # ── Xử lý kết quả thanh toán ────────────────────────────────────────────
-    order_code  = data.get("orderCode")
-    status_code = data.get("code")          # "00" = thành công
+    order_code     = data.get("orderCode")
+    status_code    = payload.get("code")   # "00" ở root level theo docs PayOS
     transaction_id = str(data.get("transactionDateTime", ""))
 
     if not order_code:
@@ -235,6 +253,40 @@ async def payos_webhook(
 
     await db.commit()
     return JSONResponse(status_code=200, content={"message": "OK"})
+
+
+# ── Đăng ký Webhook URL với PayOS ────────────────────────────────────────────
+
+@router.post(
+    "/register-webhook",
+    summary="Đăng ký Webhook URL với PayOS (chạy 1 lần)",
+    include_in_schema=True,
+)
+async def register_webhook(
+    user: CurrentUser = Depends(allow_admin),
+):
+    """
+    Gọi PayOS API để đăng ký webhook URL.
+    Chỉ cần chạy 1 lần sau khi deploy.
+    Webhook URL: {FRONTEND_URL}/api/v1/payments/webhook
+    """
+    import httpx
+    webhook_url = f"https://isp492.onrender.com/api/v1/payments/webhook"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://api-merchant.payos.vn/confirm-webhook",
+                json={"webhookUrl": webhook_url},
+                headers={
+                    "x-client-id": settings.PAYOS_CLIENT_ID,
+                    "x-api-key": settings.PAYOS_API_KEY,
+                },
+                timeout=10,
+            )
+            return {"status": resp.status_code, "response": resp.json()}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 # ── Huỷ payment link ──────────────────────────────────────────────────────────
