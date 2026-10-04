@@ -14,9 +14,43 @@ class DroneProfileResponse(BaseModel):
     current_hub_id: Optional[int]
     battery_level_pct: Optional[int]
     utilization_pct: Optional[float]
+    hub_name: Optional[str] = None
+    installed_battery_id: Optional[int] = None
+    battery_code: Optional[str] = None
+    last_flight_at: Optional[datetime] = None
+    last_maintenance_at: Optional[datetime] = None
+    next_maintenance_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
+
+class IncomingMissionResponse(BaseModel):
+    mission_code: str
+    drone_code: Optional[str] = None
+    model: Optional[str] = None
+    mission_state: Optional[str] = None
+    battery_code: Optional[str] = None
+    battery_percent: Optional[int] = None
+    handling_status: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class BatteryResponse(BaseModel):
+    id: int
+    serial_number: str
+    capacity_wh: float
+    status: str
+    drone_id: Optional[int] = None
+    current_hub_id: Optional[int] = None
+    charge_level_pct: Optional[int] = None
+    estimated_minutes_remaining: Optional[int] = None
+
+
+class BatteryUseRequest(BaseModel):
+    mission_id: int
 
 
 class DroneStatusUpdate(BaseModel):

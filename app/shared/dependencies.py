@@ -15,6 +15,7 @@ class CurrentUser(BaseModel):
     id: str
     email: str
     role: UserRole
+    hub_id: str | None = None
 
 
 async def get_current_user(
@@ -36,7 +37,7 @@ async def get_current_user(
     if not user or not user.is_active:
         raise credentials_exception
 
-    return CurrentUser(id=user.id, email=user.email, role=user.role)
+    return CurrentUser(id=user.id, email=user.email, role=user.role, hub_id=user.hub_id)
 
 
 class RoleChecker:

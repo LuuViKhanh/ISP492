@@ -1,23 +1,26 @@
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
+from sqlalchemy import select, text, cast, String
 
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
+from app.modules.auth.models import User
 from app.modules.fleet.models import (
     Drone, Battery, WorkOrder, WorkOrderStatus,
     MaintenanceRecord, MaintenanceInspectionItem, WorkOrderLog, MaintenanceAlert, MaintenanceSchedule
 )
+from app.modules.system.models import Hub
 from app.modules.fleet.schemas import WorkOrderCreate, WorkOrderUpdate, InspectionUpdate, WorkOrderResponse
 from app.modules.fleet.technician.schemas import (
     DroneProfileResponse, DroneStatusUpdate, MaintenanceHistoryItem,
     MaintenanceRecordCreate, MaintenanceRecordResponse,
     WorkOrderLogResponse, MaintenanceAlertResponse,
-    MaintenanceScheduleResponse, MaintenanceScheduleCreate
+    MaintenanceScheduleResponse, MaintenanceScheduleCreate,
+    IncomingMissionResponse, BatteryResponse, BatteryUseRequest
 )
-from app.modules.missions.models import Mission, MissionStatus
+from app.modules.missions.models import Mission, MissionStatus, HandlingStatus
 
 router = APIRouter(prefix="/technician/fleet", tags=["Technician - Fleet"])
 
@@ -31,23 +34,61 @@ async def get_incoming_drones(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    result = await db.execute(
-        select(Mission).where(
-            Mission.status == MissionStatus.COMPLETED,
-            Mission.arrived_at != None,
-            Mission.arrival_confirmed_by == None,
-        ).order_by(Mission.arrived_at.desc())
-    )
-    missions = result.scalars().all()
-    return [
-        {
-            "mission_id": m.id,
-            "drone_id": m.drone_id,
-            "destination_hub_id": m.destination_hub_id,
-            "arrived_at": m.arrived_at,
-        }
-        for m in missions
-    ]
+    from sqlalchemy import cast, String
+    import traceback
+    try:
+        query = (
+            select(
+                Mission.id,
+                Mission.mission_code,
+                cast(Mission.status, String).label("status"),
+                cast(Mission.handling_status, String).label("handling_status"),
+                Drone.name.label("drone_code"),
+                Drone.model.label("model"),
+                Battery.serial_number.label("battery_code"),
+                Battery.charge_level_pct.label("battery_percent")
+            )
+            .outerjoin(Drone, Mission.drone_id == Drone.id)
+            .outerjoin(Battery, Mission.battery_id == Battery.id)
+            .where(
+                Mission.handling_status.in_([
+                    HandlingStatus.INCOMING,
+                    HandlingStatus.AT_HUB,
+                    HandlingStatus.READY,
+                    HandlingStatus.CANNOT_CONTINUE
+                ])
+            )
+        )
+        
+        if user.hub_id and str(user.hub_id).isdigit():
+            query = query.where(Mission.destination_hub_id == int(user.hub_id))
+            
+        query = query.order_by(Mission.scheduled_time.desc().nullslast())
+        
+        result = await db.execute(query)
+        rows = result.all()
+        
+        response = []
+        for row in rows:
+            m_id, m_code, m_status, m_handling, drone_code, model, battery_code, battery_percent = row
+            
+            status_val = m_status.value if hasattr(m_status, "value") else m_status
+            handling_val = m_handling.value if hasattr(m_handling, "value") else m_handling
+            
+            response.append({
+                "mission_code": m_code or f"MSN-{m_id}",
+                "drone_code": drone_code,
+                "model": model,
+                "mission_state": status_val if m_status else None,
+                "battery_code": battery_code,
+                "battery_percent": battery_percent,
+                "handling_status": handling_val if m_handling else None
+            })
+            
+        return response
+    except Exception as e:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=500, content={"error": str(e), "trace": traceback.format_exc()})
 
 
 @router.post("/missions/{mission_id}/confirm-arrival")
@@ -79,8 +120,36 @@ async def list_drones(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    result = await db.execute(select(Drone).order_by(Drone.id))
-    return result.scalars().all()
+    """Chỉ trả về drone tại hub của technician đang đăng nhập."""
+    query = (
+        select(
+            Drone,
+            Hub.name.label("hub_name"),
+            Battery.id.label("installed_battery_id"),
+            Battery.serial_number.label("battery_code")
+        )
+        .outerjoin(Hub, Drone.current_hub_id == Hub.id)
+        .outerjoin(Battery, Battery.drone_id == Drone.id)
+        .order_by(Drone.id)
+    )
+
+    # Filter theo hub của technician
+    if user.hub_id:
+        query = query.where(Drone.current_hub_id == int(user.hub_id))
+
+    result = await db.execute(query)
+    rows = result.all()
+    
+    response = []
+    for row in rows:
+        drone, hub_name, installed_battery_id, battery_code = row
+        drone_dict = drone.__dict__.copy()
+        drone_dict["hub_name"] = hub_name
+        drone_dict["installed_battery_id"] = installed_battery_id
+        drone_dict["battery_code"] = battery_code
+        response.append(drone_dict)
+    
+    return response
 
 
 @router.get("/drones/{drone_id}", response_model=DroneProfileResponse)
@@ -89,10 +158,59 @@ async def get_drone_profile(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    drone = await db.get(Drone, drone_id)
-    if not drone:
-        raise HTTPException(status_code=404, detail="Drone not found")
-    return drone
+    query = (
+        select(
+            Drone,
+            Hub.name.label("hub_name"),
+            Battery.id.label("installed_battery_id"),
+            Battery.serial_number.label("battery_code")
+        )
+        .outerjoin(Hub, Drone.current_hub_id == Hub.id)
+        .outerjoin(Battery, Battery.drone_id == Drone.id)
+        .where(Drone.id == drone_id)
+    )
+    # Technician chỉ xem drone tại hub của mình
+    if user.hub_id:
+        query = query.where(Drone.current_hub_id == int(user.hub_id))
+    result = await db.execute(query)
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Drone not found or not at your hub")
+        
+    drone, hub_name, installed_battery_id, battery_code = row
+    drone_dict = drone.__dict__.copy()
+    drone_dict["hub_name"] = hub_name
+    drone_dict["installed_battery_id"] = installed_battery_id
+    drone_dict["battery_code"] = battery_code
+    
+    # last_flight_at
+    mission_res = await db.execute(
+        select(Mission.arrived_at)
+        .where(Mission.drone_id == drone_id, Mission.status == MissionStatus.COMPLETED)
+        .order_by(Mission.arrived_at.desc())
+        .limit(1)
+    )
+    drone_dict["last_flight_at"] = mission_res.scalar_one_or_none()
+    
+    # next_maintenance_at
+    schedule_res = await db.execute(
+        select(MaintenanceSchedule.next_inspection_at)
+        .where(MaintenanceSchedule.drone_id == drone_id)
+        .order_by(MaintenanceSchedule.next_inspection_at.asc())
+        .limit(1)
+    )
+    drone_dict["next_maintenance_at"] = schedule_res.scalar_one_or_none()
+    
+    # last_maintenance_at
+    wo_res = await db.execute(
+        select(WorkOrder.completed_at)
+        .where(WorkOrder.drone_id == drone_id, WorkOrder.status == WorkOrderStatus.COMPLETED)
+        .order_by(WorkOrder.completed_at.desc())
+        .limit(1)
+    )
+    drone_dict["last_maintenance_at"] = wo_res.scalar_one_or_none()
+    
+    return drone_dict
 
 
 @router.patch("/drones/{drone_id}/status", response_model=DroneProfileResponse)
@@ -111,7 +229,21 @@ async def update_drone_status(
     return drone
 
 
-@router.get("/batteries")
+def get_estimated_charging_minutes(current_charge: int, cycle_duration_min: int = 15) -> int:
+    if current_charge is None or current_charge >= 100: 
+        return 0
+    cycles = 0
+    charge = float(current_charge)
+    while charge < 99.0:
+        if charge < 80:
+            charge += 40
+        else:
+            charge += 0.5 * (100 - charge)
+        cycles += 1
+    return cycles * cycle_duration_min
+
+
+@router.get("/batteries", response_model=list[BatteryResponse])
 async def get_hub_batteries(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
@@ -120,25 +252,48 @@ async def get_hub_batteries(
         return []
     
     hub_id = int(user.hub_id) if str(user.hub_id).isdigit() else user.hub_id
-
     
     result = await db.execute(
         select(Battery).where(Battery.current_hub_id == hub_id).order_by(Battery.id)
     )
     batteries = result.scalars().all()
     
-    return [
-        {
+    response = []
+    for b in batteries:
+        mins = get_estimated_charging_minutes(b.charge_level_pct) if b.status == "Charging" or (b.charge_level_pct and b.charge_level_pct < 100 and b.drone_id is None) else 0
+        response.append({
             "id": b.id,
             "serial_number": b.serial_number,
             "capacity_wh": b.capacity_wh,
             "status": b.status,
             "drone_id": b.drone_id,
             "current_hub_id": b.current_hub_id,
-            "charge_level_pct": b.charge_level_pct
-        }
-        for b in batteries
-    ]
+            "charge_level_pct": b.charge_level_pct,
+            "estimated_minutes_remaining": mins
+        })
+    return response
+
+
+@router.post("/batteries/{battery_id}/use")
+async def use_battery_for_mission(
+    battery_id: int,
+    body: BatteryUseRequest,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    battery = await db.get(Battery, battery_id)
+    if not battery:
+        raise HTTPException(status_code=404, detail="Battery not found")
+        
+    mission = await db.get(Mission, body.mission_id)
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission not found")
+        
+    mission.battery_id = battery.id
+    battery.status = "In Use"
+    await db.commit()
+    
+    return {"message": "Battery assigned successfully"}
 
 
 @router.post("/batteries/{battery_id}/mark-charged")
@@ -364,8 +519,30 @@ async def list_work_orders(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    result = await db.execute(select(WorkOrder).order_by(WorkOrder.id.desc()))
-    return result.scalars().all()
+    query = (
+        select(
+            WorkOrder,
+            Drone.name.label("drone_code"),
+            Drone.model.label("model"),
+            User.full_name.label("assigned_technician_name")
+        )
+        .outerjoin(Drone, WorkOrder.drone_id == Drone.id)
+        .outerjoin(User, cast(WorkOrder.technician_id, String) == User.id)
+        .order_by(WorkOrder.id.desc())
+    )
+    result = await db.execute(query)
+    rows = result.all()
+    
+    response = []
+    for row in rows:
+        wo, drone_code, model, assigned_technician_name = row
+        wo_dict = wo.__dict__.copy()
+        wo_dict["drone_code"] = drone_code
+        wo_dict["model"] = model
+        wo_dict["assigned_technician_name"] = assigned_technician_name
+        response.append(wo_dict)
+    
+    return response
 
 
 @router.get("/work-orders/{work_order_id}", response_model=WorkOrderResponse)
@@ -374,10 +551,30 @@ async def get_work_order(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    wo = await db.get(WorkOrder, work_order_id)
-    if not wo:
+    query = (
+        select(
+            WorkOrder,
+            Drone.name.label("drone_code"),
+            Drone.model.label("model"),
+            User.full_name.label("assigned_technician_name")
+        )
+        .outerjoin(Drone, WorkOrder.drone_id == Drone.id)
+        .outerjoin(User, cast(WorkOrder.technician_id, String) == User.id)
+        .where(WorkOrder.id == work_order_id)
+    )
+    result = await db.execute(query)
+    row = result.first()
+    
+    if not row:
         raise HTTPException(status_code=404, detail="Work order not found")
-    return wo
+        
+    wo, drone_code, model, assigned_technician_name = row
+    wo_dict = wo.__dict__.copy()
+    wo_dict["drone_code"] = drone_code
+    wo_dict["model"] = model
+    wo_dict["assigned_technician_name"] = assigned_technician_name
+    
+    return wo_dict
 
 
 @router.post("/work-orders", response_model=WorkOrderResponse, status_code=201)

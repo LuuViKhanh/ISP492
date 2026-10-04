@@ -144,3 +144,28 @@ class LiveTrackingDrone(BaseModel):
 class LiveTrackingResponse(BaseModel):
     active_count: int
     drones: list[LiveTrackingDrone]
+
+class MissionPlanningAnalyzeRequest(BaseModel):
+    orderId: str
+    droneId: int
+
+class RouteOptionSchema(BaseModel):
+    routeId: str
+    distanceKm: float
+    relayHubs: list[str]
+    predictedDurationMin: int
+    predictedEnergyWh: float
+    batteryConsumptionPct: int
+    remainingBatteryPct: int
+    confidencePct: int
+    risk: str
+    recommended: bool
+
+class MissionPlanningAnalyzeResponse(BaseModel):
+    routes: list[RouteOptionSchema]
+
+class MissionCreateRequest(BaseModel):
+    orderId: str
+    droneId: int
+    routeId: str
+
