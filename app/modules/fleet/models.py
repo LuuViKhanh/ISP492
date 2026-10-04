@@ -6,10 +6,10 @@ from app.database.db import Base
 
 # ==================== ENUMS ====================
 class DroneStatus(str, enum.Enum):
-    AVAILABLE = "Available"
-    IN_MISSION = "In Mission"
+    AVAILABLE   = "Available"
+    IN_FLIGHT   = "In Flight"
     MAINTENANCE = "Maintenance"
-    RETIRED = "Retired"
+    RETIRED     = "Retired"
 
 class batteries_status(str, enum.Enum):
     ACTIVE = "Active"
