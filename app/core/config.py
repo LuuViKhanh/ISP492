@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     EMAIL_FROM: str = "noreply@droneoptai.com"
     FRONTEND_URL: str = "http://localhost:3000"
 
+    # PayOS
+    PAYOS_CLIENT_ID: str = ""
+    PAYOS_API_KEY: str = ""
+    PAYOS_CHECKSUM_KEY: str = ""
+
     class Config:
         env_file = ".env"
         extra = "ignore"

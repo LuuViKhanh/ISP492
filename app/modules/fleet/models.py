@@ -41,12 +41,16 @@ class Battery(Base):
     __tablename__ = "batteries"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    drone_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("drones.id"), nullable=True)
     serial_number: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     capacity_wh: Mapped[float] = mapped_column(Float, nullable=False)
-    status: Mapped[batteries_status] = mapped_column(SAEnum(batteries_status, name="batteries_status", create_type=False, values_callable=lambda x: [e.value for e in x]))
-    drone_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("drones.id"), nullable=True)
-    current_hub_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    charge_level_pct: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[batteries_status] = mapped_column(SAEnum(batteries_status, name="batteries_status", create_type=False, values_callable=lambda x: [e.value for e in x]), nullable=False)
+    current_hub_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("hubs.id"), nullable=True)
+    charge_level_pct: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    create_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    update_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    battery_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    
     drone = relationship("Drone", back_populates="batteries")
 
 
@@ -56,7 +60,7 @@ class WorkOrder(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     drone_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     battery_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    technician_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    technician_id: Mapped[str] = mapped_column(String, nullable=False)
     issue_description: Mapped[str] = mapped_column(Text, nullable=False)
     action_taken: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[WorkOrderStatus] = mapped_column(
