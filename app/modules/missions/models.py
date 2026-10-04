@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import BigInteger, Float, String, DateTime, Integer, Boolean, Enum as SAEnum
+from sqlalchemy import BigInteger, Float, String, DateTime, Integer, Boolean, Enum as SAEnum, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from datetime import datetime
 from typing import Optional
