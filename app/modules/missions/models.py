@@ -6,6 +6,15 @@ from typing import Optional
 from app.database.db import Base
 
 
+class PaymentStatus(str, enum.Enum):
+    UNPAID    = "UNPAID"
+    PENDING   = "PENDING"   # Đã tạo link, chờ user thanh toán
+    PAID      = "PAID"
+    FAILED    = "FAILED"
+    CANCELLED = "CANCELLED"
+    REFUNDED  = "REFUNDED"
+
+
 class OrderStatus(str, enum.Enum):
     PENDING = "PENDING"
     IN_DELIVERY = "IN_DELIVERY"
@@ -194,6 +203,16 @@ class Order(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # ── Payment fields ────────────────────────────────────────
+    delivery_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
+    payment_status: Mapped[PaymentStatus | None] = mapped_column(
+        SAEnum(PaymentStatus, name="payment_status_enum", create_type=False, values_callable=lambda x: [e.value for e in x]),
+        nullable=True, default=PaymentStatus.UNPAID
+    )
+    payment_order_code: Mapped[int | None] = mapped_column(BigInteger, nullable=True, unique=True)
+    payment_transaction_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    payment_checkout_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 class MissionLeg(Base):
     __tablename__ = "mission_legs"
