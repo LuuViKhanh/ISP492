@@ -15,7 +15,7 @@ class CurrentUser(BaseModel):
     id: str
     email: str
     role: UserRole
-    hub_id: str | None = None
+    hub_id: int | None = None
 
 
 async def get_current_user(
