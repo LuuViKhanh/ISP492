@@ -198,17 +198,34 @@ async def payos_webhook(
     received_sig = payload.get("signature", "")
     data = payload.get("data", {})
 
-    # Build canonical string (theo docs PayOS)
-    sorted_keys = sorted(data.keys())
-    canonical = "&".join(f"{k}={data[k]}" for k in sorted_keys)
-    expected_sig = hmac.new(settings.PAYOS_CHECKSUM_KEY.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+    # Build canonical string theo đúng thứ tự PayOS docs:
+    # amount, canceledAt, cancellationReason, code, counterAccountBankId,
+    # counterAccountBankName, counterAccountName, counterAccountNumber,
+    # currency, description, orderCode, paymentLinkId, reference,
+    # transactionDateTime, virtualAccountName, virtualAccountNumber
+    PAYOS_SIGNED_FIELDS = [
+        "amount", "canceledAt", "cancellationReason", "code",
+        "counterAccountBankId", "counterAccountBankName",
+        "counterAccountName", "counterAccountNumber",
+        "currency", "description", "orderCode", "paymentLinkId",
+        "reference", "transactionDateTime",
+        "virtualAccountName", "virtualAccountNumber",
+    ]
+    canonical = "&".join(
+        f"{k}={data[k]}" for k in PAYOS_SIGNED_FIELDS if k in data
+    )
+    expected_sig = hmac.new(
+        settings.PAYOS_CHECKSUM_KEY.encode(),
+        canonical.encode(),
+        hashlib.sha256,
+    ).hexdigest()
 
     if not hmac.compare_digest(received_sig, expected_sig):
         return JSONResponse(status_code=400, content={"error": "Invalid signature"})
 
     # ── Xử lý kết quả thanh toán ────────────────────────────────────────────
-    order_code  = data.get("orderCode")
-    status_code = data.get("code")          # "00" = thành công
+    order_code     = data.get("orderCode")
+    status_code    = payload.get("code")   # "00" ở root level theo docs PayOS
     transaction_id = str(data.get("transactionDateTime", ""))
 
     if not order_code:
