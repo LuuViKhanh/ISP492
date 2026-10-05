@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+﻿from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func
 from datetime import timedelta
@@ -207,6 +207,109 @@ async def get_live_tracking(
         )
 
     return LiveTrackingResponse(active_count=len(drones), drones=drones)
+
+
+# ── Incidents ────────────────────────────────────────────────────────────────────────────────────
+
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+
+class IncidentCreate(BaseModel):
+    mission_id: Optional[int] = None
+    drone_id: Optional[int] = None
+    severity: IncidentSeverity
+    description: str
+    requires_technical_inspection: bool = False
+
+class IncidentResponse(BaseModel):
+    id: int
+    mission_id: Optional[int]
+    drone_id: Optional[int]
+    reporter_id: Optional[str]
+    severity: IncidentSeverity
+    description: str
+    status: IncidentStatus
+    reported_at: Optional[datetime]
+    requires_technical_inspection: bool
+
+    class Config:
+        from_attributes = True
+
+
+@router.get("/incidents", response_model=list[IncidentResponse])
+async def list_incidents(
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    result = await db.execute(select(Incident).order_by(Incident.id.desc()))
+    return result.scalars().all()
+
+
+@router.get("/incidents/{incident_id}", response_model=IncidentResponse)
+async def get_incident(
+    incident_id: int,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    incident = await db.get(Incident, incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return incident
+
+
+@router.post("/incidents", response_model=IncidentResponse, status_code=201)
+async def create_incident(
+    body: IncidentCreate,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    from datetime import timezone
+    now = datetime.now(timezone.utc)
+    incident = Incident(
+        mission_id=body.mission_id,
+        drone_id=body.drone_id,
+        reporter_id=user.id,
+        severity=body.severity,
+        description=body.description,
+        status=IncidentStatus.OPEN,
+        reported_at=now,
+        requires_technical_inspection=body.requires_technical_inspection,
+    )
+    db.add(incident)
+    await db.flush()
+
+    # Tự động tạo maintenance_alert nếu cần kiểm tra kỹ thuật
+    if body.requires_technical_inspection:
+        alert = MaintenanceAlert(
+            drone_id=body.drone_id,
+            source="INCIDENT",
+            incident_id=incident.id,
+            title=f"Incident #{incident.id}: {body.description[:50]}",
+            status="PENDING",
+            created_at=now.replace(tzinfo=None),
+        )
+        db.add(alert)
+
+    await db.commit()
+    await db.refresh(incident)
+    return incident
+
+
+@router.patch("/incidents/{incident_id}/status", response_model=IncidentResponse)
+async def update_incident_status(
+    incident_id: int,
+    status: IncidentStatus,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    incident = await db.get(Incident, incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    incident.status = status
+    await db.commit()
+    await db.refresh(incident)
+    return incident
 
 
 @router.get("/{mission_id}", response_model=MissionResponse, summary="Lấy thông tin chi tiết một mission")
@@ -625,107 +728,6 @@ async def get_hub_checkpoints(
 
 # ── Hubs & Locations ──────────────────────────────────────────────────────────────
 
-# ── Incidents ────────────────────────────────────────────────────────────────────────────────────
-
-from pydantic import BaseModel
-from typing import Optional
-from datetime import datetime
-
-class IncidentCreate(BaseModel):
-    mission_id: Optional[int] = None
-    drone_id: Optional[int] = None
-    severity: IncidentSeverity
-    description: str
-    requires_technical_inspection: bool = False
-
-class IncidentResponse(BaseModel):
-    id: int
-    mission_id: Optional[int]
-    drone_id: Optional[int]
-    reporter_id: Optional[str]
-    severity: IncidentSeverity
-    description: str
-    status: IncidentStatus
-    reported_at: Optional[datetime]
-    requires_technical_inspection: bool
-
-    class Config:
-        from_attributes = True
-
-
-@router.get("/incidents", response_model=list[IncidentResponse])
-async def list_incidents(
-    user: CurrentUser = Depends(allow_operator),
-    db: AsyncSession = Depends(get_async_db),
-):
-    result = await db.execute(select(Incident).order_by(Incident.id.desc()))
-    return result.scalars().all()
-
-
-@router.get("/incidents/{incident_id}", response_model=IncidentResponse)
-async def get_incident(
-    incident_id: int,
-    user: CurrentUser = Depends(allow_operator),
-    db: AsyncSession = Depends(get_async_db),
-):
-    incident = await db.get(Incident, incident_id)
-    if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    return incident
-
-
-@router.post("/incidents", response_model=IncidentResponse, status_code=201)
-async def create_incident(
-    body: IncidentCreate,
-    user: CurrentUser = Depends(allow_operator),
-    db: AsyncSession = Depends(get_async_db),
-):
-    from datetime import timezone
-    now = datetime.now(timezone.utc)
-    incident = Incident(
-        mission_id=body.mission_id,
-        drone_id=body.drone_id,
-        reporter_id=user.id,
-        severity=body.severity,
-        description=body.description,
-        status=IncidentStatus.OPEN,
-        reported_at=now,
-        requires_technical_inspection=body.requires_technical_inspection,
-    )
-    db.add(incident)
-    await db.flush()
-
-    # Tự động tạo maintenance_alert nếu cần kiểm tra kỹ thuật
-    if body.requires_technical_inspection:
-        alert = MaintenanceAlert(
-            drone_id=body.drone_id,
-            source="INCIDENT",
-            incident_id=incident.id,
-            title=f"Incident #{incident.id}: {body.description[:50]}",
-            status="PENDING",
-            created_at=now.replace(tzinfo=None),
-        )
-        db.add(alert)
-
-    await db.commit()
-    await db.refresh(incident)
-    return incident
-
-
-@router.patch("/incidents/{incident_id}/status", response_model=IncidentResponse)
-async def update_incident_status(
-    incident_id: int,
-    status: IncidentStatus,
-    user: CurrentUser = Depends(allow_operator),
-    db: AsyncSession = Depends(get_async_db),
-):
-    incident = await db.get(Incident, incident_id)
-    if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    incident.status = status
-    await db.commit()
-    await db.refresh(incident)
-    return incident
 
 from app.modules.missions.schemas import MissionPlanningAnalyzeRequest, MissionPlanningAnalyzeResponse, RouteOptionSchema, MissionCreateRequest
 from app.modules.missions.models import Order, OrderStatus
