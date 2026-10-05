@@ -196,7 +196,7 @@ async def payos_webhook(
 
     # ── Verify signature ────────────────────────────────────────────────────
     # PayOS gửi signature trong payload["signature"]
-        received_sig = payload.get("signature", "")
+    received_sig = payload.get("signature", "")
     data = payload.get("data", {})
 
     # Neu khong co data (PayOS test call khi register webhook) -> tra ve 200 luon
