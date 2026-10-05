@@ -11,7 +11,7 @@
 | attery_status | Fully Charged, In Use, Charging, Degraded |
 | attery_status_enum | FULLY_CHARGED, IN_USE, CHARGING, DEGRADED |
 | locations_type | Hub, CustomerAddress, MiniHub |
-| missions_status | Awaiting Payment, Pending Approval, Approved, Rejected, Flying, Completed, Cancelled, Active mission, Mission completed, Incident return |
+| missions_status | Scheduled, In Progress, Completed, Cancelled, Failed, Awaiting Payment, Pending Approval, Approved, Rejected, Flying, Active mission, Mission completed, Incident return |
 | missions_handling_status | Incoming, At hub, Ready, Cannot continue |
 | mission_leg_status_enum | PENDING, IN_PROGRESS, COMPLETED |
 | payment_method | VNPay, Momo, Credit Card, Cash |
