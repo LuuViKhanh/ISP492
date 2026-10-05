@@ -27,6 +27,11 @@ class AvailableBatterySchema(BaseModel):
     capacity_wh: float
     status: str
     drone_id: Optional[int]
+    current_hub_id: Optional[int] = None
+    charge_level_pct: Optional[int] = None
+    create_at: Optional[datetime] = None
+    update_at: Optional[datetime] = None
+    battery_model: Optional[str] = None
 
 class AvailabilityResponse(BaseModel):
     available_drones: List[AvailableDroneSchema]
