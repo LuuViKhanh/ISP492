@@ -269,7 +269,7 @@ async def register_webhook(
     Webhook URL: {FRONTEND_URL}/api/v1/payments/webhook
     """
     import httpx
-    webhook_url = f"https://isp492.onrender.com/api/v1/payments/webhook"
+    webhook_url = f"{settings.BACKEND_URL.rstrip(chr(47))}/api/v1/payments/webhook"
 
     try:
         async with httpx.AsyncClient() as client:

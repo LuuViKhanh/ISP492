@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     PAYOS_CLIENT_ID: str = ""
     PAYOS_API_KEY: str = ""
     PAYOS_CHECKSUM_KEY: str = ""
+    BACKEND_URL: str = "https://isp492.onrender.com"
 
     class Config:
         env_file = ".env"
