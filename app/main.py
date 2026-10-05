@@ -168,7 +168,7 @@ app.include_router(db_router)
 # Tự động include các router của các roles
 import importlib
 loaded_chatbot_roles = []
-for mod in ["auth", "users", "missions", "fleet", "ai_predictions", "orders", "chatbot"]:
+for mod in ["auth", "users", "missions", "fleet", "ai_predictions", "orders", "chatbot", "dashboard"]:
     for role in ["admin", "operator", "technician", "customer"]:
         target_mod = f"app.modules.{mod}.{role}.router"
         try:
