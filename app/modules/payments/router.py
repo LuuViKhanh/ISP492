@@ -225,7 +225,7 @@ async def payos_webhook(
     # ── Xử lý kết quả thanh toán ────────────────────────────────────────────
     order_code     = data.get("orderCode")
     status_code    = payload.get("code")   # "00" ở root level theo docs PayOS
-    transaction_id = str(data.get("transactionDateTime", ""))
+    transaction_id = str(data.get("reference", "") or data.get("transactionDateTime", ""))
 
     if not order_code:
         return JSONResponse(status_code=200, content={"message": "Ignored"})
