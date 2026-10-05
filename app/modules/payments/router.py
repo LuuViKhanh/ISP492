@@ -1,4 +1,4 @@
-"""
+﻿"""
 app/modules/payments/router.py
 ────────────────────────────────
 Payment endpoints dùng PayOS.
@@ -196,32 +196,30 @@ async def payos_webhook(
 
     # ── Verify signature ────────────────────────────────────────────────────
     # PayOS gửi signature trong payload["signature"]
-    received_sig = payload.get("signature", "")
+        received_sig = payload.get("signature", "")
     data = payload.get("data", {})
 
-    # Build canonical string theo đúng thứ tự PayOS docs:
-    # amount, canceledAt, cancellationReason, code, counterAccountBankId,
-    # counterAccountBankName, counterAccountName, counterAccountNumber,
-    # currency, description, orderCode, paymentLinkId, reference,
-    # transactionDateTime, virtualAccountName, virtualAccountNumber
-    PAYOS_SIGNED_FIELDS = [
-        "amount", "canceledAt", "cancellationReason", "code",
-        "counterAccountBankId", "counterAccountBankName",
-        "counterAccountName", "counterAccountNumber",
-        "currency", "description", "orderCode", "paymentLinkId",
-        "reference", "transactionDateTime",
-        "virtualAccountName", "virtualAccountNumber",
-    ]
-    canonical = "&".join(
-        f"{k}={data[k]}" for k in PAYOS_SIGNED_FIELDS if k in data
-    )
+    # Neu khong co data (PayOS test call khi register webhook) -> tra ve 200 luon
+    if not data:
+        return JSONResponse(status_code=200, content={"message": "OK"})
+
+    # Build canonical string: sort keys alphabet, bo qua null/undefined
+    sorted_keys = sorted(data.keys())
+    parts = []
+    for k in sorted_keys:
+        v = data[k]
+        if v is None or str(v) in ("undefined", "null"):
+            v = ""
+        parts.append(f"{k}={v}")
+    canonical = "&".join(parts)
+
     expected_sig = hmac.new(
         settings.PAYOS_CHECKSUM_KEY.encode(),
         canonical.encode(),
         hashlib.sha256,
     ).hexdigest()
 
-    if not hmac.compare_digest(received_sig, expected_sig):
+    if not hmac.compare_digest(received_sig.lower(), expected_sig.lower()):
         return JSONResponse(status_code=400, content={"error": "Invalid signature"})
 
     # ── Xử lý kết quả thanh toán ────────────────────────────────────────────
