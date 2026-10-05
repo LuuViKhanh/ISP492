@@ -45,3 +45,149 @@ class HubEligibleSchema(BaseModel):
 class EligibleDronesResponse(BaseModel):
     hub: HubEligibleSchema
     drones: List[DroneEligibleSchema]
+
+
+# ======================================================================
+# CUSTOMER — Order Management & Tracking (Spec VI)
+# ======================================================================
+
+class OrderCreateRequest(BaseModel):
+    """Customer tạo yêu cầu giao hàng (Create Delivery). Bỏ qua thanh toán."""
+    package_label: Optional[str] = None
+    package_type: Optional[str] = None
+    payload_kg: float
+    origin_hub_id: int          # Điểm lấy hàng (Pickup)
+    destination_hub_id: int     # Điểm giao hàng (Delivery)
+    delivery_mode: Optional[DeliveryMode] = None
+    requested_delivery_at: Optional[datetime] = None
+
+
+class OrderUpdateRequest(BaseModel):
+    """Operator cập nhật đơn (chỉ khi đơn còn PENDING)."""
+    package_label: Optional[str] = None
+    package_type: Optional[str] = None
+    payload_kg: Optional[float] = None
+    destination_hub_id: Optional[int] = None
+    delivery_mode: Optional[DeliveryMode] = None
+    requested_delivery_at: Optional[datetime] = None
+    planning_at: Optional[datetime] = None
+
+
+class OrderCancelRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+class CustomerOrderSummary(BaseModel):
+    """Đơn hàng dưới góc nhìn Customer (list + detail), kèm trạng thái giao thân thiện."""
+    id: str
+    package_label: Optional[str] = None
+    package_type: Optional[str] = None
+    payload_kg: Optional[float] = None
+    delivery_mode: Optional[DeliveryMode] = None
+    status: OrderStatus
+    delivery_status: str
+    delivery_status_label: str
+    origin_hub_id: Optional[int] = None
+    origin_hub_name: Optional[str] = None
+    destination_hub_id: Optional[int] = None
+    destination_hub_name: Optional[str] = None
+    mission_id: Optional[str] = None
+    requested_delivery_at: Optional[datetime] = None
+    estimated_window_start: Optional[datetime] = None
+    estimated_window_end: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+
+# ── Tracking ──────────────────────────────────────────────────────────
+
+class DroneLocationSchema(BaseModel):
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    altitude: Optional[float] = None
+    speed: Optional[float] = None
+    battery_voltage: Optional[float] = None
+    last_updated: Optional[datetime] = None
+
+
+class RoutePointSchema(BaseModel):
+    latitude: float
+    longitude: float
+    name: Optional[str] = None
+
+
+class TrackingResponse(BaseModel):
+    order_id: str
+    delivery_status: str
+    delivery_status_label: str
+    eta: Optional[datetime] = None                 # = order.estimated_window_end
+    estimated_window_start: Optional[datetime] = None
+    mission_id: Optional[str] = None
+    mission_status: Optional[str] = None
+    drone_id: Optional[int] = None
+    drone_location: Optional[DroneLocationSchema] = None
+    origin: Optional[RoutePointSchema] = None
+    destination: Optional[RoutePointSchema] = None
+    travelled_path: List[RoutePointSchema] = []
+    checkpoints_passed: int = 0
+
+
+# ── Mission Report ────────────────────────────────────────────────────
+
+class ReportHubSchema(BaseModel):
+    id: Optional[int] = None
+    name: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+
+class ReportRouteSchema(BaseModel):
+    origin: Optional[ReportHubSchema] = None
+    destination: Optional[ReportHubSchema] = None
+    distance_m: Optional[float] = None
+
+
+class ReportTimelineSchema(BaseModel):
+    created_at: Optional[datetime] = None
+    planned_start_at: Optional[datetime] = None
+    departed_at: Optional[datetime] = None
+    arrived_at: Optional[datetime] = None
+    arrival_confirmed_at: Optional[datetime] = None
+
+
+class ReportPredictionSchema(BaseModel):
+    predicted_duration_min: Optional[int] = None
+    estimated_energy_wh: Optional[float] = None
+    battery_consumption_pct: Optional[int] = None
+    predicted_remaining_battery_pct: Optional[int] = None
+    confidence_pct: Optional[int] = None
+    risk_level: Optional[str] = None
+
+
+class ReportDroneSchema(BaseModel):
+    id: Optional[int] = None
+    name: Optional[str] = None
+    model: Optional[str] = None
+
+
+class ReportActualsSchema(BaseModel):
+    actual_duration_min: Optional[float] = None
+    actual_energy_wh: Optional[float] = None
+    telemetry_points: int = 0
+
+
+class MissionReportResponse(BaseModel):
+    order_id: str
+    mission_id: Optional[str] = None
+    mission_code: Optional[str] = None
+    package_label: Optional[str] = None
+    package_type: Optional[str] = None
+    payload_kg: Optional[float] = None
+    delivery_mode: Optional[DeliveryMode] = None
+    status: OrderStatus
+    delivery_status_label: str
+    route: ReportRouteSchema
+    timeline: ReportTimelineSchema
+    prediction: ReportPredictionSchema
+    drone: Optional[ReportDroneSchema] = None
+    actuals: ReportActualsSchema
+    generated_at: datetime

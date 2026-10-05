@@ -15,8 +15,10 @@ from app.modules.orders.schemas import (
     OriginPackageSchema,
     EligibleDronesResponse,
     HubEligibleSchema,
-    DroneEligibleSchema
+    DroneEligibleSchema,
+    OrderUpdateRequest,
 )
+from app.core.config import settings
 
 router = APIRouter(prefix="/operator/orders", tags=["Orders"])
 allow_operator = RoleChecker([UserRole.OPERATOR, UserRole.ADMIN])
@@ -192,7 +194,7 @@ async def cancel_order(
 ):
     """
     Huỷ đơn hàng — chỉ cho phép khi order đang PENDING.
-    Tự động gửi SMS thông báo huỷ đến receiver_phone.
+    Tự động gửi email thông báo huỷ đến receiver_email.
     """
     order = await db.get(Order, order_id)
     if not order:
@@ -226,3 +228,54 @@ async def cancel_order(
         print(f"[EMAIL] Lỗi gửi email huỷ order: {e}")
 
     return {"message": "Đã huỷ đơn hàng", "order_id": order_id, "status": "CANCELLED"}
+
+
+@router.patch("/{order_id}", response_model=OrderResponse)
+async def update_order(
+    order_id: str,
+    body: OrderUpdateRequest,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    **[Operator API] Cập nhật đơn hàng (chỉ khi còn PENDING)**
+
+    Cho phép sửa thông tin kiện hàng, hub giao, phương thức giao, thời gian mong muốn/lên lịch
+    khi đơn chưa được lên chuyến. Chỉ cập nhật các trường được truyền lên.
+    """
+    order = await db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.status != OrderStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Only PENDING orders can be updated")
+
+    if body.destination_hub_id is not None:
+        if not await db.get(Hub, body.destination_hub_id):
+            raise HTTPException(status_code=404, detail="Destination hub not found")
+        order.destination_hub_id = body.destination_hub_id
+    if body.payload_kg is not None:
+        if body.payload_kg <= 0:
+            raise HTTPException(status_code=400, detail="payload_kg must be greater than 0")
+        order.payload_kg = body.payload_kg
+    if body.package_label is not None:
+        order.package_label = body.package_label
+    if body.package_type is not None:
+        order.package_type = body.package_type
+    if body.delivery_mode is not None:
+        order.delivery_mode = body.delivery_mode
+    if body.requested_delivery_at is not None:
+        order.requested_delivery_at = body.requested_delivery_at
+    if body.planning_at is not None:
+        order.planning_at = body.planning_at
+
+    order.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    await db.commit()
+    await db.refresh(order)
+
+    resp = OrderResponse.model_validate(order)
+    resp.planningState = calculate_planning_state(order)
+    resp.originPackage = OriginPackageSchema(
+        received=bool(order.origin_received_at),
+        received_at=order.origin_received_at,
+    )
+    return resp

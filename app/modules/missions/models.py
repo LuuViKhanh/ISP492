@@ -110,6 +110,24 @@ class Mission(Base):
     arrived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     arrival_confirmed_by: Mapped[str | None] = mapped_column(String, nullable=True)
     arrival_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # ── Cột mở rộng theo Spec VI (đã thêm vào DB qua migrate_operator_schema.py) ──
+    route_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    planned_start_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    package_receive_deadline_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    estimated_arrival_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    actual_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    actual_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    predicted_duration_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    estimated_energy_wh: Mapped[float | None] = mapped_column(Float, nullable=True)
+    battery_consumption_pct: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    predicted_remaining_battery_pct: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confidence_pct: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    risk_level: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cancel_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class TelemetryLog(Base):
