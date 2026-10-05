@@ -7,6 +7,9 @@ from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser, get_current_user
 from app.shared.roles import UserRole
 from app.modules.missions.models import Mission, HandlingStatus, MissionStatus
+from app.modules.hubs.models import Hub
+from app.modules.fleet.models import Drone, Battery
+from app.modules.auth.models import User
 
 router = APIRouter()
 
@@ -53,10 +56,18 @@ async def get_outbound_deliveries(
         query = select(
             Mission.id,
             Mission.order_code,
+            Mission.mission_code,
             cast(Mission.status, String).label("status"),
             cast(Mission.handling_status, String).label("handling_status"),
-            Mission.origin_hub_id,
-            Mission.destination_hub_id
+            Hub.name.label("destination_hub_name"),
+            Drone.name.label("drone_name"),
+            Battery.serial_number.label("battery_serial")
+        ).outerjoin(
+            Hub, Mission.destination_hub_id == Hub.id
+        ).outerjoin(
+            Drone, Mission.drone_id == Drone.id
+        ).outerjoin(
+            Battery, Mission.battery_id == Battery.id
         ).where(
             Mission.departed_at.is_(None),
             Mission.status != MissionStatus.MISSION_COMPLETED,
@@ -71,10 +82,12 @@ async def get_outbound_deliveries(
             {
                 "id": row.id,
                 "order_code": row.order_code,
+                "mission_code": row.mission_code,
+                "destination_hub": row.destination_hub_name,
+                "drone": row.drone_name,
+                "battery": row.battery_serial,
                 "status": getattr(row.status, "value", row.status),
-                "handling_status": getattr(row.handling_status, "value", row.handling_status),
-                "origin_hub_id": row.origin_hub_id,
-                "destination_hub_id": row.destination_hub_id
+                "handling_status": getattr(row.handling_status, "value", row.handling_status)
             } for row in rows
         ]
     except Exception as e:
@@ -129,10 +142,21 @@ async def get_confirmations(
         query = select(
             Mission.id,
             Mission.order_code,
+            Mission.mission_code,
             cast(Mission.status, String).label("status"),
             cast(Mission.handling_status, String).label("handling_status"),
-            Mission.origin_hub_id,
-            Mission.destination_hub_id
+            Hub.name.label("origin_hub_name"),
+            Drone.name.label("drone_name"),
+            Battery.serial_number.label("battery_serial"),
+            User.full_name.label("customer_name")
+        ).outerjoin(
+            Hub, Mission.origin_hub_id == Hub.id
+        ).outerjoin(
+            Drone, Mission.drone_id == Drone.id
+        ).outerjoin(
+            Battery, Mission.battery_id == Battery.id
+        ).outerjoin(
+            User, Mission.customer_id == User.email
         ).where(
             Mission.arrived_at.is_not(None),
             Mission.arrival_confirmed_at.is_(None),
@@ -147,10 +171,13 @@ async def get_confirmations(
             {
                 "id": row.id,
                 "order_code": row.order_code,
+                "mission_code": row.mission_code,
+                "origin_hub": row.origin_hub_name,
+                "drone": row.drone_name,
+                "battery": row.battery_serial,
+                "customer_name": row.customer_name,
                 "status": getattr(row.status, "value", row.status),
-                "handling_status": getattr(row.handling_status, "value", row.handling_status),
-                "origin_hub_id": row.origin_hub_id,
-                "destination_hub_id": row.destination_hub_id
+                "handling_status": getattr(row.handling_status, "value", row.handling_status)
             } for row in rows
         ]
     except Exception as e:
