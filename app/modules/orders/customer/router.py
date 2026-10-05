@@ -17,7 +17,7 @@ from app.modules.orders.customer.schemas import (
 )
 from app.modules.ai_predictions.service import predict_flight_energy, haversine_distance
 
-router = APIRouter(prefix="/customer", tags=["Customer - Orders"])
+router = APIRouter(prefix="/customer", tags=["Orders"])
 
 @router.get("/hubs", response_model=list[HubResponse])
 async def get_hubs(db: AsyncSession = Depends(get_async_db)):

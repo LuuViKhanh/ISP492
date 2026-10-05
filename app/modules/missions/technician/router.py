@@ -15,12 +15,12 @@ router = APIRouter()
 
 missions_router = APIRouter(
     prefix="/technician/missions",
-    tags=["Technician - Missions"]
+    tags=["Missions"]
 )
 
 deliveries_router = APIRouter(
     prefix="/technician/deliveries",
-    tags=["Technician - Deliveries"]
+    tags=["Missions"]
 )
 
 allow_technician = RoleChecker([UserRole.TECHNICIAN, UserRole.ADMIN])

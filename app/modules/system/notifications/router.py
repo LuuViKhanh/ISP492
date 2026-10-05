@@ -9,7 +9,7 @@ from app.database.db import get_async_db
 from app.shared.dependencies import get_current_user, CurrentUser
 from app.modules.system.models import Notification, NotificationType
 
-router = APIRouter(prefix="/notifications", tags=["Notifications"])
+router = APIRouter(prefix="/notifications", tags=["System"])
 
 
 class NotificationResponse(BaseModel):
