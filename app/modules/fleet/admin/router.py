@@ -9,7 +9,7 @@ from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
 from app.modules.fleet.models import Drone, DroneStatus, Battery, batteries_status
 
-router = APIRouter(prefix="/admin/fleet", tags=["Admin - Fleet"])
+router = APIRouter(prefix="/admin/fleet", tags=["Fleet"])
 
 allow_admin = RoleChecker([UserRole.ADMIN])
 

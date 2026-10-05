@@ -2,7 +2,7 @@ from fastapi import APIRouter
 
 router = APIRouter(
     prefix="/operator/auth",
-    tags=["Operator - Auth"]
+    tags=["Authentication"]
 )
 
 @router.get("/")

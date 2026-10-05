@@ -22,7 +22,7 @@ from app.modules.fleet.technician.schemas import (
 )
 from app.modules.missions.models import Mission, MissionStatus, HandlingStatus
 
-router = APIRouter(prefix="/technician/fleet", tags=["Technician - Fleet"])
+router = APIRouter(prefix="/technician/fleet", tags=["Fleet"])
 
 allow_technician = RoleChecker([UserRole.TECHNICIAN, UserRole.ADMIN])
 

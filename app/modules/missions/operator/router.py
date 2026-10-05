@@ -20,7 +20,7 @@ from app.modules.missions.schemas import (
 from app.modules.fleet.models import Drone, Battery, DroneStatus, batteries_status
 from app.modules.fleet.schemas import CheckAvailabilityRequest, AvailabilityResponse
 
-router = APIRouter(prefix="/operator/missions", tags=["Operator - Missions"])
+router = APIRouter(prefix="/operator/missions", tags=["Missions"])
 
 allow_operator = RoleChecker([UserRole.OPERATOR, UserRole.ADMIN])
 

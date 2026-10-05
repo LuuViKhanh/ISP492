@@ -13,7 +13,7 @@ from app.modules.system import service
 from app.shared.dependencies import RoleChecker
 from app.shared.roles import UserRole
 
-router = APIRouter(tags=["System - Admin"])
+router = APIRouter(tags=["System"])
 
 require_admin = RoleChecker([UserRole.ADMIN])
 

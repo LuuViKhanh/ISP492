@@ -2,7 +2,7 @@ from fastapi import APIRouter
 
 router = APIRouter(
     prefix="/operator/ai_predictions",
-    tags=["Operator - Ai_predictions"]
+    tags=["AI Predictions"]
 )
 
 @router.get("/")
