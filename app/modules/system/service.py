@@ -13,7 +13,7 @@ async def log_action(
     import json
     await db.execute(text(
         "INSERT INTO public.audit_logs (user_id, action, resource_table, details_json, created_at) "
-        "VALUES (:user_id, CAST(:action AS audit_logs_action), :resource_table, CAST(:details_json AS jsonb), now())"
+        "VALUES (:user_id, :action, :resource_table, CAST(:details_json AS jsonb), now())"
     ), {
         "user_id": str(user_id) if user_id else None,
         "action": action,

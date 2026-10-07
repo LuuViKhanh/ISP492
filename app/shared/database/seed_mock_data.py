@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 import os
 import random
 from datetime import datetime
@@ -55,8 +55,8 @@ def seed():
                 username = f"tech_{code.lower()}"
                 
                 conn.execute(text("""
-                    INSERT INTO users (id, role_id, password_hash, full_name, email, is_active, created_at, hub_id)
-                    VALUES (:uid, :role_id, 'Password123!', :fname, :email, true, NOW(), :hid)
+                    INSERT INTO users (id, role_id, password_hash, full_name, email, phone, is_active, created_at, hub_id)
+                    VALUES (:uid, :role_id, 'Password123!', :fname, :email, '0123456789', true, NOW(), :hid)
                     ON CONFLICT (email) DO UPDATE SET 
                         role_id = EXCLUDED.role_id,
                         full_name = EXCLUDED.full_name,
@@ -85,45 +85,45 @@ def seed():
                         drone_ids.append((exist_id, h_id, status))
                     else:
                         res = conn.execute(text("""
-                            INSERT INTO drones (name, model, payload_capacity_kg, max_speed, operational_status, created_at, current_hub_id, battery_level_pct, utilization_pct)
-                            VALUES (:name, :model, :cap, :speed, :status, NOW(), :hid, 100, 0.0)
+                            INSERT INTO drones (name, model, payload_capacity_kg, max_speed, operational_status, current_hub_id, battery_level_pct, utilization_pct)
+                            VALUES (:name, :model, :cap, :speed, :status, :hid, 100, 0.0)
                             RETURNING id
                         """), {"name": d_name, "model": model, "cap": cap, "speed": speed, "status": status, "hid": h_id})
                         drone_ids.append((res.scalar(), h_id, status))
 
             print("4. Batteries (Khôi phục dung lượng pin & gán lại đúng vị trí)...")
             dummy_batt_id = conn.execute(text("""
-                INSERT INTO batteries (serial_number, capacity_wh, status, drone_id, current_hub_id, charge_level_pct, create_at, battery_model)
-                VALUES ('BATT-DUMMY', 150.0, 'Active', NULL, 3, 100, NOW(), 'Li-Po 6000mAh')
-                ON CONFLICT (serial_number) DO UPDATE SET capacity_wh = 150.0, charge_level_pct=100 RETURNING id
+                INSERT INTO batteries (id, serial_number, capacity_wh, status, drone_id, current_hub_id, charge_level_pct, create_at, battery_model)
+                VALUES ('BAT-000', 'BAT-000', 150.0, 'Active', NULL, 3, 100, NOW(), 'Li-Po 6000mAh')
+                ON CONFLICT (id) DO UPDATE SET capacity_wh = 150.0, charge_level_pct=100 RETURNING id
             """)).scalar()
             
             for i, (d_id, h_id, status) in enumerate(drone_ids):
-                sn = f"BATT-DRONE-{i:03d}"
+                sn = f"BAT-1{i:03d}"
                 conn.execute(text("""
-                    INSERT INTO batteries (serial_number, capacity_wh, status, drone_id, current_hub_id, charge_level_pct, create_at, battery_model)
-                    VALUES (:sn, 150.0, 'Active', :did, NULL, :charge, NOW(), 'Li-Po 6000mAh')
-                    ON CONFLICT (serial_number) DO UPDATE SET 
+                    INSERT INTO batteries (id, serial_number, capacity_wh, status, drone_id, current_hub_id, charge_level_pct, create_at, battery_model)
+                    VALUES (:sn, :sn, 150.0, 'Active', :did, NULL, :charge, NOW(), 'Li-Po 6000mAh')
+                    ON CONFLICT (id) DO UPDATE SET 
                         drone_id = EXCLUDED.drone_id, current_hub_id = NULL, capacity_wh = 150.0
                 """), {"sn": sn, "did": d_id, "charge": random.randint(20, 100) if status != "Available" else 100})
             
             for i in range(25):
-                sn = f"BATT-HUB-{i:03d}"
+                sn = f"BAT-2{i:03d}"
                 h_id = hubs_data[random.randint(0, 9)][0]
                 conn.execute(text("""
-                    INSERT INTO batteries (serial_number, capacity_wh, status, drone_id, current_hub_id, charge_level_pct, create_at, battery_model)
-                    VALUES (:sn, 150.0, 'Active', NULL, :hid, :charge, NOW(), 'Li-Po 6000mAh')
-                    ON CONFLICT (serial_number) DO UPDATE SET 
+                    INSERT INTO batteries (id, serial_number, capacity_wh, status, drone_id, current_hub_id, charge_level_pct, create_at, battery_model)
+                    VALUES (:sn, :sn, 150.0, 'Active', NULL, :hid, :charge, NOW(), 'Li-Po 6000mAh')
+                    ON CONFLICT (id) DO UPDATE SET 
                         drone_id = NULL, current_hub_id = EXCLUDED.current_hub_id
                 """), {"sn": sn, "hid": h_id, "charge": random.randint(15, 100)})
 
             print("5. Orders (Chữa lỗi Missing Data)...")
             for i in range(1, 11):
-                o_id = f"ORD-MOCK-PENDING-{i:03d}"
+                o_id = f"ORD-{i:03d}"
                 h1, h2 = random.sample([h[0] for h in hubs_data], 2)
                 conn.execute(text("""
-                    INSERT INTO orders (id, customer_id, package_label, package_type, payload_kg, origin_hub_id, destination_hub_id, status, created_at)
-                    VALUES (:oid, 'test@test.com', 'Hàng tiêu dùng', 'Standard', :kg, :h1, :h2, 'PENDING', NOW())
+                    INSERT INTO orders (id, customer_id, sender_phone, receiver_phone, package_label, package_type, payload_kg, origin_hub_id, destination_hub_id, status, created_at)
+                    VALUES (:oid, 'test@test.com', '0901234567', '0987654321', 'Hàng tiêu dùng', 'Standard', :kg, :h1, :h2, 'PENDING', NOW())
                     ON CONFLICT (id) DO UPDATE SET status = 'PENDING', origin_hub_id = EXCLUDED.origin_hub_id, destination_hub_id = EXCLUDED.destination_hub_id
                 """), {"oid": o_id, "kg": random.uniform(0.5, 4.5), "h1": h1, "h2": h2})
 

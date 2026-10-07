@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func
 from datetime import timedelta
@@ -315,12 +315,18 @@ async def update_incident_status(
 
 @router.get("/{mission_id}", response_model=MissionResponse, summary="Lấy thông tin chi tiết một mission")
 async def get_mission(
-    mission_id: int,
+    mission_id: str,
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
     """Trả về toàn bộ thông tin mission bao gồm pickup_location_id và dropoff_location_id."""
-    mission = await db.get(Mission, mission_id)
+    try:
+        mission_id_str = int(mission_id)
+        mission = await db.get(Mission, mission_id_str)
+    except ValueError:
+        result = await db.execute(select(Mission).where(Mission.id == mission_id))
+        mission = result.scalars().first()
+        
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
     return mission
@@ -385,30 +391,22 @@ async def reject_mission(
 
 @router.post("/{mission_id}/telemetry", response_model=TelemetryIngestResponse)
 async def collect_telemetry(
-    mission_id: int,
+    mission_id: str,
     telemetry_data: list[TelemetryDataCreate],
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """
-    Thu thập và lưu trữ dữ liệu từ xa (telemetry) của nhiệm vụ bay.
+    try:
+        mission_id_int = int(mission_id)
+        mission = await db.get(Mission, mission_id_int)
+    except ValueError:
+        result = await db.execute(select(Mission).where(Mission.id == mission_id))
+        mission = result.scalars().first()
 
-    Ngoài việc lưu log tọa độ, endpoint này còn:
-    - Tự động chuyển mission sang trạng thái **FLYING** khi nhận được telemetry đầu tiên
-      (từ trạng thái APPROVED), đồng thời ghi `start_time` và `departed_at`.
-    - **Tự động detect hub proximity**: với mỗi điểm tọa độ, hệ thống tính khoảng cách Haversine
-      tới tất cả Hub và Mini-hub. Nếu drone vào trong bán kính **200m** của một hub mà chưa
-      log checkpoint trong **60 giây** gần nhất → tạo `MissionHubCheckpoint`.
-    - Trả về danh sách log đã lưu **và** các checkpoint mới được tạo trong batch này.
-
-    Frontend dùng response này để:
-    - Vẽ đường bay (polyline) theo `logs`
-    - Hiển thị marker tại các `new_checkpoints`
-    """
-
-    mission = await db.get(Mission, mission_id)
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
+        
+    actual_mission_id = mission.id
 
     if mission.status not in (MissionStatus.APPROVED, MissionStatus.FLYING):
         raise HTTPException(
@@ -437,7 +435,7 @@ async def collect_telemetry(
         weather = await fetch_weather(data.latitude, data.longitude)
 
         log_entry = TelemetryLog(
-            mission_id=mission_id,
+            mission_id=actual_mission_id,
             timestamp=naive_timestamp,
             latitude=data.latitude,
             longitude=data.longitude,
@@ -475,7 +473,7 @@ async def collect_telemetry(
     # ── 4. Đếm số checkpoint đã có để gán thứ tự tiếp theo ─────────────────────
     cp_count_result = await db.execute(
         select(func.count()).select_from(MissionHubCheckpoint)
-        .where(MissionHubCheckpoint.mission_id == mission_id)
+        .where(MissionHubCheckpoint.mission_id == actual_mission_id)
     )
     existing_cp_count = cp_count_result.scalar_one() or 0
     next_order = existing_cp_count + 1
@@ -489,7 +487,7 @@ async def collect_telemetry(
     # Lấy checkpoint gần nhất để cooldown check
     last_cp_result = await db.execute(
         select(MissionHubCheckpoint)
-        .where(MissionHubCheckpoint.mission_id == mission_id)
+        .where(MissionHubCheckpoint.mission_id == actual_mission_id)
         .order_by(MissionHubCheckpoint.passed_at.desc())
         .limit(1)
     )
@@ -525,7 +523,7 @@ async def collect_telemetry(
             recent_cp_result = await db.execute(
                 select(MissionHubCheckpoint).where(
                     and_(
-                        MissionHubCheckpoint.mission_id == mission_id,
+                        MissionHubCheckpoint.mission_id == actual_mission_id,
                         MissionHubCheckpoint.hub_id == hub_id if hub_id else MissionHubCheckpoint.location_id == loc_id,
                         MissionHubCheckpoint.passed_at >= (
                             pt_ts.replace(tzinfo=None) - timedelta(seconds=COOLDOWN_SECONDS)
@@ -537,7 +535,7 @@ async def collect_telemetry(
                 continue  # Đã log gần đây, bỏ qua
 
             cp = MissionHubCheckpoint(
-                mission_id=mission_id,
+                mission_id=actual_mission_id,
                 hub_id=hub_id,
                 location_id=loc_id,
                 hub_name=hub_name,
@@ -666,28 +664,25 @@ async def get_live_tracking(
     summary="Lấy lịch sử tọa độ của một chuyến bay (vẽ đường bay)",
 )
 async def get_mission_telemetry(
-    mission_id: int,
+    mission_id: str,
     limit: int = Query(default=1000, ge=1, le=5000, description="Số điểm tối đa trả về"),
     offset: int = Query(default=0, ge=0, description="Bỏ qua N điểm đầu tiên"),
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """
-    Trả về toàn bộ (hoặc một trang) lịch sử tọa độ của chuyến bay theo thứ tự thời gian.
+    try:
+        mission_id_int = int(mission_id)
+        mission = await db.get(Mission, mission_id_int)
+    except ValueError:
+        result = await db.execute(select(Mission).where(Mission.id == mission_id))
+        mission = result.scalars().first()
 
-    Frontend dùng endpoint này để:
-    - **Vẽ polyline** đường bay trên bản đồ (replay hoặc realtime khi poll).
-    - Hiển thị biểu đồ altitude / speed / battery theo thời gian.
-
-    Kết quả được sắp xếp `timestamp ASC` — đúng thứ tự drone đã bay.
-    """
-    mission = await db.get(Mission, mission_id)
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
 
     result = await db.execute(
         select(TelemetryLog)
-        .where(TelemetryLog.mission_id == mission_id)
+        .where(TelemetryLog.mission_id == mission.id)
         .order_by(TelemetryLog.timestamp.asc())
         .offset(offset)
         .limit(limit)
@@ -701,27 +696,23 @@ async def get_mission_telemetry(
     summary="Lấy danh sách các Hub trung gian drone đã đi qua",
 )
 async def get_hub_checkpoints(
-    mission_id: int,
+    mission_id: str,
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """
-    Trả về các mốc Hub mà drone đã đi qua trong chuyến bay, theo thứ tự `checkpoint_order`.
+    try:
+        mission_id_int = int(mission_id)
+        mission = await db.get(Mission, mission_id_int)
+    except ValueError:
+        result = await db.execute(select(Mission).where(Mission.id == mission_id))
+        mission = result.scalars().first()
 
-    Mỗi checkpoint được tạo tự động bởi `POST /telemetry` khi drone vào vùng **200m** xung quanh
-    một Hub hoặc Mini-hub (cooldown 60s để tránh log trùng).
-
-    Frontend dùng để:
-    - Hiển thị **marker / icon hub** trên bản đồ với timestamp.
-    - Render bảng log hành trình: Hub A → Hub B → Hub C...
-    """
-    mission = await db.get(Mission, mission_id)
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
 
     result = await db.execute(
         select(MissionHubCheckpoint)
-        .where(MissionHubCheckpoint.mission_id == mission_id)
+        .where(MissionHubCheckpoint.mission_id == mission.id)
         .order_by(MissionHubCheckpoint.checkpoint_order.asc())
     )
     return result.scalars().all()
@@ -1004,22 +995,18 @@ async def create_mission(
     if order.status != OrderStatus.PENDING:
         raise HTTPException(status_code=400, detail="Order is not in PENDING state")
         
-    # Tạo Mission mới với các thông tin đã được giả lập
+    from app.shared.id_generator import generate_sequential_id
+    mission_id = await generate_sequential_id(db, Mission, "MSN")
+
+    # Tạo Mission mới
     mission = Mission(
+        id=mission_id,
         order_id=request.orderId,
         drone_id=request.droneId,
-        route_id=request.routeId,
         origin_hub_id=order.origin_hub_id,
         destination_hub_id=order.destination_hub_id,
         status=MissionStatus.SCHEDULED,
-        created_by=user.id,
-        # Default predictions for demo
-        predicted_duration_min=25,
-        estimated_energy_wh=28.1,
-        battery_consumption_pct=29,
-        predicted_remaining_battery_pct=71,
-        confidence_pct=88,
-        risk_level="LOW"
+        operator_id=user.id
     )
     
     db.add(mission)

@@ -217,7 +217,11 @@ async def create_battery(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Serial number already exists")
 
+    from app.shared.id_generator import generate_sequential_id
+    battery_id = await generate_sequential_id(db, Battery, "BAT")
+
     battery = Battery(
+        id=battery_id,
         serial_number=body.serial_number,
         capacity_wh=body.capacity_wh,
         status=body.status,

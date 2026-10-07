@@ -40,7 +40,7 @@ class Drone(Base):
 class Battery(Base):
     __tablename__ = "batteries"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
     drone_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("drones.id"), nullable=True)
     serial_number: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     capacity_wh: Mapped[float] = mapped_column(Float, nullable=False)
@@ -59,7 +59,7 @@ class WorkOrder(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     drone_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    battery_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    battery_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     technician_id: Mapped[str] = mapped_column(String, nullable=False)
     issue_description: Mapped[str] = mapped_column(Text, nullable=False)
     action_taken: Mapped[str | None] = mapped_column(Text, nullable=True)

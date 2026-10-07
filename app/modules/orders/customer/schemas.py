@@ -31,12 +31,15 @@ class OrderEstimateResponse(BaseModel):
 
 class CreateOrderRequest(BaseModel):
     package_type: str
+    package_label: Optional[str] = None
     payload_kg: float
     package_size: str
     origin_hub_id: int
     destination_hub_id: int
     delivery_mode: DeliveryMode
     requested_delivery_at: Optional[datetime] = None
+    sender_phone: Optional[str] = None
+    receiver_phone: Optional[str] = None
 
 class OrderCreateResponse(BaseModel):
     id: str
