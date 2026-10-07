@@ -129,7 +129,9 @@ async def create_checkout(
         )
         response = payos.createPaymentLink(payment_data)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"PayOS lỗi: {str(e)}")
+        import traceback
+        print(f"[PayOS ERROR] {traceback.format_exc()}")
+        raise HTTPException(status_code=400, detail=f"PayOS lỗi: {str(e)}")
 
     # Lưu vào DB
     now = datetime.now(timezone.utc).replace(tzinfo=None)
