@@ -7,7 +7,7 @@ from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser, get_current_user
 from app.shared.roles import UserRole
 from app.modules.missions.models import Mission, HandlingStatus, MissionStatus
-from app.modules.hubs.models import Hub
+from app.modules.system.models import Hub
 from app.modules.fleet.models import Drone, Battery
 from app.modules.auth.models import User
 
