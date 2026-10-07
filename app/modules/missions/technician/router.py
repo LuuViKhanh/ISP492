@@ -31,11 +31,10 @@ def get_technician_missions():
 
 
 async def get_mission_by_order_id(db: AsyncSession, orderId: str):
-    try:
-        mission_id = int(orderId)
-        result = await db.execute(select(Mission).where(Mission.id == mission_id))
-    except ValueError:
-        result = await db.execute(select(Mission).where(Mission.order_code == orderId))
+    # orderId could be a mission ID or an order ID. We just check both.
+    result = await db.execute(
+        select(Mission).where((Mission.order_id == orderId) | (Mission.id == orderId))
+    )
     
     mission = result.scalars().first()
     if not mission:
@@ -55,8 +54,8 @@ async def get_outbound_deliveries(
     try:
         query = select(
             Mission.id,
-            Mission.order_code,
-            Mission.mission_code,
+            Mission.order_id,
+            Mission.id.label("mission_code"),
             cast(Mission.status, String).label("status"),
             cast(Mission.handling_status, String).label("handling_status"),
             Hub.name.label("destination_hub_name"),
@@ -81,7 +80,7 @@ async def get_outbound_deliveries(
         return [
             {
                 "id": row.id,
-                "order_code": row.order_code,
+                "order_code": row.order_id,
                 "mission_code": row.mission_code,
                 "destination_hub": row.destination_hub_name,
                 "drone": row.drone_name,
@@ -141,8 +140,8 @@ async def get_confirmations(
     try:
         query = select(
             Mission.id,
-            Mission.order_code,
-            Mission.mission_code,
+            Mission.order_id,
+            Mission.id.label("mission_code"),
             cast(Mission.status, String).label("status"),
             cast(Mission.handling_status, String).label("handling_status"),
             Hub.name.label("origin_hub_name"),
@@ -170,7 +169,7 @@ async def get_confirmations(
         return [
             {
                 "id": row.id,
-                "order_code": row.order_code,
+                "order_code": row.order_id,
                 "mission_code": row.mission_code,
                 "origin_hub": row.origin_hub_name,
                 "drone": row.drone_name,
