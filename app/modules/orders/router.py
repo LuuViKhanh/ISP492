@@ -59,6 +59,11 @@ async def list_orders(
     result = await db.execute(query.order_by(Order.created_at.desc()))
     orders = result.scalars().all()
     
+    # Lấy tất cả hubs để map
+    hubs_result = await db.execute(select(Hub))
+    hubs = hubs_result.scalars().all()
+    hub_dict = {h.id: h.name for h in hubs}
+
     response_list = []
     for o in orders:
         # Tạm thời gán active_mission = None cho việc tính toán state (Thực tế cần query join)
@@ -70,6 +75,10 @@ async def list_orders(
         order_resp = OrderResponse.model_validate(o)
         order_resp.planningState = planning_state
         order_resp.originPackage = origin_pkg
+        if o.origin_hub_id in hub_dict:
+            order_resp.origin_hub = {"id": o.origin_hub_id, "name": hub_dict[o.origin_hub_id]}
+        if o.destination_hub_id in hub_dict:
+            order_resp.destination_hub = {"id": o.destination_hub_id, "name": hub_dict[o.destination_hub_id]}
         response_list.append(order_resp)
         
     return response_list
@@ -108,6 +117,14 @@ async def get_order(
     order_resp = OrderResponse.model_validate(order)
     order_resp.planningState = planning_state
     order_resp.originPackage = origin_pkg
+    
+    if order.origin_hub_id:
+        ohub = await db.get(Hub, order.origin_hub_id)
+        if ohub: order_resp.origin_hub = {"id": ohub.id, "name": ohub.name}
+    if order.destination_hub_id:
+        dhub = await db.get(Hub, order.destination_hub_id)
+        if dhub: order_resp.destination_hub = {"id": dhub.id, "name": dhub.name}
+        
     return order_resp
 
 
