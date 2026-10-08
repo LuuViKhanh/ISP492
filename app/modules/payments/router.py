@@ -116,10 +116,10 @@ async def create_checkout(
         payment_data = PaymentData(
             orderCode=order_code,
             amount=amount_vnd,
-            description=f"Thanh toan don {order_id[:12]}",
+            description=f"TT don {order_id[:10]}"[:25],  # PayOS max 25 ký tự
             items=[
                 ItemData(
-                    name=f"Giao hang {order.package_label or order_id[:8]}",
+                    name=f"Giao hang {order.package_label or order_id[:8]}"[:50],
                     quantity=1,
                     price=amount_vnd,
                 )
