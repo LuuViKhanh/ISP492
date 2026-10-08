@@ -424,22 +424,30 @@ async def collect_telemetry(
         mission.start_time = now
         mission.departed_at = now
 
-        # ── Gửi SMS thông báo đơn hàng đang được giao ──────────────────────
+        # ── Cập nhật Order status + Gửi SMS ────────────────────────────────
         try:
-            from app.shared.sms import send_order_flying_sms
-            from app.modules.auth.models import User as UserModel
-            if mission.customer_id:
-                customer = await db.get(UserModel, mission.customer_id)
-                if customer and customer.phone:
-                    await send_order_flying_sms(
-                        phone=customer.phone,
-                        order_code=mission.order_code or str(mission.id),
-                        mission_code=mission.mission_code,
-                        frontend_url=settings.FRONTEND_URL,
-                    )
+            from app.shared.sms import send_sms
+            from app.modules.missions.models import Order as OrderModel
+            if mission.order_id:
+                order_result = await db.execute(
+                    select(OrderModel).where(OrderModel.id == mission.order_id)
+                )
+                order_obj = order_result.scalar_one_or_none()
+                if order_obj:
+                    # Cập nhật order status → IN_DELIVERY
+                    order_obj.status = OrderStatus.IN_DELIVERY
+                    order_obj.updated_at = now
+
+                    # Gửi SMS đến receiver_phone
+                    if order_obj.receiver_phone:
+                        short_id = order_obj.id[:12]
+                        tracking = f"{settings.FRONTEND_URL.rstrip('/')}/orders/{order_obj.id}/tracking"
+                        await send_sms(
+                            order_obj.receiver_phone,
+                            f"DroneOptAI: Don hang {short_id} dang duoc giao bang drone. Theo doi: {tracking}"
+                        )
         except Exception as sms_err:
-            print(f"[SMS] Không gửi được SMS: {sms_err}")
-            # Không throw — SMS là non-critical
+            print(f"[SMS] Lỗi khi cập nhật order/gửi SMS: {sms_err}")
 
     # ── 2. Fetch weather + Lưu telemetry logs ─────────────────────────────────
     from app.shared.weather import fetch_weather
