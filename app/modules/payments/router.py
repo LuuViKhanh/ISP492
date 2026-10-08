@@ -129,7 +129,9 @@ async def create_checkout(
         )
         response = payos.createPaymentLink(payment_data)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"PayOS lỗi: {str(e)}")
+        import traceback
+        print(f"[PayOS ERROR] {traceback.format_exc()}")
+        raise HTTPException(status_code=400, detail=f"PayOS lỗi: {str(e)}")
 
     # Lưu vào DB
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -225,7 +227,7 @@ async def payos_webhook(
     # ── Xử lý kết quả thanh toán ────────────────────────────────────────────
     order_code     = data.get("orderCode")
     status_code    = payload.get("code")   # "00" ở root level theo docs PayOS
-    transaction_id = str(data.get("transactionDateTime", ""))
+    transaction_id = str(data.get("reference", "") or data.get("transactionDateTime", ""))
 
     if not order_code:
         return JSONResponse(status_code=200, content={"message": "Ignored"})
@@ -269,7 +271,7 @@ async def register_webhook(
     Webhook URL: {FRONTEND_URL}/api/v1/payments/webhook
     """
     import httpx
-    webhook_url = f"https://isp492.onrender.com/api/v1/payments/webhook"
+    webhook_url = f"{settings.BACKEND_URL.rstrip(chr(47))}/api/v1/payments/webhook"
 
     try:
         async with httpx.AsyncClient() as client:
