@@ -32,7 +32,7 @@ async def get_hubs(db: AsyncSession = Depends(get_async_db)):
         hubs = result.scalars().all()
     return hubs
 
-def calculate_delivery_cost(dist_km: float, payload_kg: float, package_type: str, delivery_mode: DeliveryMode):
+def calculate_delivery_cost(dist_km: float, payload_kg: float, package_type: str, delivery_mode: DeliveryMode, has_insurance: bool = False):
     # Determine drone size based on payload
     if payload_kg <= 1:
         base_fee = 20000
@@ -61,15 +61,24 @@ def calculate_delivery_cost(dist_km: float, payload_kg: float, package_type: str
     fragile_surcharge = core_fee * 0.15 if is_fragile else 0
     
     is_express = (delivery_mode == DeliveryMode.EXPRESS)
-    service_surcharge = core_fee * 0.25 if is_express else 0
+    express_surcharge = core_fee * 0.25 if is_express else 0
     
     # Insurance 10%
-    insurance_fee = core_fee * 0.10
+    insurance_fee = core_fee * 0.10 if has_insurance else 0
     
-    total_fee = core_fee + fragile_surcharge + service_surcharge + insurance_fee
-    service_fee_total = fragile_surcharge + service_surcharge + insurance_fee
+    total_fee = core_fee + fragile_surcharge + express_surcharge + insurance_fee
+    service_fee_total = fragile_surcharge + express_surcharge + insurance_fee
     
-    return core_fee, service_fee_total, total_fee
+    fee_details = {
+        "base_fee": base_fee,
+        "distance_fee": distance_fee,
+        "payload_fee": payload_fee,
+        "insurance_fee": insurance_fee,
+        "express_surcharge": express_surcharge,
+        "fragile_surcharge": fragile_surcharge,
+    }
+    
+    return core_fee, service_fee_total, total_fee, fee_details
 
 @router.post("/orders/estimate", response_model=OrderEstimateResponse)
 async def estimate_order(
@@ -94,11 +103,12 @@ async def estimate_order(
     energy_wh = prediction.get("energy_wh", 0.0)
     
     # Calculate fees using new logic
-    core_fee, service_fee, total_fee = calculate_delivery_cost(
+    core_fee, service_fee, total_fee, fee_details = calculate_delivery_cost(
         dist_km=dist_km,
         payload_kg=body.payload_kg,
         package_type=getattr(body, "package_type", ""),
-        delivery_mode=body.delivery_mode
+        delivery_mode=body.delivery_mode,
+        has_insurance=getattr(body, "has_insurance", False)
     )
     delivery_fee = core_fee
     
@@ -124,6 +134,7 @@ async def estimate_order(
         delivery_fee=round(delivery_fee, 2),
         service_fee=round(service_fee, 2),
         total_fee=round(delivery_fee + service_fee, 2),
+        fee_details=fee_details,
         estimated_departure=estimated_departure,
         estimated_arrival=estimated_arrival,
         handover_deadline=handover_deadline
@@ -152,11 +163,12 @@ async def create_order(
     lat2, lon2 = dest_hub.latitude or 0.0, dest_hub.longitude or 0.0
     dist_km = haversine_distance(lat1, lon1, lat2, lon2)
     
-    core_fee, service_fee, total_fee = calculate_delivery_cost(
+    core_fee, service_fee, total_fee, fee_details = calculate_delivery_cost(
         dist_km=dist_km,
         payload_kg=body.payload_kg,
         package_type=body.package_type,
-        delivery_mode=body.delivery_mode
+        delivery_mode=body.delivery_mode,
+        has_insurance=getattr(body, "has_insurance", False)
     )
 
     new_order = Order(
