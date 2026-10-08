@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 # ─── CẤU HÌNH (chỉ sửa 3 dòng này) ──────────────────────────────────────────
 BASE_URL   = "https://isp492.onrender.com/api/v1"   # hoặc https://<app>.onrender.com/api/v1
-TOKEN      = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIzYjQ5MDhkMC1hZWYwLTQ3Y2MtYmMwMC05YzZjMTI1YjUwNzIiLCJyb2xlIjoiT3BlcmF0b3IiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzkxNDM4MjE2fQ.dYrr-_3ShmJQ9aQV93AccxMJ4n7wN8JZqAQjhQbKskY"
+TOKEN      = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIzYjQ5MDhkMC1hZWYwLTQ3Y2MtYmMwMC05YzZjMTI1YjUwNzIiLCJyb2xlIjoiT3BlcmF0b3IiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzkxNDQ0NTM5fQ.4CuJKYk8VEBfYfNzCHHJJ9ifr5ijayrMdGPIJ3ThUlg"
 MISSION_ID = "MSN-20261007-0001"               # mission đang ở trạng thái APPROVED
 # ─────────────────────────────────────────────────────────────────────────────
 

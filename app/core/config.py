@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     # ESMS - SMS notification
     ESMS_API_KEY: str = ""
     ESMS_SECRET_KEY: str = ""
+    ESMS_BRANDNAME: str = ""
 
     class Config:
         env_file = ".env"
