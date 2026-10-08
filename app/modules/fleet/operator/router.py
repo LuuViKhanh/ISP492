@@ -35,7 +35,7 @@ class DroneOverviewResponse(BaseModel):
 
 
 class BatteryOverviewResponse(BaseModel):
-    id: int
+    id: str
     serial_number: str
     capacity_wh: float
     status: batteries_status
