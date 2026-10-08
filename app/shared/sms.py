@@ -39,7 +39,9 @@ async def send_sms(phone: str, message: str) -> bool:
         "Content":    message,
         "SmsType":    2,   # 2 = số ngẫu nhiên (không cần đăng ký Brandname)
         "IsUnicode":  0,   # 0 = không dấu (an toàn hơn với SMS type 2)
+        "Brandname":  "",  # ESMS yêu cầu field này ngay cả SmsType=2, set empty để dùng số random
     }
+    print(f"[SMS] DEBUG payload: {payload}")  # DEBUG
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
