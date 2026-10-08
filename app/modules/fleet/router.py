@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
 
-router = APIRouter(prefix="/fleet", tags=["Fleet Management"])
+router = APIRouter(prefix="/fleet", tags=["Fleet"])
 
 allow_technician = RoleChecker([UserRole.TECHNICIAN])
 

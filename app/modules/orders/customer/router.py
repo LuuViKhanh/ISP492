@@ -17,7 +17,7 @@ from app.modules.orders.customer.schemas import (
 )
 from app.modules.ai_predictions.service import predict_flight_energy, haversine_distance
 
-router = APIRouter(prefix="/customer", tags=["Customer - Orders"])
+router = APIRouter(prefix="/customer", tags=["Orders"])
 
 @router.get("/hubs", response_model=list[HubResponse])
 async def get_hubs(db: AsyncSession = Depends(get_async_db)):
@@ -138,7 +138,9 @@ async def create_order(
     """
     BE - POST /customer/orders: Xử lý tạo đơn hàng mới.
     """
-    order_id = f"DRO-{uuid.uuid4().hex[:6].upper()}"
+    from app.shared.id_generator import generate_sequential_id
+    from app.modules.missions.models import Order
+    order_id = await generate_sequential_id(db, Order, "ORD")
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     
     origin_hub = await db.get(Hub, body.origin_hub_id)
@@ -161,13 +163,16 @@ async def create_order(
         id=order_id,
         customer_id=current_user.id,
         package_type=body.package_type,
+        package_label=body.package_label,
         payload_kg=body.payload_kg,
         origin_hub_id=body.origin_hub_id,
         destination_hub_id=body.destination_hub_id,
         delivery_mode=body.delivery_mode,
         requested_delivery_at=body.requested_delivery_at.replace(tzinfo=None) if body.requested_delivery_at else None,
-        status=OrderStatus.PENDING, 
+        status=OrderStatus.PENDING,
         delivery_fee=total_fee,
+        sender_phone=body.sender_phone,
+        receiver_phone=body.receiver_phone,
         created_at=now,
         updated_at=now
     )

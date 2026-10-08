@@ -22,7 +22,7 @@ from app.modules.fleet.technician.schemas import (
 )
 from app.modules.missions.models import Mission, MissionStatus, HandlingStatus
 
-router = APIRouter(prefix="/technician/fleet", tags=["Technician - Fleet"])
+router = APIRouter(prefix="/technician/fleet", tags=["Fleet"])
 
 allow_technician = RoleChecker([UserRole.TECHNICIAN, UserRole.ADMIN])
 
@@ -40,7 +40,6 @@ async def get_incoming_drones(
         query = (
             select(
                 Mission.id,
-                Mission.mission_code,
                 cast(Mission.status, String).label("status"),
                 cast(Mission.handling_status, String).label("handling_status"),
                 Drone.name.label("drone_code"),
@@ -70,13 +69,13 @@ async def get_incoming_drones(
         
         response = []
         for row in rows:
-            m_id, m_code, m_status, m_handling, drone_code, model, battery_code, battery_percent = row
+            m_id, m_status, m_handling, drone_code, model, battery_code, battery_percent = row
             
             status_val = m_status.value if hasattr(m_status, "value") else m_status
             handling_val = m_handling.value if hasattr(m_handling, "value") else m_handling
             
             response.append({
-                "mission_code": m_code or f"MSN-{m_id}",
+                "mission_code": str(m_id),
                 "drone_code": drone_code,
                 "model": model,
                 "mission_state": status_val if m_status else None,

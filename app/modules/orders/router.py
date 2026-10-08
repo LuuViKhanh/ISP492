@@ -18,7 +18,7 @@ from app.modules.orders.schemas import (
     DroneEligibleSchema
 )
 
-router = APIRouter(prefix="/operator/orders", tags=["Operator - Orders"])
+router = APIRouter(prefix="/operator/orders", tags=["Orders"])
 allow_operator = RoleChecker([UserRole.OPERATOR, UserRole.ADMIN])
 
 def calculate_planning_state(order: Order, active_mission: Mission = None) -> str:
@@ -95,7 +95,7 @@ async def get_order(
         
     # Get active mission
     mission_result = await db.execute(
-        select(Mission).where(and_(Mission.order_code == order_id, Mission.status.in_([MissionStatus.SCHEDULED, MissionStatus.IN_PROGRESS])))
+        select(Mission).where(and_(Mission.order_id == order_id, Mission.status.in_([MissionStatus.SCHEDULED, MissionStatus.IN_PROGRESS])))
     )
     active_mission = mission_result.scalars().first()
     
