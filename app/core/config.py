@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     PAYOS_CHECKSUM_KEY: str = ""
     BACKEND_URL: str = "https://isp492.onrender.com"
 
+    # ESMS - SMS notification
+    ESMS_API_KEY: str = ""
+    ESMS_SECRET_KEY: str = ""
+    ESMS_BRANDNAME: str = "DroneOptAI"
+
     class Config:
         env_file = ".env"
         extra = "ignore"
