@@ -7,6 +7,7 @@ import math
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
+from app.core.config import settings
 from app.modules.missions.models import Mission, MissionStatus, Location, LocationType, Incident, IncidentStatus, IncidentSeverity, TelemetryLog, MissionHubCheckpoint
 from app.modules.system.models import Hub
 from app.modules.fleet.models import MaintenanceAlert
