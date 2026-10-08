@@ -424,6 +424,23 @@ async def collect_telemetry(
         mission.start_time = now
         mission.departed_at = now
 
+        # ── Gửi SMS thông báo đơn hàng đang được giao ──────────────────────
+        try:
+            from app.shared.sms import send_order_flying_sms
+            from app.modules.auth.models import User as UserModel
+            if mission.customer_id:
+                customer = await db.get(UserModel, mission.customer_id)
+                if customer and customer.phone:
+                    await send_order_flying_sms(
+                        phone=customer.phone,
+                        order_code=mission.order_code or str(mission.id),
+                        mission_code=mission.mission_code,
+                        frontend_url=settings.FRONTEND_URL,
+                    )
+        except Exception as sms_err:
+            print(f"[SMS] Không gửi được SMS: {sms_err}")
+            # Không throw — SMS là non-critical
+
     # ── 2. Fetch weather + Lưu telemetry logs ─────────────────────────────────
     from app.shared.weather import fetch_weather
 
