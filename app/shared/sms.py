@@ -37,9 +37,8 @@ async def send_sms(phone: str, message: str) -> bool:
         "SecretKey":  settings.ESMS_SECRET_KEY,
         "Phone":      phone_normalized,
         "Content":    message,
-        "SmsType":    4,                          # 4 = Brandname (tên công ty), 2 = số ngẫu nhiên
-        "Brandname":  settings.ESMS_BRANDNAME,    # tên hiển thị, ví dụ "DroneOptAI"
-        "IsUnicode":  1,                          # 1 = UTF-8 (tiếng Việt có dấu)
+        "SmsType":    2,   # 2 = số ngẫu nhiên (không cần đăng ký Brandname)
+        "IsUnicode":  0,   # 0 = không dấu (an toàn hơn với SMS type 2)
     }
 
     try:
