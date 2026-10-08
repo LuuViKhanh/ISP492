@@ -424,30 +424,30 @@ async def collect_telemetry(
         mission.start_time = now
         mission.departed_at = now
 
-        # ── Gửi SMS thông báo đơn hàng đang được giao ──────────────────────
+        # ── Cập nhật Order status + Gửi SMS ────────────────────────────────
         try:
-            from app.shared.sms import send_order_flying_sms
+            from app.shared.sms import send_sms
             from app.modules.missions.models import Order as OrderModel
-            # Lấy số điện thoại người nhận từ bảng orders
-            if mission.order_code:
+            if mission.order_id:
                 order_result = await db.execute(
-                    select(OrderModel).where(OrderModel.id == mission.order_code)
+                    select(OrderModel).where(OrderModel.id == mission.order_id)
                 )
                 order_obj = order_result.scalar_one_or_none()
-                phone_to_notify = (
-                    order_obj.receiver_phone if order_obj and order_obj.receiver_phone
-                    else None
-                )
-                if phone_to_notify:
-                    await send_order_flying_sms(
-                        phone=phone_to_notify,
-                        order_code=mission.order_code,
-                        mission_code=mission.mission_code,
-                        frontend_url=settings.FRONTEND_URL,
-                    )
+                if order_obj:
+                    # Cập nhật order status → IN_DELIVERY
+                    order_obj.status = OrderStatus.IN_DELIVERY
+                    order_obj.updated_at = now
+
+                    # Gửi SMS đến receiver_phone
+                    if order_obj.receiver_phone:
+                        short_id = order_obj.id[:12]
+                        tracking = f"{settings.FRONTEND_URL.rstrip('/')}/orders/{order_obj.id}/tracking"
+                        await send_sms(
+                            order_obj.receiver_phone,
+                            f"DroneOptAI: Don hang {short_id} dang duoc giao bang drone. Theo doi: {tracking}"
+                        )
         except Exception as sms_err:
-            print(f"[SMS] Không gửi được SMS: {sms_err}")
-            # Không throw — SMS là non-critical
+            print(f"[SMS] Lỗi khi cập nhật order/gửi SMS: {sms_err}")
 
     # ── 2. Fetch weather + Lưu telemetry logs ─────────────────────────────────
     from app.shared.weather import fetch_weather
