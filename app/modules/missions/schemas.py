@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 from datetime import datetime
 from app.modules.missions.models import MissionStatus
 
@@ -76,7 +76,7 @@ class TelemetryDataCreate(BaseModel):
 
 class TelemetryDataResponse(TelemetryDataCreate):
     id: int
-    mission_id: int
+    mission_id: Union[int, str]
     weather_temperature: Optional[float] = None
     weather_apparent_temp: Optional[float] = None
     weather_dew_point: Optional[float] = None
@@ -95,7 +95,7 @@ class TelemetryDataResponse(TelemetryDataCreate):
 class HubCheckpointResponse(BaseModel):
     """Log mỗi lần drone đi qua Hub trung gian"""
     id: int
-    mission_id: int
+    mission_id: Union[int, str]
     hub_id: Optional[int]
     location_id: Optional[int]
     hub_name: Optional[str]
