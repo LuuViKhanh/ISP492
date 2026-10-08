@@ -427,13 +427,21 @@ async def collect_telemetry(
         # ── Gửi SMS thông báo đơn hàng đang được giao ──────────────────────
         try:
             from app.shared.sms import send_order_flying_sms
-            from app.modules.auth.models import User as UserModel
-            if mission.customer_id:
-                customer = await db.get(UserModel, mission.customer_id)
-                if customer and customer.phone:
+            from app.modules.missions.models import Order as OrderModel
+            # Lấy số điện thoại người nhận từ bảng orders
+            if mission.order_code:
+                order_result = await db.execute(
+                    select(OrderModel).where(OrderModel.id == mission.order_code)
+                )
+                order_obj = order_result.scalar_one_or_none()
+                phone_to_notify = (
+                    order_obj.receiver_phone if order_obj and order_obj.receiver_phone
+                    else None
+                )
+                if phone_to_notify:
                     await send_order_flying_sms(
-                        phone=customer.phone,
-                        order_code=mission.order_code or str(mission.id),
+                        phone=phone_to_notify,
+                        order_code=mission.order_code,
                         mission_code=mission.mission_code,
                         frontend_url=settings.FRONTEND_URL,
                     )
