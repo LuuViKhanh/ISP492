@@ -17,8 +17,8 @@ from datetime import datetime, timezone
 
 # ─── CẤU HÌNH (chỉ sửa 3 dòng này) ──────────────────────────────────────────
 BASE_URL   = "https://isp492.onrender.com/api/v1"   # hoặc https://<app>.onrender.com/api/v1
-TOKEN      = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjM2U1YjI2Yy0yNTc1LTQzZjQtOTYzOC03Njk5MGM4NzgwYmIiLCJyb2xlIjoiT3BlcmF0b3IiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzkwNjU2Nzk3fQ.Arr7ug28EqcnGAAMSHf7WhuAmj3rK96BGS-xY3DCBXg"
-MISSION_ID = 4                                # mission đang ở trạng thái APPROVED
+TOKEN      = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIzYjQ5MDhkMC1hZWYwLTQ3Y2MtYmMwMC05YzZjMTI1YjUwNzIiLCJyb2xlIjoiT3BlcmF0b3IiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzkxNDM4MjE2fQ.dYrr-_3ShmJQ9aQV93AccxMJ4n7wN8JZqAQjhQbKskY"
+MISSION_ID = "MSN-20261007-0001"               # mission đang ở trạng thái APPROVED
 # ─────────────────────────────────────────────────────────────────────────────
 
 INTERVAL_SEC = 2   # gửi mỗi N giây — giảm xuống 2s để animation mượt hơn
