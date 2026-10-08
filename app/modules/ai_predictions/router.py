@@ -12,7 +12,7 @@ from app.database.db import get_async_db
 from app.modules.system.models import Hub
 from app.modules.ai_predictions.service import predict_flight_energy, haversine_distance
 
-router = APIRouter(prefix="/ai", tags=["AI Predictions & Advanced Analytics"])
+router = APIRouter(prefix="/ai", tags=["AI Predictions"])
 
 class RouteEnergyRequest(BaseModel):
     destination_lat: float = Field(..., description="Vĩ độ điểm đến")

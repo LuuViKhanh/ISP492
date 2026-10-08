@@ -31,7 +31,7 @@ from app.modules.missions.models import Order, PaymentStatus, OrderStatus
 from app.core.config import settings
 from app.modules.payments.payos_client import get_payos
 
-router = APIRouter(prefix="/payments", tags=["Payments - PayOS"])
+router = APIRouter(prefix="/payments", tags=["Payments"])
 
 allow_customer = RoleChecker([UserRole.CUSTOMER, UserRole.ADMIN])
 allow_all      = RoleChecker([UserRole.CUSTOMER, UserRole.OPERATOR, UserRole.ADMIN])

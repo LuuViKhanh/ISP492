@@ -11,7 +11,7 @@ from app.shared.roles import UserRole
 
 router = APIRouter(
     prefix="/admin/users",
-    tags=["Admin - Users"],
+    tags=["Users"],
     dependencies=[Depends(RoleChecker([UserRole.ADMIN]))]
 )
 

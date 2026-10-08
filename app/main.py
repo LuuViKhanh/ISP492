@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 
 # Thêm thư mục gốc "project" vào Python path
@@ -90,13 +90,52 @@ def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
     schema = get_openapi(title=app.title, version="1.0.0", routes=app.routes)
+    
+    if "components" not in schema:
+        schema["components"] = {}
     schema["components"]["securitySchemes"] = {
         "BearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
     }
-    for path in schema["paths"].values():
-        for method in path.values():
-            if isinstance(method, dict):
-                method["security"] = [{"BearerAuth": []}]
+    
+    roles_set = {"admin", "operator", "customer", "technician", "notifications"}
+    
+    for path_key, path_item in schema["paths"].items():
+        for method, operation in path_item.items():
+            if isinstance(operation, dict):
+                operation["security"] = [{"BearerAuth": []}]
+                
+                # Detect Role from path
+                parts = path_key.strip("/").split("/")
+                detected_role = None
+                for part in parts:
+                    if part.lower() in roles_set:
+                        detected_role = part.upper()
+                        break
+                
+                role_icons = {
+                    "ADMIN": "🔴",
+                    "OPERATOR": "🔵",
+                    "CUSTOMER": "🟢",
+                    "TECHNICIAN": "🟠",
+                    "NOTIFICATIONS": "🟣"
+                }
+                
+                # Auto-prefix Summary
+                if detected_role:
+                    icon = role_icons.get(detected_role, "⚪")
+                    prefix = f"{icon} [{detected_role}]"
+                    original_summary = operation.get("summary", "")
+                    
+                    if original_summary:
+                        # Prevent double prefixing if it somehow runs multiple times
+                        if not original_summary.startswith(icon) and not original_summary.startswith(f"[{detected_role}]"):
+                            operation["summary"] = f"{prefix} {original_summary}"
+                        elif original_summary.startswith(f"[{detected_role}]"):
+                            # If it only has the text prefix, add the icon
+                            operation["summary"] = f"{icon} {original_summary}"
+                    else:
+                        operation["summary"] = f"{prefix} {operation.get('operationId', '')}"
+                        
     app.openapi_schema = schema
     return schema
 
@@ -128,7 +167,7 @@ app.include_router(db_router)
 
 # Tự động include các router của các roles
 import importlib
-for mod in ["auth", "users", "missions", "fleet", "ai_predictions"]:
+for mod in ["auth", "users", "missions", "fleet", "ai_predictions", "orders"]:
     for role in ["admin", "operator", "technician", "customer"]:
         try:
             router_mod = importlib.import_module(f"app.modules.{mod}.{role}.router")

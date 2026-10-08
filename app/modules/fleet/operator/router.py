@@ -11,7 +11,7 @@ from typing import Optional
 from pydantic import BaseModel
 from datetime import datetime
 
-router = APIRouter(prefix="/operator/fleet", tags=["Operator - Fleet"])
+router = APIRouter(prefix="/operator/fleet", tags=["Fleet"])
 
 allow_operator = RoleChecker([UserRole.OPERATOR, UserRole.ADMIN])
 

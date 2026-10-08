@@ -1,151 +1,370 @@
-# Cấu trúc Cơ sở dữ liệu - DroneOptAI (FA26IS01)
+# Database Schema Documentation
+Đây là tài liệu Single Source of Truth cho cấu trúc cơ sở dữ liệu của dự án Drone-backend, được tự động cập nhật và đồng bộ theo models.
 
-Tài liệu này định nghĩa cấu trúc cơ sở dữ liệu và các luồng tương tác chuẩn xác theo yêu cầu thiết kế của hệ thống **Energy-Efficient Drone Delivery System**, bao gồm yêu cầu của **FE Operator (Spec VI)** và phân hệ Technician (Maintenance, Fleet & Work Orders).
+## I. Cấu trúc các Bảng (Tables)
 
----
+### Bảng ai_predictions
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| mission_id | BIGINT | Non-nullable |
+| estimated_energy_wh | FLOAT | Non-nullable |
+| estimated_duration_m | FLOAT | Non-nullable |
+| risk_level | VARCHAR(6) | Non-nullable |
+| shap_values_json | JSONB | Nullable |
+| predicted_at | DATETIME | Non-nullable |
 
-## I. Cấu trúc các bảng (Tables)
+### Bảng ai_recommendations
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| mission_id | BIGINT | Non-nullable |
+| category | VARCHAR(20) | Non-nullable |
+| content | TEXT | Non-nullable |
+| is_applied | BOOLEAN | Non-nullable |
+| created_at | DATETIME | Non-nullable |
 
-### A. Nhóm Quản lý Người dùng & Phân quyền (Auth & Users)
+### Bảng audit_logs
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | INTEGER | **PK**, Non-nullable |
+| user_id | VARCHAR | Nullable |
+| action | VARCHAR | Non-nullable |
+| resource_table | VARCHAR | Nullable |
+| details_json | JSON | Nullable |
+| created_at | DATETIME | Non-nullable |
 
-**1. Bảng `roles`** (Lưu trữ các nhóm quyền)
-| Cột | Kiểu dữ liệu | Khóa / Ràng buộc | Mô tả |
-| :--- | :--- | :--- | :--- |
-| `id` | VARCHAR(50) | **PK** | ID quyền |
-| `role_name` | VARCHAR(50) | Unique, Not Null | Tên quyền (Admin, Operator, Technician, Customer) |
-| `description` | VARCHAR(255) | Nullable | Mô tả chi tiết |
+### Bảng batteries
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | VARCHAR(50) | **PK**, Non-nullable |
+| drone_id | BIGINT | **FK**, Nullable |
+| serial_number | VARCHAR(100) | Unique, Non-nullable |
+| capacity_wh | FLOAT | Non-nullable |
+| status | VARCHAR(8) | Non-nullable |
+| current_hub_id | INTEGER | **FK**, Nullable |
+| charge_level_pct | BIGINT | Nullable |
+| create_at | DATETIME | Nullable |
+| update_at | DATETIME | Nullable |
+| battery_model | VARCHAR(100) | Nullable |
 
-**2. Bảng `hubs`** (Quản lý các trạm bay/điểm kỹ thuật)
-| Cột | Kiểu dữ liệu | Khóa / Ràng buộc | Mô tả |
-| :--- | :--- | :--- | :--- |
-| `id` | INT / UUID | **PK** | ID trạm |
-| `code` | VARCHAR(30) | Unique | Mã trạm |
-| `name` | VARCHAR(100) | | Tên trạm |
-| `latitude` | DECIMAL(9,6) | | Vĩ độ |
-| `longitude`| DECIMAL(9,6) | | Kinh độ |
+### Bảng drones
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| name | VARCHAR(100) | Non-nullable |
+| model | VARCHAR(100) | Non-nullable |
+| payload_capacity_kg | FLOAT | Non-nullable |
+| max_speed | FLOAT | Non-nullable |
+| operational_status | VARCHAR(11) | Non-nullable |
+| current_hub_id | BIGINT | Nullable |
+| battery_level_pct | BIGINT | Nullable |
+| utilization_pct | FLOAT | Nullable |
 
-**3. Bảng `users`** (Lưu trữ tài khoản)
-| Cột | Kiểu dữ liệu | Khóa / Ràng buộc | Mô tả |
-| :--- | :--- | :--- | :--- |
-| `id` | VARCHAR(50) | **PK** | ID người dùng |
-| `role_id` | VARCHAR(50) | **FK** -> `roles.id` | Quyền của user |
-| `hub_id` | INT / UUID | **FK** -> `hubs.id`, Nullable | Trạm làm việc (dành cho Technician) |
-| `username` | VARCHAR(50) | Unique, Not Null | Tên đăng nhập |
-| `password_hash` | VARCHAR(255) | Not Null | Mật khẩu đã mã hóa |
-| `full_name` | VARCHAR(100) | Not Null | Họ và tên |
+### Bảng hubs
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | INTEGER | **PK**, Non-nullable |
+| code | VARCHAR | Nullable |
+| name | VARCHAR | Nullable |
+| address | VARCHAR | Nullable |
+| latitude | FLOAT | Nullable |
+| longitude | FLOAT | Nullable |
+| status | VARCHAR | Nullable |
+| created_at | DATETIME | Nullable |
+| updated_at | DATETIME | Nullable |
 
-### B. Nhóm Quản lý Đội bay & Thiết bị (Fleet Management)
+### Bảng incidents
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| mission_id | VARCHAR(50) | Nullable |
+| drone_id | BIGINT | Nullable |
+| reporter_id | VARCHAR | Nullable |
+| severity | VARCHAR(6) | Non-nullable |
+| description | VARCHAR | Non-nullable |
+| status | VARCHAR(13) | Non-nullable |
+| reported_at | DATETIME | Nullable |
+| requires_technical_inspection | BOOLEAN | Non-nullable |
 
-**4. Bảng `drones`** (Thông tin máy bay)
-| Cột | Kiểu dữ liệu | Khóa / Ràng buộc | Mô tả |
-| :--- | :--- | :--- | :--- |
-| `id` | INT | **PK**, Auto Increment | ID máy bay |
-| `name` | VARCHAR(100) | Not Null | Tên máy bay |
-| `model` | VARCHAR(100) | Not Null | Đời máy |
-| `current_hub_id`| INT / UUID | **FK** -> `hubs.id`, Nullable | Hiện đang nằm tại Hub nào |
-| `operational_status`| VARCHAR(50) | Enum | `AVAILABLE`, `MAINTENANCE`, `IN_MISSION` |
+### Bảng locations
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| name | VARCHAR | Non-nullable |
+| latitude | FLOAT | Non-nullable |
+| longitude | FLOAT | Non-nullable |
+| type | VARCHAR(15) | Non-nullable |
 
-**5. Bảng `batteries`**
-*(Lưu kho pin, % pin, trạng thái thay thế, v.v.)*
+### Bảng maintenance_alerts
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | INTEGER | **PK**, Non-nullable |
+| drone_id | INTEGER | Nullable |
+| source | VARCHAR | Nullable |
+| maintenance_schedule_id | INTEGER | Nullable |
+| mission_id | VARCHAR | Nullable |
+| incident_id | INTEGER | Nullable |
+| title | VARCHAR | Nullable |
+| status | VARCHAR | Nullable |
+| work_order_id | INTEGER | Nullable |
+| handled_by | VARCHAR | Nullable |
+| created_at | DATETIME | Nullable |
+| handled_at | DATETIME | Nullable |
 
-### C. Nhóm Đơn hàng & Chuyến bay (Order & Mission - Tương thích Spec VI)
+### Bảng maintenance_inspection_items
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | INTEGER | **PK**, Non-nullable |
+| maintenance_record_id | INTEGER | Nullable |
+| item_name | VARCHAR | Nullable |
+| is_completed | BOOLEAN | Nullable |
+| checked_at | DATETIME | Nullable |
 
-**6. Bảng `orders`** (Đơn hàng từ khách hàng)
-| Cột | Kiểu dữ liệu | Khóa / Ràng buộc | Mô tả |
-| :--- | :--- | :--- | :--- |
-| `id` | VARCHAR(50) | **PK** | Mã đơn (VD: ORD-1114) |
-| `customer_id` | VARCHAR(50) | **FK** -> `users.id` | Khách hàng |
-| `package_label` | VARCHAR(255) | | Tên kiện hàng |
-| `payload_kg` | DECIMAL(5,2) | | Khối lượng |
-| `origin_hub_id` | INT | **FK** -> `hubs.id` | Trạm gửi hàng |
-| `destination_hub_id` | INT | **FK** -> `hubs.id` | Trạm nhận hàng |
-| `delivery_mode` | VARCHAR(50) | Enum | `EXPRESS`, `SCHEDULED` |
-| `status` | VARCHAR(50) | Enum | `PENDING`, `IN_DELIVERY`, `DELIVERED_TO_HUB`, `CANCELLED` |
-| `origin_received_at` | TIMESTAMP | | Hub gửi đã nhận kiện hàng |
-| `destination_received_at`| TIMESTAMP | | Hub nhận đã nhận kiện hàng |
-| `planning_at` | TIMESTAMP | | Thời điểm hệ thống cho phép tạo Mission |
+### Bảng maintenance_records
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | INTEGER | **PK**, Non-nullable |
+| work_order_id | INTEGER | Nullable |
+| drone_id | INTEGER | Nullable |
+| performed_by | VARCHAR | Nullable |
+| title | VARCHAR | Nullable |
+| diagnosis | TEXT | Nullable |
+| corrective_action | TEXT | Nullable |
+| resulting_drone_status | VARCHAR | Nullable |
+| created_at | DATETIME | Nullable |
+| completed_at | DATETIME | Nullable |
 
-**7. Bảng `missions`** (Chuyến bay do Operator lên lịch)
-| Cột | Kiểu dữ liệu | Khóa / Ràng buộc | Mô tả |
-| :--- | :--- | :--- | :--- |
-| `id` | INT8 | Primary, Identity, Non-nullable |  |
-| `customer_id` | VARCHAR | Non-nullable |  |
-| `operator_id` | VARCHAR | Nullable |  |
-| `drone_id` | INT8 | Foreign key, Nullable |  |
-| `battery_id` | INT8 | Foreign key, Nullable |  |
-| `pickup_location_id` | INT4 | Foreign key, Nullable |  |
-| `dropoff_location_id` | INT4 | Foreign key, Nullable |  |
-| `payload_weight` | FLOAT8 | Non-nullable |  |
-| `distance_m` | FLOAT8 | Non-nullable | Khoảng cách tuyến đường (mét) |
-| `delivery_fee` | FLOAT8 | Nullable | Phí giao hàng tính toán cho đơn này |
-| `status` | MISSIONS_STATUS | Non-nullable |  |
-| `scheduled_time` | TIMESTAMP | Non-nullable | Thời gian bay dự kiến |
-| `start_time` | TIMESTAMP | Nullable | Thời gian cất cánh thực tế |
-| `end_time` | TIMESTAMP | Nullable | Thời gian hạ cánh thực tế |
-| `origin_hub_id` | INT4 | Nullable |  |
-| `destination_hub_id` | INT4 | Nullable |  |
-| `departed_at` | TIMESTAMP | Nullable |  |
-| `arrived_at` | TIMESTAMP | Nullable |  |
-| `arrival_confirmed_by` | VARCHAR | Nullable |  |
-| `arrival_confirmed_at` | TIMESTAMP | Nullable |  |
-| `approval_deadline` | TIMESTAMP | Nullable | Hỗ trợ dữ liệu cho API trả về làm hiệu ứng đếm ngược trên UI và làm mốc thời gian cho Worker tự động hủy đơn |
-| `handling_status` | MISSIONS_HANDLING_STATUS | Nullable |  |
-| `order_code` | VARCHAR | Nullable |  |
-| `mission_code` | VARCHAR | Nullable |  |
-| `order_id` | VARCHAR | Nullable |  |
-| `route_id` | VARCHAR | Nullable |  |
-| `planned_start_at` | TIMESTAMP | Nullable |  |
-| `package_receive_deadline_at` | TIMESTAMP | Nullable |  |
-| `estimated_arrival_at` | TIMESTAMP | Nullable |  |
-| `actual_started_at` | TIMESTAMP | Nullable |  |
-| `actual_completed_at` | TIMESTAMP | Nullable |  |
-| `predicted_duration_min` | INT4 | Nullable |  |
-| `estimated_energy_wh` | NUMERIC | Nullable |  |
-| `battery_consumption_pct` | INT4 | Nullable |  |
-| `predicted_remaining_battery_pct` | INT4 | Nullable |  |
-| `confidence_pct` | INT4 | Nullable |  |
-| `risk_level` | VARCHAR | Nullable |  |
-| `created_by` | VARCHAR | Nullable |  |
-| `created_at` | TIMESTAMP | Nullable |  |
-| `updated_at` | TIMESTAMP | Nullable |  |
-| `cancel_reason` | TEXT | Nullable |  |
-| `failure_reason` | TEXT | Nullable |  |
+### Bảng maintenance_schedules
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | INTEGER | **PK**, Non-nullable |
+| drone_id | INTEGER | Nullable |
+| maintenance_type | VARCHAR | Nullable |
+| interval_days | INTEGER | Nullable |
+| interval_flight_hours | FLOAT | Nullable |
+| last_inspection_at | DATETIME | Nullable |
+| next_inspection_at | DATETIME | Nullable |
+| status | VARCHAR | Nullable |
+| created_at | DATETIME | Nullable |
+| updated_at | DATETIME | Nullable |
 
-**8. Bảng `mission_legs`** (Lộ trình qua các Hub trung chuyển)
-| Cột | Kiểu dữ liệu | Khóa / Ràng buộc | Mô tả |
-| :--- | :--- | :--- | :--- |
-| `id` | INT | **PK** | |
-| `mission_id` | INT | **FK** -> `missions.id` | |
-| `sequence_no` | INT | | Thứ tự chặng bay (1, 2, 3...) |
-| `from_hub_id` | INT | **FK** -> `hubs.id` | Hub xuất phát của chặng |
-| `to_hub_id` | INT | **FK** -> `hubs.id` | Hub đích của chặng |
-| `status` | VARCHAR(50) | Enum | `PENDING`, `IN_PROGRESS`, `COMPLETED` |
+### Bảng mission_battery_swap_history
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | INTEGER | **PK**, Non-nullable |
+| mission_id | VARCHAR(50) | **FK**, Nullable |
+| hub_id | INTEGER | **FK**, Nullable |
+| old_battery_id | VARCHAR(50) | **FK**, Nullable |
+| new_battery_id | VARCHAR(50) | **FK**, Nullable |
+| swapped_at | DATETIME | Nullable |
 
-**9. Bảng `mission_drone_assignment_history`** (Lịch sử đổi Drone)
-Dùng để theo dõi việc Replace Drone khi có sự cố hoặc drone ban đầu không đảm bảo.
+### Bảng mission_hub_checkpoints
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| mission_id | VARCHAR(50) | Non-nullable |
+| hub_id | BIGINT | Nullable |
+| location_id | BIGINT | Nullable |
+| hub_name | VARCHAR | Nullable |
+| hub_latitude | FLOAT | Nullable |
+| hub_longitude | FLOAT | Nullable |
+| drone_latitude | FLOAT | Non-nullable |
+| drone_longitude | FLOAT | Non-nullable |
+| distance_to_hub_m | FLOAT | Nullable |
+| passed_at | DATETIME | Non-nullable |
+| checkpoint_order | INTEGER | Nullable |
 
-### D. Nhóm Sự cố & Bảo trì (Maintenance & Incidents)
+### Bảng mission_legs
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | INTEGER | **PK**, Non-nullable |
+| mission_id | VARCHAR(50) | Nullable |
+| sequence_no | INTEGER | Nullable |
+| from_hub_id | BIGINT | Nullable |
+| to_hub_id | BIGINT | Nullable |
+| battery_id | VARCHAR(50) | **FK**, Nullable |
+| status | VARCHAR(11) | Nullable |
+| started_at | DATETIME | Nullable |
+| completed_at | DATETIME | Nullable |
+| created_at | DATETIME | Nullable |
+| updated_at | DATETIME | Nullable |
 
-**10. Bảng `incidents`**
-*(Chứa thông tin sự cố, `mission_id`, `drone_id`, `severity`, `status`)*
+### Bảng mission_reports
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| mission_id | VARCHAR(50) | Non-nullable |
+| report_url_path | VARCHAR | Non-nullable |
+| generated_at | DATETIME | Non-nullable |
 
-**11. Bảng `maintenance_alerts` & `work_orders`**
-*(Chứa dữ liệu cảnh báo bảo trì và lệnh thực hiện công việc kỹ thuật cho Technician)*
+### Bảng missions
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | VARCHAR(50) | **PK**, Non-nullable |
+| order_id | VARCHAR(50) | Nullable |
+| customer_id | VARCHAR | Nullable |
+| operator_id | VARCHAR | Nullable |
+| drone_id | BIGINT | Nullable |
+| battery_id | VARCHAR(50) | Nullable |
+| pickup_location_id | BIGINT | Nullable |
+| dropoff_location_id | BIGINT | Nullable |
+| payload_weight | FLOAT | Nullable |
+| distance_m | FLOAT | Nullable |
+| delivery_fee | FLOAT | Nullable |
+| status | VARCHAR(17) | Non-nullable |
+| handling_status | VARCHAR(15) | Nullable |
+| scheduled_time | DATETIME | Nullable |
+| start_time | DATETIME | Nullable |
+| end_time | DATETIME | Nullable |
+| origin_hub_id | BIGINT | Nullable |
+| destination_hub_id | BIGINT | Nullable |
+| departed_at | DATETIME | Nullable |
+| arrived_at | DATETIME | Nullable |
+| arrival_confirmed_by | VARCHAR | Nullable |
+| arrival_confirmed_at | DATETIME | Nullable |
 
----
+### Bảng notifications
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| user_id | VARCHAR | Non-nullable |
+| title | VARCHAR | Non-nullable |
+| message | VARCHAR | Non-nullable |
+| notifications_type | VARCHAR(14) | Non-nullable |
+| reference_id | VARCHAR | Nullable |
+| is_read | BOOLEAN | Non-nullable |
+| created_at | DATETIME | Non-nullable |
+| drone_id | INTEGER | Nullable |
+| work_order_id | INTEGER | Nullable |
+| mission_id | VARCHAR | Nullable |
 
-## II. Luồng nghiệp vụ Operator (Order-driven)
+### Bảng orders
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | VARCHAR(50) | **PK**, Non-nullable |
+| customer_id | VARCHAR(50) | Nullable |
+| sender_phone | VARCHAR(20) | Nullable |
+| receiver_phone | VARCHAR(20) | Nullable |
+| package_label | VARCHAR(255) | Nullable |
+| package_type | VARCHAR(100) | Nullable |
+| payload_kg | FLOAT | Nullable |
+| origin_hub_id | BIGINT | Nullable |
+| destination_hub_id | BIGINT | Nullable |
+| delivery_mode | VARCHAR(9) | Nullable |
+| requested_delivery_at | DATETIME | Nullable |
+| estimated_window_start | DATETIME | Nullable |
+| estimated_window_end | DATETIME | Nullable |
+| planning_at | DATETIME | Nullable |
+| status | VARCHAR(16) | Nullable |
+| origin_received_at | DATETIME | Nullable |
+| origin_received_by | VARCHAR(50) | Nullable |
+| destination_received_at | DATETIME | Nullable |
+| destination_received_by | VARCHAR(50) | Nullable |
+| replan_required_at | DATETIME | Nullable |
+| created_at | DATETIME | Nullable |
+| updated_at | DATETIME | Nullable |
+| cancelled_at | DATETIME | Nullable |
+| delivery_fee | FLOAT | Nullable |
+| payment_status | VARCHAR(9) | Nullable |
+| payment_order_code | BIGINT | Unique, Nullable |
+| payment_transaction_id | VARCHAR(100) | Nullable |
+| payment_checkout_url | VARCHAR(500) | Nullable |
+| paid_at | DATETIME | Nullable |
 
-1. **Khách hàng tạo Order:** Hệ thống lưu vào bảng `orders` với trạng thái `PENDING`. Dựa vào `delivery_mode`, tính ra `planning_at` (thời điểm được lên lịch).
-2. **Operator Planning:**
-   - Lấy danh sách Order `PENDING` và đã tới giờ `planning_at`.
-   - Tìm kiếm Drone hợp lệ (ở `origin_hub_id`, trạng thái `AVAILABLE`, pin đủ).
-   - Gọi AI dự đoán Route (`mission_legs`) và năng lượng (`estimated_energy_wh`).
-   - Operator tạo Mission: Hệ thống insert vào `missions`, và tạo các `mission_legs`. Trạng thái Mission là `SCHEDULED`. Order vẫn giữ là `PENDING`.
-3. **Thực thi Mission (Final Validation):**
-   - Chỉ khi Hub báo đã nhận kiện hàng (`origin_received_at` có giá trị), Mission mới bắt đầu bay -> Mission chuyển `IN_PROGRESS`.
-   - Order chuyển sang `IN_DELIVERY`.
-4. **Theo dõi đa chặng (Relay Hubs):**
-   - Drone bay qua các chặng, `mission_legs` lần lượt chuyển từ `PENDING` -> `IN_PROGRESS` -> `COMPLETED`.
-5. **Hoàn thành:**
-   - Khi hạ cánh an toàn tại `destination_hub_id` và khách xác nhận hoặc Hub nhận kiện hàng, Order chuyển thành `DELIVERED_TO_HUB`, Mission chuyển `COMPLETED`.
+### Bảng password_reset_tokens
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| user_id | VARCHAR | Non-nullable |
+| token | VARCHAR | Unique, Non-nullable |
+| expires_at | DATETIME | Non-nullable |
+| used | BOOLEAN | Non-nullable |
+| created_at | DATETIME | Non-nullable |
+
+### Bảng payments
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | VARCHAR | **PK**, Non-nullable |
+| mission_id | VARCHAR(50) | Non-nullable |
+| amount | FLOAT | Non-nullable |
+| payment_method | VARCHAR(11) | Non-nullable |
+| transaction_id | VARCHAR | Nullable |
+| status | VARCHAR(9) | Non-nullable |
+| created_at | DATETIME | Nullable |
+| paid_at | DATETIME | Nullable |
+
+### Bảng roles
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | VARCHAR | **PK**, Non-nullable |
+| role_name | VARCHAR | Unique, Non-nullable |
+| description | VARCHAR | Nullable |
+
+### Bảng telemetry_logs
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| mission_id | VARCHAR(50) | Non-nullable |
+| timestamp | DATETIME | Non-nullable |
+| latitude | FLOAT | Non-nullable |
+| longitude | FLOAT | Non-nullable |
+| altitude | FLOAT | Non-nullable |
+| speed | FLOAT | Non-nullable |
+| battery_voltage | FLOAT | Nullable |
+| energy_consumed_wh | FLOAT | Nullable |
+| wind_speed | FLOAT | Nullable |
+| weather_temperature | FLOAT | Nullable |
+| weather_apparent_temp | FLOAT | Nullable |
+| weather_dew_point | FLOAT | Nullable |
+| weather_humidity | FLOAT | Nullable |
+| weather_wind_speed | FLOAT | Nullable |
+| weather_wind_gust | FLOAT | Nullable |
+| weather_wind_direction | FLOAT | Nullable |
+| weather_precipitation | FLOAT | Nullable |
+| weather_pressure | FLOAT | Nullable |
+| weather_cloud_cover | FLOAT | Nullable |
+
+### Bảng users
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | VARCHAR | **PK**, Non-nullable |
+| role_id | VARCHAR | Nullable |
+| password_hash | VARCHAR | Nullable |
+| full_name | VARCHAR | Non-nullable |
+| email | VARCHAR | Unique, Non-nullable |
+| phone | VARCHAR(20) | Nullable |
+| is_active | BOOLEAN | Non-nullable |
+| created_at | DATETIME | Non-nullable |
+| hub_id | INTEGER | Nullable |
+
+### Bảng work_order_logs
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | INTEGER | **PK**, Non-nullable |
+| work_order_id | INTEGER | Nullable |
+| action | VARCHAR | Nullable |
+| from_status | VARCHAR | Nullable |
+| to_status | VARCHAR | Nullable |
+| changed_by | VARCHAR | Nullable |
+| created_at | DATETIME | Nullable |
+
+### Bảng work_orders
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| drone_id | BIGINT | Non-nullable |
+| battery_id | VARCHAR(50) | Nullable |
+| technician_id | VARCHAR | Non-nullable |
+| issue_description | TEXT | Non-nullable |
+| action_taken | TEXT | Nullable |
+| status | VARCHAR(11) | Non-nullable |
+| resolved_at | DATETIME | Nullable |
+| alert_id | BIGINT | Nullable |
+| title | VARCHAR | Nullable |
+| priority | VARCHAR | Nullable |
+| created_by | VARCHAR | Nullable |
+| assigned_to | VARCHAR | Nullable |
+| scheduled_at | DATETIME | Nullable |
+| started_at | DATETIME | Nullable |
+| completed_at | DATETIME | Nullable |

@@ -2,7 +2,7 @@ from fastapi import APIRouter
 
 router = APIRouter(
     prefix="/admin/auth",
-    tags=["Admin - Auth"]
+    tags=["Authentication"]
 )
 
 @router.get("/")

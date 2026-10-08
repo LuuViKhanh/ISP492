@@ -30,11 +30,11 @@ class ActiveFlightsResponse(BaseModel):
 
 
 class MissionResponse(BaseModel):
-    id: int
+    id: str
     customer_id: Optional[str]
     operator_id: Optional[str]
     drone_id: Optional[int]
-    battery_id: Optional[int]
+    battery_id: Optional[str]
     pickup_location_id: Optional[int]
     dropoff_location_id: Optional[int]
     payload_weight: Optional[float]
@@ -48,6 +48,7 @@ class MissionResponse(BaseModel):
     destination_hub_id: Optional[int]
     departed_at: Optional[datetime]
     arrived_at: Optional[datetime]
+    route_path_string: Optional[str] = None
     arrival_confirmed_by: Optional[str]
     arrival_confirmed_at: Optional[datetime]
 
@@ -149,8 +150,15 @@ class MissionPlanningAnalyzeRequest(BaseModel):
     orderId: str
     droneId: int
 
+class RouteLegSchema(BaseModel):
+    from_hub_code: str
+    to_hub_code: str
+    distance_km: float
+
 class RouteOptionSchema(BaseModel):
     routeId: str
+    route_string: str
+    legs_detail: list[RouteLegSchema]
     distanceKm: float
     relayHubs: list[str]
     predictedDurationMin: int
@@ -160,6 +168,8 @@ class RouteOptionSchema(BaseModel):
     confidencePct: int
     risk: str
     recommended: bool
+    reason: Optional[str] = None
+    suggestedDroneId: Optional[int] = None
 
 class MissionPlanningAnalyzeResponse(BaseModel):
     routes: list[RouteOptionSchema]
