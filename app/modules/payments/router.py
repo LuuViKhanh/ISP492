@@ -148,19 +148,19 @@ async def create_checkout(
     await db.commit()
     await db.refresh(order)
 
-    # Map toàn bộ fields từ PayOS response
-    print(f"[PayOS] response attrs: {vars(response)}")  # DEBUG — xóa sau
+    # Dùng to_json() để lấy đúng tất cả fields từ CreatePaymentResult
+    res_data = response.to_json()
 
     return CheckoutResponse(
         order_id=order_id,
         payment_order_code=order_code,
-        checkout_url=response.checkoutUrl,
-        qr_code=getattr(response, "qrCode", None),
-        bin=getattr(response, "bin", None),
-        account_number=getattr(response, "accountNumber", None),
-        account_name=getattr(response, "accountName", None),
-        description=getattr(response, "description", None),
-        payment_link_id=getattr(response, "paymentLinkId", None),
+        checkout_url=res_data.get("checkoutUrl") or response.checkoutUrl,
+        qr_code=res_data.get("qrCode"),
+        bin=res_data.get("bin"),
+        account_number=res_data.get("accountNumber"),
+        account_name=res_data.get("accountName"),
+        description=res_data.get("description"),
+        payment_link_id=res_data.get("paymentLinkId"),
         amount=amount_vnd,
         payment_status=PaymentStatus.PENDING,
     )
