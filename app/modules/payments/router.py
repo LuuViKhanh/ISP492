@@ -45,7 +45,13 @@ class CheckoutResponse(BaseModel):
     payment_order_code: int
     checkout_url: str
     qr_code: Optional[str] = None
-    amount: float
+    # VietQR fields — FE dùng để tạo QR trực tiếp
+    bin: Optional[str] = None
+    account_number: Optional[str] = None
+    account_name: Optional[str] = None
+    description: Optional[str] = None
+    payment_link_id: Optional[str] = None
+    amount: int  # Luôn là integer VND
     payment_status: PaymentStatus
 
 
@@ -97,14 +103,14 @@ async def create_checkout(
             order_id=order_id,
             payment_order_code=order.payment_order_code,
             checkout_url=order.payment_checkout_url,
-            amount=order.delivery_fee,
+            amount=int(round(order.delivery_fee)),
             payment_status=order.payment_status,
         )
 
     # Tạo orderCode duy nhất (PayOS yêu cầu số nguyên dương)
     order_code = int(time.time() * 1000) % 9999999 + random.randint(1, 999)
 
-    amount_vnd = int(order.delivery_fee)  # PayOS nhận VND nguyên
+    amount_vnd = int(round(order.delivery_fee))  # Làm tròn VND integer
 
     frontend_url = settings.FRONTEND_URL.rstrip("/")
     return_url  = f"{frontend_url}/payment/success?order_id={order_id}"
@@ -142,12 +148,20 @@ async def create_checkout(
     await db.commit()
     await db.refresh(order)
 
+    # Map toàn bộ fields từ PayOS response
+    print(f"[PayOS] response attrs: {vars(response)}")  # DEBUG — xóa sau
+
     return CheckoutResponse(
         order_id=order_id,
         payment_order_code=order_code,
         checkout_url=response.checkoutUrl,
         qr_code=getattr(response, "qrCode", None),
-        amount=order.delivery_fee,
+        bin=getattr(response, "bin", None),
+        account_number=getattr(response, "accountNumber", None),
+        account_name=getattr(response, "accountName", None),
+        description=getattr(response, "description", None),
+        payment_link_id=getattr(response, "paymentLinkId", None),
+        amount=amount_vnd,
         payment_status=PaymentStatus.PENDING,
     )
 
