@@ -208,6 +208,7 @@ class Order(Base):
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # ── Payment fields ────────────────────────────────────────
     delivery_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
+    receiver_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     payment_status: Mapped[PaymentStatus | None] = mapped_column(
         SAEnum(PaymentStatus, name="payment_status_enum", create_type=False, values_callable=lambda x: [e.value for e in x]),
         nullable=True, default=PaymentStatus.UNPAID

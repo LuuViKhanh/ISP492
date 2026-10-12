@@ -182,3 +182,47 @@ async def get_eligible_drones(
             for d in eligible_drones
         ]
     )
+
+
+@router.post("/{order_id}/cancel", summary="Huỷ đơn hàng")
+async def cancel_order(
+    order_id: str,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Huỷ đơn hàng — chỉ cho phép khi order đang PENDING.
+    Tự động gửi SMS thông báo huỷ đến receiver_phone.
+    """
+    order = await db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if order.status != OrderStatus.PENDING:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Chỉ có thể huỷ order đang PENDING, hiện tại: {order.status}"
+        )
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    order.status = OrderStatus.CANCELLED
+    order.cancelled_at = now
+    order.updated_at = now
+    await db.commit()
+
+    # Gửi email thông báo huỷ
+    try:
+        from app.core.email import send_delivery_email
+        if order.receiver_email:
+            await send_delivery_email(
+                to_email=order.receiver_email,
+                order_id=order_id,
+                mission_code=None,
+                frontend_url=settings.FRONTEND_URL,
+            )
+        else:
+            print(f"[EMAIL] Order {order_id} không có receiver_email, bỏ qua")
+    except Exception as e:
+        print(f"[EMAIL] Lỗi gửi email huỷ order: {e}")
+
+    return {"message": "Đã huỷ đơn hàng", "order_id": order_id, "status": "CANCELLED"}

@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.8-flash"
 
+    # ESMS - SMS notification
+    ESMS_API_KEY: str = ""
+    ESMS_SECRET_KEY: str = ""
+    ESMS_BRANDNAME: str = ""
+
     class Config:
         env_file = ".env"
         extra = "ignore"

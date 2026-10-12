@@ -45,7 +45,13 @@ class CheckoutResponse(BaseModel):
     payment_order_code: int
     checkout_url: str
     qr_code: Optional[str] = None
-    amount: float
+    # VietQR fields — FE dùng để tạo QR trực tiếp
+    bin: Optional[str] = None
+    account_number: Optional[str] = None
+    account_name: Optional[str] = None
+    description: Optional[str] = None
+    payment_link_id: Optional[str] = None
+    amount: int  # Luôn là integer VND
     payment_status: PaymentStatus
 
 
@@ -97,14 +103,14 @@ async def create_checkout(
             order_id=order_id,
             payment_order_code=order.payment_order_code,
             checkout_url=order.payment_checkout_url,
-            amount=order.delivery_fee,
+            amount=int(round(order.delivery_fee)),
             payment_status=order.payment_status,
         )
 
     # Tạo orderCode duy nhất (PayOS yêu cầu số nguyên dương)
     order_code = int(time.time() * 1000) % 9999999 + random.randint(1, 999)
 
-    amount_vnd = int(order.delivery_fee)  # PayOS nhận VND nguyên
+    amount_vnd = int(round(order.delivery_fee))  # Làm tròn VND integer
 
     frontend_url = settings.FRONTEND_URL.rstrip("/")
     return_url  = f"{frontend_url}/payment/success?order_id={order_id}"
@@ -116,10 +122,10 @@ async def create_checkout(
         payment_data = PaymentData(
             orderCode=order_code,
             amount=amount_vnd,
-            description=f"Thanh toan don {order_id[:12]}",
+            description=f"TT don {order_id[:10]}"[:25],  # PayOS max 25 ký tự
             items=[
                 ItemData(
-                    name=f"Giao hang {order.package_label or order_id[:8]}",
+                    name=f"Giao hang {order.package_label or order_id[:8]}"[:50],
                     quantity=1,
                     price=amount_vnd,
                 )
@@ -129,7 +135,9 @@ async def create_checkout(
         )
         response = payos.createPaymentLink(payment_data)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"PayOS lỗi: {str(e)}")
+        import traceback
+        print(f"[PayOS ERROR] {traceback.format_exc()}")
+        raise HTTPException(status_code=400, detail=f"PayOS lỗi: {str(e)}")
 
     # Lưu vào DB
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -140,12 +148,20 @@ async def create_checkout(
     await db.commit()
     await db.refresh(order)
 
+    # Dùng to_json() để lấy đúng tất cả fields từ CreatePaymentResult
+    res_data = response.to_json()
+
     return CheckoutResponse(
         order_id=order_id,
         payment_order_code=order_code,
-        checkout_url=response.checkoutUrl,
-        qr_code=getattr(response, "qrCode", None),
-        amount=order.delivery_fee,
+        checkout_url=res_data.get("checkoutUrl") or response.checkoutUrl,
+        qr_code=res_data.get("qrCode"),
+        bin=res_data.get("bin"),
+        account_number=res_data.get("accountNumber"),
+        account_name=res_data.get("accountName"),
+        description=res_data.get("description"),
+        payment_link_id=res_data.get("paymentLinkId"),
+        amount=amount_vnd,
         payment_status=PaymentStatus.PENDING,
     )
 

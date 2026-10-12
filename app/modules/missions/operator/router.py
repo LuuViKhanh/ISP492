@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+﻿from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func
 from datetime import timedelta
@@ -7,6 +7,7 @@ import math
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
+from app.core.config import settings
 from app.modules.missions.models import Mission, MissionStatus, Location, LocationType, Incident, IncidentStatus, IncidentSeverity, TelemetryLog, MissionHubCheckpoint
 from app.modules.system.models import Hub
 from app.modules.fleet.models import MaintenanceAlert
@@ -217,7 +218,7 @@ from typing import Optional
 from datetime import datetime
 
 class IncidentCreate(BaseModel):
-    mission_id: Optional[int] = None
+    mission_id: Optional[str] = None
     drone_id: Optional[int] = None
     severity: IncidentSeverity
     description: str
@@ -225,7 +226,7 @@ class IncidentCreate(BaseModel):
 
 class IncidentResponse(BaseModel):
     id: int
-    mission_id: Optional[int]
+    mission_id: Optional[str]
     drone_id: Optional[int]
     reporter_id: Optional[str]
     severity: IncidentSeverity
@@ -320,13 +321,8 @@ async def get_mission(
     db: AsyncSession = Depends(get_async_db),
 ):
     """Trả về toàn bộ thông tin mission bao gồm pickup_location_id và dropoff_location_id."""
-    try:
-        mission_id_str = int(mission_id)
-        mission = await db.get(Mission, mission_id_str)
-    except ValueError:
-        result = await db.execute(select(Mission).where(Mission.id == mission_id))
-        mission = result.scalars().first()
-        
+    mission = await db.get(Mission, mission_id)
+
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
     return mission
@@ -396,12 +392,7 @@ async def collect_telemetry(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
-    try:
-        mission_id_int = int(mission_id)
-        mission = await db.get(Mission, mission_id_int)
-    except ValueError:
-        result = await db.execute(select(Mission).where(Mission.id == mission_id))
-        mission = result.scalars().first()
+    mission = await db.get(Mission, mission_id)
 
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
@@ -423,6 +414,33 @@ async def collect_telemetry(
         mission.status = MissionStatus.FLYING
         mission.start_time = now
         mission.departed_at = now
+
+        # ── Cập nhật Order status + Gửi Email ────────────────────────────────
+        try:
+            from app.core.email import send_delivery_email
+            from app.modules.missions.models import Order as OrderModel
+            if mission.order_id:
+                order_result = await db.execute(
+                    select(OrderModel).where(OrderModel.id == mission.order_id)
+                )
+                order_obj = order_result.scalar_one_or_none()
+                if order_obj:
+                    # Cập nhật order status → IN_DELIVERY
+                    order_obj.status = OrderStatus.IN_DELIVERY
+                    order_obj.updated_at = now
+
+                    # Gửi email đến receiver_email
+                    if order_obj.receiver_email:
+                        await send_delivery_email(
+                            to_email=order_obj.receiver_email,
+                            order_id=order_obj.id,
+                            mission_code=mission.id,  # Mission ID là mã mission
+                            frontend_url=settings.FRONTEND_URL,
+                        )
+                    else:
+                        print(f"[EMAIL] Order {order_obj.id} không có receiver_email, bỏ qua")
+        except Exception as email_err:
+            print(f"[EMAIL] Lỗi khi cập nhật order/gửi email: {email_err}")
 
     # ── 2. Fetch weather + Lưu telemetry logs ─────────────────────────────────
     from app.shared.weather import fetch_weather
@@ -670,12 +688,7 @@ async def get_mission_telemetry(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
-    try:
-        mission_id_int = int(mission_id)
-        mission = await db.get(Mission, mission_id_int)
-    except ValueError:
-        result = await db.execute(select(Mission).where(Mission.id == mission_id))
-        mission = result.scalars().first()
+    mission = await db.get(Mission, mission_id)
 
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
@@ -700,12 +713,7 @@ async def get_hub_checkpoints(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
-    try:
-        mission_id_int = int(mission_id)
-        mission = await db.get(Mission, mission_id_int)
-    except ValueError:
-        result = await db.execute(select(Mission).where(Mission.id == mission_id))
-        mission = result.scalars().first()
+    mission = await db.get(Mission, mission_id)
 
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")

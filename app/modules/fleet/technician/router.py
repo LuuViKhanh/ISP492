@@ -21,6 +21,7 @@ from app.modules.fleet.technician.schemas import (
     IncomingMissionResponse, BatteryResponse, BatteryUseRequest
 )
 from app.modules.missions.models import Mission, MissionStatus, HandlingStatus
+from app.core.config import settings
 
 router = APIRouter(prefix="/technician/fleet", tags=["Fleet"])
 
@@ -92,7 +93,7 @@ async def get_incoming_drones(
 
 @router.post("/missions/{mission_id}/confirm-arrival")
 async def confirm_arrival(
-    mission_id: int,
+    mission_id: str,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -104,10 +105,47 @@ async def confirm_arrival(
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     mission.arrival_confirmed_by = user.id
     mission.arrival_confirmed_at = now
+    mission.status = MissionStatus.COMPLETED
     if mission.drone_id and mission.destination_hub_id:
         drone = await db.get(Drone, mission.drone_id)
         if drone:
             drone.current_hub_id = mission.destination_hub_id
+
+    # ── Cập nhật Order status → DELIVERED_TO_HUB + Email ─────────────────────
+    try:
+        from app.modules.missions.models import Order as OrderModel, OrderStatus
+        from app.core.email import send_hub_arrival_email
+        from sqlalchemy import select as sa_select
+        from app.modules.system.models import Hub as HubModel
+        if mission.order_id:
+            order_result = await db.execute(
+                sa_select(OrderModel).where(OrderModel.id == mission.order_id)
+            )
+            order_obj = order_result.scalar_one_or_none()
+            if order_obj:
+                order_obj.status = OrderStatus.DELIVERED_TO_HUB
+                order_obj.destination_received_at = now
+                order_obj.destination_received_by = user.id
+                order_obj.updated_at = now
+
+                # Lấy tên hub đích
+                hub_name = None
+                if mission.destination_hub_id:
+                    hub = await db.get(HubModel, mission.destination_hub_id)
+                    hub_name = hub.name if hub and hub.name else None
+
+                # Gửi email thông báo đến trạm
+                if order_obj.receiver_email:
+                    await send_hub_arrival_email(
+                        to_email=order_obj.receiver_email,
+                        order_id=order_obj.id,
+                        hub_name=hub_name,
+                        frontend_url=settings.FRONTEND_URL,
+                    )
+                else:
+                    print(f"[EMAIL] Order {order_obj.id} không có receiver_email, bỏ qua")
+    except Exception as e:
+        print(f"[EMAIL] Lỗi DELIVERED_TO_HUB: {e}")
     await db.commit()
     return {"message": "Arrival confirmed", "mission_id": mission_id, "confirmed_by": user.id}
 
