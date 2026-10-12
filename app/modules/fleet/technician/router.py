@@ -104,6 +104,7 @@ async def confirm_arrival(
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     mission.arrival_confirmed_by = user.id
     mission.arrival_confirmed_at = now
+    mission.status = MissionStatus.COMPLETED
     if mission.drone_id and mission.destination_hub_id:
         drone = await db.get(Drone, mission.drone_id)
         if drone:
