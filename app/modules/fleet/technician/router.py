@@ -21,6 +21,7 @@ from app.modules.fleet.technician.schemas import (
     IncomingMissionResponse, BatteryResponse, BatteryUseRequest
 )
 from app.modules.missions.models import Mission, MissionStatus, HandlingStatus
+from app.core.config import settings
 
 router = APIRouter(prefix="/technician/fleet", tags=["Fleet"])
 
@@ -113,7 +114,7 @@ async def confirm_arrival(
     # ── Cập nhật Order status → DELIVERED_TO_HUB + Email ─────────────────────
     try:
         from app.modules.missions.models import Order as OrderModel, OrderStatus
-        from app.core.email import send_delivery_email
+        from app.core.email import send_hub_arrival_email
         from sqlalchemy import select as sa_select
         from app.modules.system.models import Hub as HubModel
         if mission.order_id:
@@ -128,17 +129,17 @@ async def confirm_arrival(
                 order_obj.updated_at = now
 
                 # Lấy tên hub đích
-                hub_name = ""
+                hub_name = None
                 if mission.destination_hub_id:
                     hub = await db.get(HubModel, mission.destination_hub_id)
-                    hub_name = f" tai {hub.name}" if hub and hub.name else ""
+                    hub_name = hub.name if hub and hub.name else None
 
-                # Gửi email đến receiver_email
+                # Gửi email thông báo đến trạm
                 if order_obj.receiver_email:
-                    await send_delivery_email(
+                    await send_hub_arrival_email(
                         to_email=order_obj.receiver_email,
                         order_id=order_obj.id,
-                        mission_code=mission.id,
+                        hub_name=hub_name,
                         frontend_url=settings.FRONTEND_URL,
                     )
                 else:
