@@ -109,10 +109,10 @@ async def confirm_arrival(
         if drone:
             drone.current_hub_id = mission.destination_hub_id
 
-    # ── Cập nhật Order status → DELIVERED_TO_HUB + SMS ─────────────────────
+    # ── Cập nhật Order status → DELIVERED_TO_HUB + Email ─────────────────────
     try:
         from app.modules.missions.models import Order as OrderModel, OrderStatus
-        from app.shared.sms import send_sms
+        from app.core.email import send_delivery_email
         from sqlalchemy import select as sa_select
         from app.modules.system.models import Hub as HubModel
         if mission.order_id:
@@ -132,12 +132,16 @@ async def confirm_arrival(
                     hub = await db.get(HubModel, mission.destination_hub_id)
                     hub_name = f" tai {hub.name}" if hub and hub.name else ""
 
-                # Gửi SMS đến receiver_phone
-                if order_obj.receiver_phone:
-                    short_id = order_obj.id[:12]
-                    await send_sms(
-                        order_obj.receiver_phone,
-                        f"DroneOptAI: Don hang {short_id} da den{hub_name}. Vui long den nhan hang. Hotline: 1900xxxx"
+                # Gửi email đến receiver_email
+                if order_obj.receiver_email:
+                    await send_delivery_email(
+                        to_email=order_obj.receiver_email,
+                        order_id=order_obj.id,
+                        mission_code=mission.id,
+                        frontend_url=settings.FRONTEND_URL,
+                    )
+                else:
+                    print(f"[EMAIL] Order {order_obj.id} không có receiver_email, bỏ qua")
                     )
     except Exception as e:
         print(f"[SMS] Lỗi DELIVERED_TO_HUB: {e}")
