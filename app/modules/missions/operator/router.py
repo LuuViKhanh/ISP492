@@ -425,9 +425,9 @@ async def collect_telemetry(
         mission.start_time = now
         mission.departed_at = now
 
-        # ── Cập nhật Order status + Gửi SMS ────────────────────────────────
+        # ── Cập nhật Order status + Gửi Email ────────────────────────────────
         try:
-            from app.shared.sms import send_sms
+            from app.core.email import send_delivery_email
             from app.modules.missions.models import Order as OrderModel
             if mission.order_id:
                 order_result = await db.execute(
@@ -439,16 +439,18 @@ async def collect_telemetry(
                     order_obj.status = OrderStatus.IN_DELIVERY
                     order_obj.updated_at = now
 
-                    # Gửi SMS đến receiver_phone
-                    if order_obj.receiver_phone:
-                        short_id = order_obj.id[:12]
-                        tracking = f"{settings.FRONTEND_URL.rstrip('/')}/orders/{order_obj.id}/tracking"
-                        await send_sms(
-                            order_obj.receiver_phone,
-                            f"DroneOptAI: Don hang {short_id} dang duoc giao bang drone. Theo doi: {tracking}"
+                    # Gửi email đến receiver_email
+                    if order_obj.receiver_email:
+                        await send_delivery_email(
+                            to_email=order_obj.receiver_email,
+                            order_id=order_obj.id,
+                            mission_code=mission.mission_code,
+                            frontend_url=settings.FRONTEND_URL,
                         )
-        except Exception as sms_err:
-            print(f"[SMS] Lỗi khi cập nhật order/gửi SMS: {sms_err}")
+                    else:
+                        print(f"[EMAIL] Order {order_obj.id} không có receiver_email, bỏ qua")
+        except Exception as email_err:
+            print(f"[EMAIL] Lỗi khi cập nhật order/gửi email: {email_err}")
 
     # ── 2. Fetch weather + Lưu telemetry logs ─────────────────────────────────
     from app.shared.weather import fetch_weather
