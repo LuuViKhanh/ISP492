@@ -21,6 +21,7 @@ from app.modules.fleet.technician.schemas import (
     IncomingMissionResponse, BatteryResponse, BatteryUseRequest
 )
 from app.modules.missions.models import Mission, MissionStatus, HandlingStatus
+from app.core.config import settings
 
 router = APIRouter(prefix="/technician/fleet", tags=["Fleet"])
 
