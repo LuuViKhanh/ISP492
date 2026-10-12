@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     PAYOS_CHECKSUM_KEY: str = ""
     BACKEND_URL: str = "https://isp492.onrender.com"
 
+    # Google Gemini AI Chatbot
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-3.8-flash"
+
     class Config:
         env_file = ".env"
         extra = "ignore"
