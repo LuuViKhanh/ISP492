@@ -142,9 +142,8 @@ async def confirm_arrival(
                     )
                 else:
                     print(f"[EMAIL] Order {order_obj.id} không có receiver_email, bỏ qua")
-                    )
     except Exception as e:
-        print(f"[SMS] Lỗi DELIVERED_TO_HUB: {e}")
+        print(f"[EMAIL] Lỗi DELIVERED_TO_HUB: {e}")
     await db.commit()
     return {"message": "Arrival confirmed", "mission_id": mission_id, "confirmed_by": user.id}
 
