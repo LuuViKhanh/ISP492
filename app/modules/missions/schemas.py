@@ -120,7 +120,7 @@ class TelemetryIngestResponse(BaseModel):
 
 
 class LiveTrackingDrone(BaseModel):
-    mission_id: int
+    mission_id: str
     drone_id: Optional[int]
     status: MissionStatus
     latest_lat: Optional[float]

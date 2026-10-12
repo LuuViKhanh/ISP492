@@ -218,7 +218,7 @@ from typing import Optional
 from datetime import datetime
 
 class IncidentCreate(BaseModel):
-    mission_id: Optional[int] = None
+    mission_id: Optional[str] = None
     drone_id: Optional[int] = None
     severity: IncidentSeverity
     description: str
@@ -226,7 +226,7 @@ class IncidentCreate(BaseModel):
 
 class IncidentResponse(BaseModel):
     id: int
-    mission_id: Optional[int]
+    mission_id: Optional[str]
     drone_id: Optional[int]
     reporter_id: Optional[str]
     severity: IncidentSeverity
@@ -321,13 +321,8 @@ async def get_mission(
     db: AsyncSession = Depends(get_async_db),
 ):
     """Trả về toàn bộ thông tin mission bao gồm pickup_location_id và dropoff_location_id."""
-    try:
-        mission_id_str = int(mission_id)
-        mission = await db.get(Mission, mission_id_str)
-    except ValueError:
-        result = await db.execute(select(Mission).where(Mission.id == mission_id))
-        mission = result.scalars().first()
-        
+    mission = await db.get(Mission, mission_id)
+
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
     return mission
@@ -397,12 +392,7 @@ async def collect_telemetry(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
-    try:
-        mission_id_int = int(mission_id)
-        mission = await db.get(Mission, mission_id_int)
-    except ValueError:
-        result = await db.execute(select(Mission).where(Mission.id == mission_id))
-        mission = result.scalars().first()
+    mission = await db.get(Mission, mission_id)
 
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
@@ -698,12 +688,7 @@ async def get_mission_telemetry(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
-    try:
-        mission_id_int = int(mission_id)
-        mission = await db.get(Mission, mission_id_int)
-    except ValueError:
-        result = await db.execute(select(Mission).where(Mission.id == mission_id))
-        mission = result.scalars().first()
+    mission = await db.get(Mission, mission_id)
 
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
@@ -728,12 +713,7 @@ async def get_hub_checkpoints(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
-    try:
-        mission_id_int = int(mission_id)
-        mission = await db.get(Mission, mission_id_int)
-    except ValueError:
-        result = await db.execute(select(Mission).where(Mission.id == mission_id))
-        mission = result.scalars().first()
+    mission = await db.get(Mission, mission_id)
 
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
