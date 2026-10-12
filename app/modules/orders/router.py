@@ -193,16 +193,19 @@ async def cancel_order(
     order.updated_at = now
     await db.commit()
 
-    # Gửi SMS thông báo huỷ
+    # Gửi email thông báo huỷ
     try:
-        from app.shared.sms import send_sms
-        if order.receiver_phone:
-            short_id = order_id[:12]
-            await send_sms(
-                order.receiver_phone,
-                f"DroneOptAI: Don hang {short_id} da bi huy. Lien he hotline de biet them chi tiet."
+        from app.core.email import send_delivery_email
+        if order.receiver_email:
+            await send_delivery_email(
+                to_email=order.receiver_email,
+                order_id=order_id,
+                mission_code=None,
+                frontend_url=settings.FRONTEND_URL,
             )
+        else:
+            print(f"[EMAIL] Order {order_id} không có receiver_email, bỏ qua")
     except Exception as e:
-        print(f"[SMS] Lỗi gửi SMS huỷ order: {e}")
+        print(f"[EMAIL] Lỗi gửi email huỷ order: {e}")
 
     return {"message": "Đã huỷ đơn hàng", "order_id": order_id, "status": "CANCELLED"}
