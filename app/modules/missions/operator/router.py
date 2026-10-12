@@ -444,7 +444,7 @@ async def collect_telemetry(
                         await send_delivery_email(
                             to_email=order_obj.receiver_email,
                             order_id=order_obj.id,
-                            mission_code=mission.mission_code,
+                            mission_code=mission.id,  # Mission ID là mã mission
                             frontend_url=settings.FRONTEND_URL,
                         )
                     else:
