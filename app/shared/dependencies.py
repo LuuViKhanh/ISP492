@@ -40,6 +40,32 @@ async def get_current_user(
     return CurrentUser(id=user.id, email=user.email, role=user.role, hub_id=user.hub_id)
 
 
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
+
+
+async def get_optional_current_user(
+    token: str | None = Depends(oauth2_scheme_optional),
+    db: AsyncSession = Depends(get_async_db),
+) -> CurrentUser | None:
+    """
+    Dependency lấy thông tin User hiện tại nếu có truyền Token (không bắt buộc).
+    Dành cho các endpoint công khai nhưng có thể cá nhân hóa nếu đã đăng nhập (như Chatbot AI).
+    """
+    if not token:
+        return None
+    try:
+        from app.modules.auth.service import decode_token, get_user_by_id
+        payload = decode_token(token)
+        if not payload or payload.get("type") != "access":
+            return None
+        user = await get_user_by_id(db, payload.get("sub"))
+        if not user or not user.is_active:
+            return None
+        return CurrentUser(id=user.id, email=user.email, role=user.role, hub_id=user.hub_id)
+    except Exception:
+        return None
+
+
 class RoleChecker:
     def __init__(self, allowed_roles: List[UserRole]):
         self.allowed_roles = allowed_roles
