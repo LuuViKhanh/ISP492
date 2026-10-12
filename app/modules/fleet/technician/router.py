@@ -92,7 +92,7 @@ async def get_incoming_drones(
 
 @router.post("/missions/{mission_id}/confirm-arrival")
 async def confirm_arrival(
-    mission_id: int,
+    mission_id: str,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):

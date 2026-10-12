@@ -53,7 +53,7 @@ class BatteryResponse(BaseModel):
 
 
 class BatteryUseRequest(BaseModel):
-    mission_id: int
+    mission_id: str
 
 
 class DroneStatusUpdate(BaseModel):
