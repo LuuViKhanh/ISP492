@@ -6,7 +6,10 @@ from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
-from google.genai import types
+try:
+    from google.genai import types
+except (ImportError, ModuleNotFoundError):
+    types = None
 
 from app.modules.missions.models import Mission, MissionStatus, Incident
 
@@ -111,7 +114,9 @@ async def tool_search_mission_by_id(db: AsyncSession, mission_id: str, **kwargs)
     }
 
 
-def get_operator_gemini_tools() -> List[types.Tool]:
+def get_operator_gemini_tools() -> list:
+    if types is None:
+        return []
     return [
         types.Tool(
             function_declarations=[

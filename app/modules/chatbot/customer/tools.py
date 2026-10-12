@@ -11,7 +11,10 @@ from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from google.genai import types
+try:
+    from google.genai import types
+except (ImportError, ModuleNotFoundError):
+    types = None
 
 from app.modules.missions.models import Order, Mission, OrderStatus, DeliveryMode
 from app.modules.system.models import Hub
@@ -241,7 +244,9 @@ async def tool_get_my_recent_orders(
 # ==============================================================================
 # SCHEMA KHAI BÁO VỚI GEMINI
 # ==============================================================================
-def get_customer_gemini_tools() -> List[types.Tool]:
+def get_customer_gemini_tools() -> list:
+    if types is None:
+        return []
     return [
         types.Tool(
             function_declarations=[
