@@ -6,7 +6,10 @@ from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
-from google.genai import types
+try:
+    from google.genai import types
+except (ImportError, ModuleNotFoundError):
+    types = None
 
 from app.modules.auth.models import User
 from app.modules.missions.models import Mission, MissionStatus, Order
@@ -61,7 +64,9 @@ async def tool_get_user_role_counts(db: AsyncSession, **kwargs) -> Dict[str, Any
     }
 
 
-def get_admin_gemini_tools() -> List[types.Tool]:
+def get_admin_gemini_tools() -> list:
+    if types is None:
+        return []
     return [
         types.Tool(
             function_declarations=[

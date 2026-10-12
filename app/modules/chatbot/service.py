@@ -28,8 +28,14 @@ import os
 from typing import List, Dict, Any, Optional, Callable
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from google import genai
-from google.genai import types
+try:
+    from google import genai
+    from google.genai import types
+    GENAI_AVAILABLE = True
+except (ImportError, ModuleNotFoundError):
+    genai = None
+    types = None
+    GENAI_AVAILABLE = False
 
 from app.core.config import settings
 from app.modules.chatbot.schemas import ChatHistoryItem, ChatMessageResponse
@@ -40,8 +46,8 @@ async def execute_agent_chat(
     message: str,
     history: List[ChatHistoryItem],
     system_instruction: str,
-    gemini_tools: List[types.Tool],
-    tools_map: Dict[str, Callable],
+    gemini_tools: Optional[List[Any]] = None,
+    tools_map: Optional[Dict[str, Callable]] = None,
     current_user_id: Optional[str] = None
 ) -> ChatMessageResponse:
     """
@@ -55,6 +61,24 @@ async def execute_agent_chat(
     :param tools_map: Dictionary ánh xạ {tên_tool: hàm_python_thực_thi}
     :param current_user_id: ID người dùng hiện tại (nếu đã đăng nhập)
     """
+    if tools_map is None:
+        tools_map = {}
+
+    # 0. Kiểm tra xem thư viện google-genai đã được cài đặt chưa
+    if not GENAI_AVAILABLE:
+        return ChatMessageResponse(
+            reply=(
+                "⚠️ **Thư viện AI (`google-genai`) chưa được cài đặt trên máy chủ backend.**\n\n"
+                "👉 Lập trình viên vui lòng tắt server backend (Ctrl+C) và chạy lệnh sau trên terminal:\n"
+                "```bash\n"
+                "pip install google-genai==2.29.0\n"
+                "```\n"
+                "Sau khi cài đặt xong, hãy khởi động lại server (`uvicorn app.main:app --reload`)."
+            ),
+            tools_called=[],
+            data=None
+        )
+
     # 1. Kiểm tra API Key
     api_key = settings.GEMINI_API_KEY or os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -68,13 +92,13 @@ async def execute_agent_chat(
             data=None
         )
 
-    model_name = settings.GEMINI_MODEL or "gemini-2.5-flash"
+    model_name = settings.GEMINI_MODEL or "gemini-3.8-flash"
 
     # 2. Khởi tạo Gemini Client
     client = genai.Client(api_key=api_key)
 
     # 3. Chuẩn bị lịch sử hội thoại (Contents)
-    contents: List[types.Content] = []
+    contents: List[Any] = []
     for item in history:
         role = "user" if item.role.lower() == "user" else "model"
         contents.append(
@@ -127,7 +151,7 @@ async def execute_agent_chat(
             if response.candidates and response.candidates[0].content:
                 contents.append(response.candidates[0].content)
 
-            function_response_parts: List[types.Part] = []
+            function_response_parts: List[Any] = []
 
             for call in response.function_calls:
                 call_name = call.name

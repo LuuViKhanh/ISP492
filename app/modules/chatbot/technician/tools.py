@@ -6,7 +6,10 @@ from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from google.genai import types
+try:
+    from google.genai import types
+except (ImportError, ModuleNotFoundError):
+    types = None
 
 from app.modules.fleet.models import Drone, DroneStatus, Battery, WorkOrder, WorkOrderStatus
 
@@ -93,7 +96,9 @@ async def tool_get_pending_work_orders(db: AsyncSession, **kwargs) -> Dict[str, 
     }
 
 
-def get_technician_gemini_tools() -> List[types.Tool]:
+def get_technician_gemini_tools() -> list:
+    if types is None:
+        return []
     return [
         types.Tool(
             function_declarations=[
