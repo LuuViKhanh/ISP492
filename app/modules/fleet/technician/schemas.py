@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Union
 from datetime import datetime
 from app.modules.fleet.models import DroneStatus, WorkOrderStatus
 
@@ -11,11 +11,11 @@ class DroneProfileResponse(BaseModel):
     payload_capacity_kg: float
     max_speed: float
     status: DroneStatus
-    current_hub_id: Optional[int]
-    battery_level_pct: Optional[int]
-    utilization_pct: Optional[float]
+    current_hub_id: Optional[int] = None
+    battery_level_pct: Optional[int] = None
+    utilization_pct: Optional[float] = None
     hub_name: Optional[str] = None
-    installed_battery_id: Optional[int] = None
+    installed_battery_id: Optional[Union[str, int]] = None
     battery_code: Optional[str] = None
     last_flight_at: Optional[datetime] = None
     last_maintenance_at: Optional[datetime] = None
@@ -39,7 +39,7 @@ class IncomingMissionResponse(BaseModel):
 
 
 class BatteryResponse(BaseModel):
-    id: int
+    id: Union[str, int]
     serial_number: str
     capacity_wh: float
     status: str
@@ -63,17 +63,17 @@ class DroneStatusUpdate(BaseModel):
 class MaintenanceHistoryItem(BaseModel):
     id: int
     drone_id: int
-    battery_id: int
-    technician_id: int
+    battery_id: Optional[Union[str, int]] = None
+    technician_id: Optional[Union[str, int]] = None
     issue_description: str
-    action_taken: Optional[str]
+    action_taken: Optional[str] = None
     status: WorkOrderStatus
-    resolved_at: Optional[datetime]
-    title: Optional[str]
-    priority: Optional[str]
-    scheduled_at: Optional[datetime]
-    started_at: Optional[datetime]
-    completed_at: Optional[datetime]
+    resolved_at: Optional[datetime] = None
+    title: Optional[str] = None
+    priority: Optional[str] = None
+    scheduled_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import Optional
+from typing import Optional, Union
 from pydantic import BaseModel
 
 from app.database.db import get_async_db
@@ -41,9 +41,9 @@ class DroneResponse(BaseModel):
     payload_capacity_kg: float
     max_speed: float
     status: DroneStatus
-    current_hub_id: Optional[int]
-    battery_level_pct: Optional[int]
-    utilization_pct: Optional[float]
+    current_hub_id: Optional[int] = None
+    battery_level_pct: Optional[int] = None
+    utilization_pct: Optional[float] = None
 
     class Config:
         from_attributes = True
@@ -68,13 +68,13 @@ class BatteryUpdate(BaseModel):
 
 
 class BatteryResponse(BaseModel):
-    id: int
+    id: Union[str, int]
     serial_number: str
     capacity_wh: float
     status: batteries_status
-    drone_id: Optional[int]
-    current_hub_id: Optional[int]
-    charge_level_pct: Optional[int]
+    drone_id: Optional[int] = None
+    current_hub_id: Optional[int] = None
+    charge_level_pct: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -194,11 +194,11 @@ async def list_batteries(
 
 @router.get("/batteries/{battery_id}", response_model=BatteryResponse, summary="Xem chi tiết một pin")
 async def get_battery(
-    battery_id: int,
+    battery_id: str,
     user: CurrentUser = Depends(allow_admin),
     db: AsyncSession = Depends(get_async_db),
 ):
-    battery = await db.get(Battery, battery_id)
+    battery = await db.get(Battery, str(battery_id))
     if not battery:
         raise HTTPException(status_code=404, detail="Battery not found")
     return battery
@@ -237,12 +237,12 @@ async def create_battery(
 
 @router.put("/batteries/{battery_id}", response_model=BatteryResponse, summary="Cập nhật thông tin pin")
 async def update_battery(
-    battery_id: int,
+    battery_id: str,
     body: BatteryUpdate,
     user: CurrentUser = Depends(allow_admin),
     db: AsyncSession = Depends(get_async_db),
 ):
-    battery = await db.get(Battery, battery_id)
+    battery = await db.get(Battery, str(battery_id))
     if not battery:
         raise HTTPException(status_code=404, detail="Battery not found")
 
@@ -266,11 +266,11 @@ async def update_battery(
 
 @router.delete("/batteries/{battery_id}", status_code=204, summary="Xóa pin khỏi hệ thống")
 async def delete_battery(
-    battery_id: int,
+    battery_id: str,
     user: CurrentUser = Depends(allow_admin),
     db: AsyncSession = Depends(get_async_db),
 ):
-    battery = await db.get(Battery, battery_id)
+    battery = await db.get(Battery, str(battery_id))
     if not battery:
         raise HTTPException(status_code=404, detail="Battery not found")
     await db.delete(battery)
