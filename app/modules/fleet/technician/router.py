@@ -313,7 +313,7 @@ async def get_hub_batteries(
 
 @router.post("/batteries/{battery_id}/use")
 async def use_battery_for_mission(
-    battery_id: int,
+    battery_id: str,
     body: BatteryUseRequest,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
@@ -335,7 +335,7 @@ async def use_battery_for_mission(
 
 @router.post("/batteries/{battery_id}/mark-charged")
 async def mark_battery_charged(
-    battery_id: int,
+    battery_id: str,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):

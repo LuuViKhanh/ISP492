@@ -32,7 +32,7 @@ async def get_hubs(db: AsyncSession = Depends(get_async_db)):
         hubs = result.scalars().all()
     return hubs
 
-def calculate_delivery_cost(dist_km: float, payload_kg: float, package_type: str, delivery_mode: DeliveryMode):
+def calculate_delivery_cost(dist_km: float, payload_kg: float, package_type: str, delivery_mode: DeliveryMode, has_insurance: bool = False):
     # Determine drone size based on payload
     if payload_kg <= 1:
         base_fee = 20000
@@ -61,15 +61,24 @@ def calculate_delivery_cost(dist_km: float, payload_kg: float, package_type: str
     fragile_surcharge = core_fee * 0.15 if is_fragile else 0
     
     is_express = (delivery_mode == DeliveryMode.EXPRESS)
-    service_surcharge = core_fee * 0.25 if is_express else 0
+    express_surcharge = core_fee * 0.25 if is_express else 0
     
     # Insurance 10%
-    insurance_fee = core_fee * 0.10
+    insurance_fee = core_fee * 0.10 if has_insurance else 0
     
-    total_fee = core_fee + fragile_surcharge + service_surcharge + insurance_fee
-    service_fee_total = fragile_surcharge + service_surcharge + insurance_fee
+    total_fee = core_fee + fragile_surcharge + express_surcharge + insurance_fee
+    service_fee_total = fragile_surcharge + express_surcharge + insurance_fee
     
-    return core_fee, service_fee_total, total_fee
+    fee_details = {
+        "base_fee": base_fee,
+        "distance_fee": distance_fee,
+        "payload_fee": payload_fee,
+        "insurance_fee": insurance_fee,
+        "express_surcharge": express_surcharge,
+        "fragile_surcharge": fragile_surcharge,
+    }
+    
+    return core_fee, service_fee_total, total_fee, fee_details
 
 @router.post("/orders/estimate", response_model=OrderEstimateResponse)
 async def estimate_order(
@@ -79,6 +88,12 @@ async def estimate_order(
     """
     BE - POST /customer/orders/estimate: Tính toán và trả về báo giá dựa trên năng lượng dự đoán tiêu thụ.
     """
+    if body.payload_kg <= 0 or body.payload_kg > 10.0:
+        raise HTTPException(
+            status_code=400,
+            detail="Package weight must be between 0.1 kg and 10.0 kg (Size XL limit)."
+        )
+
     origin_hub = await db.get(Hub, body.origin_hub_id)
     dest_hub = await db.get(Hub, body.destination_hub_id)
     if not origin_hub or not dest_hub:
@@ -94,11 +109,12 @@ async def estimate_order(
     energy_wh = prediction.get("energy_wh", 0.0)
     
     # Calculate fees using new logic
-    core_fee, service_fee, total_fee = calculate_delivery_cost(
+    core_fee, service_fee, total_fee, fee_details = calculate_delivery_cost(
         dist_km=dist_km,
         payload_kg=body.payload_kg,
         package_type=getattr(body, "package_type", ""),
-        delivery_mode=body.delivery_mode
+        delivery_mode=body.delivery_mode,
+        has_insurance=getattr(body, "has_insurance", False)
     )
     delivery_fee = core_fee
     
@@ -124,6 +140,7 @@ async def estimate_order(
         delivery_fee=round(delivery_fee, 2),
         service_fee=round(service_fee, 2),
         total_fee=round(delivery_fee + service_fee, 2),
+        fee_details=fee_details,
         estimated_departure=estimated_departure,
         estimated_arrival=estimated_arrival,
         handover_deadline=handover_deadline
@@ -138,6 +155,12 @@ async def create_order(
     """
     BE - POST /customer/orders: Xử lý tạo đơn hàng mới.
     """
+    if body.payload_kg <= 0 or body.payload_kg > 10.0:
+        raise HTTPException(
+            status_code=400,
+            detail="Package weight must be between 0.1 kg and 10.0 kg (Size XL limit)."
+        )
+
     from app.shared.id_generator import generate_sequential_id
     from app.modules.missions.models import Order
     order_id = await generate_sequential_id(db, Order, "ORD")
@@ -152,11 +175,12 @@ async def create_order(
     lat2, lon2 = dest_hub.latitude or 0.0, dest_hub.longitude or 0.0
     dist_km = haversine_distance(lat1, lon1, lat2, lon2)
     
-    core_fee, service_fee, total_fee = calculate_delivery_cost(
+    core_fee, service_fee, total_fee, fee_details = calculate_delivery_cost(
         dist_km=dist_km,
         payload_kg=body.payload_kg,
         package_type=body.package_type,
-        delivery_mode=body.delivery_mode
+        delivery_mode=body.delivery_mode,
+        has_insurance=getattr(body, "has_insurance", False)
     )
 
     new_order = Order(
@@ -182,3 +206,102 @@ async def create_order(
     await db.refresh(new_order)
     
     return new_order
+
+
+# ==============================================================================
+# CUSTOMER ORDERS GET & CANONICAL REFERENCE / HELP ENDPOINTS (FE/BE SYNC SPEC)
+# ==============================================================================
+
+@router.get(
+    "/orders/reference/package-rules",
+    summary="Quy định danh mục hàng hóa và kích thước kiện hàng (Canonical Package Rules)",
+)
+async def get_customer_package_rules():
+    """
+    BE - GET /api/v1/customer/orders/reference/package-rules: Nguồn chuẩn duy nhất cho FE Pricing/Create Delivery & Chatbot.
+    """
+    from app.modules.chatbot.customer.reference_service import CustomerReferenceService
+    return CustomerReferenceService.get_package_rules()
+
+
+@router.get(
+    "/orders/reference/pricing-rules",
+    summary="Quy định bảng giá và tỷ lệ phụ phí (Canonical Pricing Rules)",
+)
+async def get_customer_pricing_rules():
+    """
+    BE - GET /api/v1/customer/orders/reference/pricing-rules: Hiển thị bảng giá theo size (S/M/L/XL) và công thức tính phụ phí.
+    """
+    from app.modules.chatbot.customer.reference_service import CustomerReferenceService
+    return CustomerReferenceService.get_pricing_rules()
+
+
+@router.get(
+    "/orders/reference/delivery-modes",
+    summary="Danh sách chế độ giao hàng Scheduled & Express (Canonical Delivery Modes)",
+)
+async def get_customer_delivery_modes():
+    """
+    BE - GET /api/v1/customer/orders/reference/delivery-modes: Mô tả Scheduled (0%) và Express (+25% Core Fee).
+    """
+    from app.modules.chatbot.customer.reference_service import CustomerReferenceService
+    return CustomerReferenceService.get_delivery_modes()
+
+
+@router.get(
+    "/orders/help/topics",
+    summary="Danh sách chủ đề Help & Policies chính thức cho Khách hàng",
+)
+async def get_customer_help_topics():
+    """
+    BE - GET /api/v1/customer/orders/help/topics: Nguồn dữ liệu cho trang Help & Policies trên FE và Chatbot FAQ.
+    """
+    from app.modules.chatbot.customer.reference_service import CustomerHelpService
+    return CustomerHelpService.get_all_help_topics()
+
+
+@router.get(
+    "/orders/help/topics/{topic}",
+    summary="Chi tiết một chủ đề Help / Policy theo mã",
+)
+async def get_customer_help_topic_detail(topic: str):
+    """
+    BE - GET /api/v1/customer/orders/help/topics/{topic}: Trả về chi tiết policy hoặc mã `POLICY_NOT_DEFINED` nếu chưa công bố.
+    """
+    from app.modules.chatbot.customer.reference_service import CustomerHelpService
+    return CustomerHelpService.get_help_policy(topic)
+
+
+@router.get("/orders", summary="Lấy danh sách đơn hàng của khách hàng hiện tại")
+async def get_my_customer_orders(
+    limit: int = Query(default=20, ge=1, le=100),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    BE - GET /api/v1/customer/orders: Luôn filter theo `current_user.id` từ JWT Token.
+    """
+    from app.modules.chatbot.customer.tools import tool_get_my_orders
+    res = await tool_get_my_orders(db=db, limit=limit, current_user_id=str(current_user.id))
+    res.pop("_actions", None)
+    return res
+
+
+@router.get("/orders/{order_id}", summary="Lấy chi tiết đơn hàng của khách hàng hiện tại")
+async def get_my_customer_order_detail(
+    order_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    BE - GET /api/v1/customer/orders/{order_id}: Kiểm tra quyền sở hữu `order.customer_id == current_user.id`.
+    """
+    from app.modules.chatbot.customer.tools import tool_get_order_detail
+    res = await tool_get_order_detail(db=db, order_id=order_id, current_user_id=str(current_user.id))
+    if not res.get("success"):
+        code = res.get("code", "ORDER_NOT_FOUND")
+        status_code = 403 if code == "ORDER_ACCESS_DENIED" else 404
+        raise HTTPException(status_code=status_code, detail=res)
+    res.pop("_actions", None)
+    return res
+

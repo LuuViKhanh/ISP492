@@ -35,7 +35,7 @@ class DroneOverviewResponse(BaseModel):
 
 
 class BatteryOverviewResponse(BaseModel):
-    id: int
+    id: str
     serial_number: str
     capacity_wh: float
     status: batteries_status
@@ -43,6 +43,7 @@ class BatteryOverviewResponse(BaseModel):
     current_hub_id: Optional[int]
     hub_name: Optional[str]
     charge_level_pct: Optional[int]
+    battery_model: Optional[str]
 
     class Config:
         from_attributes = True
@@ -135,5 +136,6 @@ async def list_all_batteries(
             "current_hub_id": battery.current_hub_id,
             "hub_name": hub_name,
             "charge_level_pct": battery.charge_level_pct,
+            "battery_model": battery.battery_model,
         })
     return response

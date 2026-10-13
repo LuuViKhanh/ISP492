@@ -68,7 +68,7 @@ class BatteryUpdate(BaseModel):
 
 
 class BatteryResponse(BaseModel):
-    id: int
+    id: str
     serial_number: str
     capacity_wh: float
     status: batteries_status
@@ -194,7 +194,7 @@ async def list_batteries(
 
 @router.get("/batteries/{battery_id}", response_model=BatteryResponse, summary="Xem chi tiết một pin")
 async def get_battery(
-    battery_id: int,
+    battery_id: str,
     user: CurrentUser = Depends(allow_admin),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -237,7 +237,7 @@ async def create_battery(
 
 @router.put("/batteries/{battery_id}", response_model=BatteryResponse, summary="Cập nhật thông tin pin")
 async def update_battery(
-    battery_id: int,
+    battery_id: str,
     body: BatteryUpdate,
     user: CurrentUser = Depends(allow_admin),
     db: AsyncSession = Depends(get_async_db),
@@ -266,7 +266,7 @@ async def update_battery(
 
 @router.delete("/batteries/{battery_id}", status_code=204, summary="Xóa pin khỏi hệ thống")
 async def delete_battery(
-    battery_id: int,
+    battery_id: str,
     user: CurrentUser = Depends(allow_admin),
     db: AsyncSession = Depends(get_async_db),
 ):

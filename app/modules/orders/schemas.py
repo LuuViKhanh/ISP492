@@ -17,6 +17,8 @@ class OrderResponse(BaseModel):
     package_label: Optional[str]
     package_type: Optional[str]
     payload_kg: Optional[float]
+    origin_hub: Optional[HubSchema] = None
+    destination_hub: Optional[HubSchema] = None
     delivery_mode: Optional[DeliveryMode]
     status: OrderStatus
     planningState: Optional[str] = None

@@ -167,15 +167,29 @@ app.include_router(db_router)
 
 # Tự động include các router của các roles
 import importlib
-for mod in ["auth", "users", "missions", "fleet", "ai_predictions", "orders"]:
+loaded_chatbot_roles = []
+for mod in ["auth", "users", "missions", "fleet", "ai_predictions", "orders", "chatbot"]:
     for role in ["admin", "operator", "technician", "customer"]:
+        target_mod = f"app.modules.{mod}.{role}.router"
         try:
-            router_mod = importlib.import_module(f"app.modules.{mod}.{role}.router")
+            router_mod = importlib.import_module(target_mod)
             app.include_router(router_mod.router, prefix=settings.API_V1_STR)
-        except ImportError:
-            pass
+            if mod == "chatbot":
+                loaded_chatbot_roles.append(role.capitalize())
+        except ModuleNotFoundError as e:
+            missing_mod = getattr(e, "name", "") or ""
+            # Nếu bản thân subpackage/router.py của role này không tồn tại -> bỏ qua bình thường
+            if missing_mod and target_mod.startswith(missing_mod):
+                pass
+            else:
+                # Nếu file router.py CÓ TỒN TẠI nhưng bị thiếu thư viện bên trong -> Cảnh báo rõ ràng cho dev!
+                print(f"⚠️ [IMPORT ERROR] Không thể nạp '{target_mod}' do lỗi: {e}")
         except Exception as e:
-            print(f"[WARN] Failed to load app.modules.{mod}.{role}.router: {e}")
+            print(f"[WARN] Failed to load {target_mod}: {e}")
+
+if loaded_chatbot_roles:
+    print(f"🤖 [CHATBOT] Đã nạp thành công {len(loaded_chatbot_roles)}/4 Chatbot Routers: {', '.join(loaded_chatbot_roles)}")
+
 
 
 @app.get("/")
