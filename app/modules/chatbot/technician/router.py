@@ -15,7 +15,8 @@ from app.modules.chatbot.schemas import (
     QuickQuestionsResponse,
     QuickQuestionItem,
 )
-from app.modules.chatbot.service import execute_agent_chat
+from fastapi.responses import JSONResponse
+from app.modules.chatbot.service import execute_agent_chat, ChatRateLimitError
 from app.modules.chatbot.technician.prompts import TECHNICIAN_SYSTEM_INSTRUCTION
 from app.modules.chatbot.technician.tools import get_technician_gemini_tools, TECHNICIAN_TOOLS_MAP
 
@@ -38,15 +39,27 @@ async def technician_chat(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db)
 ):
-    return await execute_agent_chat(
-        db=db,
-        message=body.message,
-        history=body.history,
-        system_instruction=TECHNICIAN_SYSTEM_INSTRUCTION,
-        gemini_tools=get_technician_gemini_tools(),
-        tools_map=TECHNICIAN_TOOLS_MAP,
-        current_user_id=user.id
-    )
+    try:
+        return await execute_agent_chat(
+            db=db,
+            message=body.message,
+            history=body.history,
+            system_instruction=TECHNICIAN_SYSTEM_INSTRUCTION,
+            gemini_tools=get_technician_gemini_tools(),
+            tools_map=TECHNICIAN_TOOLS_MAP,
+            current_user_id=str(user.id),
+            conversation_id=body.conversation_id,
+            rate_limit_key=f"technician:{user.id}",
+        )
+    except ChatRateLimitError as e:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "code": "CHAT_RATE_LIMITED",
+                "message": e.message,
+                "retry_after_seconds": e.retry_after_seconds,
+            },
+        )
 
 
 @router.get(

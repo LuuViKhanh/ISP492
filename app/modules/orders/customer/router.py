@@ -88,6 +88,12 @@ async def estimate_order(
     """
     BE - POST /customer/orders/estimate: Tính toán và trả về báo giá dựa trên năng lượng dự đoán tiêu thụ.
     """
+    if body.payload_kg <= 0 or body.payload_kg > 10.0:
+        raise HTTPException(
+            status_code=400,
+            detail="Package weight must be between 0.1 kg and 10.0 kg (Size XL limit)."
+        )
+
     origin_hub = await db.get(Hub, body.origin_hub_id)
     dest_hub = await db.get(Hub, body.destination_hub_id)
     if not origin_hub or not dest_hub:
@@ -149,6 +155,12 @@ async def create_order(
     """
     BE - POST /customer/orders: Xử lý tạo đơn hàng mới.
     """
+    if body.payload_kg <= 0 or body.payload_kg > 10.0:
+        raise HTTPException(
+            status_code=400,
+            detail="Package weight must be between 0.1 kg and 10.0 kg (Size XL limit)."
+        )
+
     from app.shared.id_generator import generate_sequential_id
     from app.modules.missions.models import Order
     order_id = await generate_sequential_id(db, Order, "ORD")
@@ -194,3 +206,102 @@ async def create_order(
     await db.refresh(new_order)
     
     return new_order
+
+
+# ==============================================================================
+# CUSTOMER ORDERS GET & CANONICAL REFERENCE / HELP ENDPOINTS (FE/BE SYNC SPEC)
+# ==============================================================================
+
+@router.get(
+    "/orders/reference/package-rules",
+    summary="Quy định danh mục hàng hóa và kích thước kiện hàng (Canonical Package Rules)",
+)
+async def get_customer_package_rules():
+    """
+    BE - GET /api/v1/customer/orders/reference/package-rules: Nguồn chuẩn duy nhất cho FE Pricing/Create Delivery & Chatbot.
+    """
+    from app.modules.chatbot.customer.reference_service import CustomerReferenceService
+    return CustomerReferenceService.get_package_rules()
+
+
+@router.get(
+    "/orders/reference/pricing-rules",
+    summary="Quy định bảng giá và tỷ lệ phụ phí (Canonical Pricing Rules)",
+)
+async def get_customer_pricing_rules():
+    """
+    BE - GET /api/v1/customer/orders/reference/pricing-rules: Hiển thị bảng giá theo size (S/M/L/XL) và công thức tính phụ phí.
+    """
+    from app.modules.chatbot.customer.reference_service import CustomerReferenceService
+    return CustomerReferenceService.get_pricing_rules()
+
+
+@router.get(
+    "/orders/reference/delivery-modes",
+    summary="Danh sách chế độ giao hàng Scheduled & Express (Canonical Delivery Modes)",
+)
+async def get_customer_delivery_modes():
+    """
+    BE - GET /api/v1/customer/orders/reference/delivery-modes: Mô tả Scheduled (0%) và Express (+25% Core Fee).
+    """
+    from app.modules.chatbot.customer.reference_service import CustomerReferenceService
+    return CustomerReferenceService.get_delivery_modes()
+
+
+@router.get(
+    "/orders/help/topics",
+    summary="Danh sách chủ đề Help & Policies chính thức cho Khách hàng",
+)
+async def get_customer_help_topics():
+    """
+    BE - GET /api/v1/customer/orders/help/topics: Nguồn dữ liệu cho trang Help & Policies trên FE và Chatbot FAQ.
+    """
+    from app.modules.chatbot.customer.reference_service import CustomerHelpService
+    return CustomerHelpService.get_all_help_topics()
+
+
+@router.get(
+    "/orders/help/topics/{topic}",
+    summary="Chi tiết một chủ đề Help / Policy theo mã",
+)
+async def get_customer_help_topic_detail(topic: str):
+    """
+    BE - GET /api/v1/customer/orders/help/topics/{topic}: Trả về chi tiết policy hoặc mã `POLICY_NOT_DEFINED` nếu chưa công bố.
+    """
+    from app.modules.chatbot.customer.reference_service import CustomerHelpService
+    return CustomerHelpService.get_help_policy(topic)
+
+
+@router.get("/orders", summary="Lấy danh sách đơn hàng của khách hàng hiện tại")
+async def get_my_customer_orders(
+    limit: int = Query(default=20, ge=1, le=100),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    BE - GET /api/v1/customer/orders: Luôn filter theo `current_user.id` từ JWT Token.
+    """
+    from app.modules.chatbot.customer.tools import tool_get_my_orders
+    res = await tool_get_my_orders(db=db, limit=limit, current_user_id=str(current_user.id))
+    res.pop("_actions", None)
+    return res
+
+
+@router.get("/orders/{order_id}", summary="Lấy chi tiết đơn hàng của khách hàng hiện tại")
+async def get_my_customer_order_detail(
+    order_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    BE - GET /api/v1/customer/orders/{order_id}: Kiểm tra quyền sở hữu `order.customer_id == current_user.id`.
+    """
+    from app.modules.chatbot.customer.tools import tool_get_order_detail
+    res = await tool_get_order_detail(db=db, order_id=order_id, current_user_id=str(current_user.id))
+    if not res.get("success"):
+        code = res.get("code", "ORDER_NOT_FOUND")
+        status_code = 403 if code == "ORDER_ACCESS_DENIED" else 404
+        raise HTTPException(status_code=status_code, detail=res)
+    res.pop("_actions", None)
+    return res
+

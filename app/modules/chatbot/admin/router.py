@@ -15,7 +15,8 @@ from app.modules.chatbot.schemas import (
     QuickQuestionsResponse,
     QuickQuestionItem,
 )
-from app.modules.chatbot.service import execute_agent_chat
+from fastapi.responses import JSONResponse
+from app.modules.chatbot.service import execute_agent_chat, ChatRateLimitError
 from app.modules.chatbot.admin.prompts import ADMIN_SYSTEM_INSTRUCTION
 from app.modules.chatbot.admin.tools import get_admin_gemini_tools, ADMIN_TOOLS_MAP
 
@@ -38,15 +39,27 @@ async def admin_chat(
     user: CurrentUser = Depends(allow_admin),
     db: AsyncSession = Depends(get_async_db)
 ):
-    return await execute_agent_chat(
-        db=db,
-        message=body.message,
-        history=body.history,
-        system_instruction=ADMIN_SYSTEM_INSTRUCTION,
-        gemini_tools=get_admin_gemini_tools(),
-        tools_map=ADMIN_TOOLS_MAP,
-        current_user_id=user.id
-    )
+    try:
+        return await execute_agent_chat(
+            db=db,
+            message=body.message,
+            history=body.history,
+            system_instruction=ADMIN_SYSTEM_INSTRUCTION,
+            gemini_tools=get_admin_gemini_tools(),
+            tools_map=ADMIN_TOOLS_MAP,
+            current_user_id=str(user.id),
+            conversation_id=body.conversation_id,
+            rate_limit_key=f"admin:{user.id}",
+        )
+    except ChatRateLimitError as e:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "code": "CHAT_RATE_LIMITED",
+                "message": e.message,
+                "retry_after_seconds": e.retry_after_seconds,
+            },
+        )
 
 
 @router.get(
