@@ -31,26 +31,26 @@ class ActiveFlightsResponse(BaseModel):
 
 class MissionResponse(BaseModel):
     id: str
-    customer_id: Optional[str]
-    operator_id: Optional[str]
-    drone_id: Optional[int]
-    battery_id: Optional[str]
-    pickup_location_id: Optional[int]
-    dropoff_location_id: Optional[int]
-    payload_weight: Optional[float]
-    distance_m: Optional[float]
-    delivery_fee: Optional[float]
+    customer_id: Optional[str] = None
+    operator_id: Optional[str] = None
+    drone_id: Optional[int] = None
+    battery_id: Optional[Union[str, int]] = None
+    pickup_location_id: Optional[int] = None
+    dropoff_location_id: Optional[int] = None
+    payload_weight: Optional[float] = None
+    distance_m: Optional[float] = None
+    delivery_fee: Optional[float] = None
     status: MissionStatus
-    scheduled_time: Optional[datetime]
-    start_time: Optional[datetime]
-    end_time: Optional[datetime]
-    origin_hub_id: Optional[int]
-    destination_hub_id: Optional[int]
-    departed_at: Optional[datetime]
-    arrived_at: Optional[datetime]
+    scheduled_time: Optional[datetime] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    origin_hub_id: Optional[int] = None
+    destination_hub_id: Optional[int] = None
+    departed_at: Optional[datetime] = None
+    arrived_at: Optional[datetime] = None
     route_path_string: Optional[str] = None
-    arrival_confirmed_by: Optional[str]
-    arrival_confirmed_at: Optional[datetime]
+    arrival_confirmed_by: Optional[str] = None
+    arrival_confirmed_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -58,8 +58,8 @@ class MissionResponse(BaseModel):
 
 class ApproveRejectRequest(BaseModel):
     drone_id: Optional[int] = None
-    battery_id: Optional[int] = None
-    operator_id: Optional[int] = None
+    battery_id: Optional[Union[str, int]] = None
+    operator_id: Optional[Union[str, int]] = None
     reason: Optional[str] = None
 
 
