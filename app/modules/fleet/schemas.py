@@ -58,7 +58,7 @@ class WorkOrderResponse(BaseModel):
     id: int
     drone_id: int
     battery_id: Optional[str] = None
-    technician_id: int
+    technician_id: str
     issue_description: str
     action_taken: Optional[str]
     status: WorkOrderStatus
