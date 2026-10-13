@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # Google Gemini AI Chatbot
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-3.8-flash"
+    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
 
     # ESMS - SMS notification
     ESMS_API_KEY: str = ""

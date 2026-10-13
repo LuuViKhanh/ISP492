@@ -1,4 +1,4 @@
-﻿"""
+"""
 app/modules/payments/router.py
 ────────────────────────────────
 Payment endpoints dùng PayOS.
@@ -181,6 +181,9 @@ async def get_payment_status(
     order = await db.get(Order, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+
+    if user.role == UserRole.CUSTOMER and str(order.customer_id) != str(user.id):
+        raise HTTPException(status_code=403, detail="ORDER_ACCESS_DENIED")
 
     return PaymentStatusResponse(
         order_id=order_id,

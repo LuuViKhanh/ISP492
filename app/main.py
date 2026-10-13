@@ -177,8 +177,9 @@ for mod in ["auth", "users", "missions", "fleet", "ai_predictions", "orders", "c
             if mod == "chatbot":
                 loaded_chatbot_roles.append(role.capitalize())
         except ModuleNotFoundError as e:
-            # Nếu bản thân file router.py không tồn tại (vai trò này không có module này) -> bỏ qua bình thường
-            if getattr(e, "name", "") == target_mod:
+            missing_mod = getattr(e, "name", "") or ""
+            # Nếu bản thân subpackage/router.py của role này không tồn tại -> bỏ qua bình thường
+            if missing_mod and target_mod.startswith(missing_mod):
                 pass
             else:
                 # Nếu file router.py CÓ TỒN TẠI nhưng bị thiếu thư viện bên trong -> Cảnh báo rõ ràng cho dev!

@@ -1,0 +1,207 @@
+{
+  "package_categories": [
+    { "value": "food", "label": "Food", "label_vi": "Thực phẩm & Đồ ăn" },
+    { "value": "documents", "label": "Documents", "label_vi": "Tài liệu & Hồ sơ" },
+    { "value": "electronics", "label": "Electronics", "label_vi": "Thiết bị điện tử" },
+    { "value": "medical", "label": "Medical supplies", "label_vi": "Vật tư y tế" },
+    { "value": "clothing", "label": "Clothing", "label_vi": "Quần áo & Thời trang" },
+    { "value": "household", "label": "Household goods", "label_vi": "Đồ gia dụng" },
+    { "value": "fragile", "label": "Fragile items", "label_vi": "Hàng dễ vỡ (+15% Core Fee)" },
+    { "value": "other", "label": "Other", "label_vi": "Khác" }
+  ],
+  "package_sizes": [
+    {
+      "size": "S",
+      "max_payload_kg": 1.0,
+      "max_dimensions_cm": { "length": 20, "width": 20, "height": 15 },
+      "dimensions_display": "20 × 20 × 15 cm",
+      "description": "Small documents, food boxes and compact items.",
+      "description_vi": "Tài liệu nhỏ, hộp đồ ăn và vật phẩm nhỏ gọn (≤ 1 kg)."
+    },
+    {
+      "size": "M",
+      "max_payload_kg": 3.0,
+      "max_dimensions_cm": { "length": 30, "width": 25, "height": 20 },
+      "dimensions_display": "30 × 25 × 20 cm",
+      "description": "Standard parcels and small electronics.",
+      "description_vi": "Bưu kiện tiêu chuẩn và thiết bị điện tử nhỏ (≤ 3 kg)."
+    },
+    {
+      "size": "L",
+      "max_payload_kg": 5.0,
+      "max_dimensions_cm": { "length": 40, "width": 30, "height": 25 },
+      "dimensions_display": "40 × 30 × 25 cm",
+      "description": "Medium packages and household items.",
+      "description_vi": "Kiện hàng cỡ vừa và đồ gia dụng (≤ 5 kg)."
+    },
+    {
+      "size": "XL",
+      "max_payload_kg": 10.0,
+      "max_dimensions_cm": { "length": 50, "width": 40, "height": 30 },
+      "dimensions_display": "50 × 40 × 30 cm",
+      "description": "Largest package size accepted by the network.",
+      "description_vi": "Kích thước kiện hàng lớn nhất được mạng lưới Drone chấp nhận (≤ 10 kg)."
+    }
+  ],
+  "pricing": {
+    "currency": "VND",
+    "formula": {
+      "core_fee": "BaseFee + DistanceFee + PayloadFee",
+      "distance_fee": "route_distance_km * rate_per_km",
+      "payload_fee": "payload_kg * rate_per_kg",
+      "fragile_surcharge": "CoreFee * 15% (only when category = fragile)",
+      "insurance_fee": "CoreFee * 10% (only when insurance selected)",
+      "express_surcharge": "CoreFee * 25% (only when delivery_mode = EXPRESS)",
+      "scheduled_surcharge": "0",
+      "final_fee": "CoreFee + FragileSurcharge + InsuranceFee + ServiceSurcharge",
+      "note": "All surcharges are calculated from CoreFee, not compounded."
+    },
+    "tiers": [
+      { "size": "S", "max_payload_kg": 1.0, "base_fee": 20000, "rate_per_km": 4000, "rate_per_kg": 3000 },
+      { "size": "M", "max_payload_kg": 3.0, "base_fee": 30000, "rate_per_km": 5000, "rate_per_kg": 4000 },
+      { "size": "L", "max_payload_kg": 5.0, "base_fee": 45000, "rate_per_km": 6000, "rate_per_kg": 5000 },
+      { "size": "XL", "max_payload_kg": 10.0, "base_fee": 65000, "rate_per_km": 8000, "rate_per_kg": 6000 }
+    ],
+    "surcharges": {
+      "fragile_rate": 0.15,
+      "insurance_rate": 0.10,
+      "express_rate": 0.25,
+      "scheduled_rate": 0.0
+    }
+  },
+  "delivery_modes": [
+    {
+      "mode": "SCHEDULED",
+      "label": "Scheduled Delivery",
+      "label_vi": "Giao hàng hẹn giờ (Scheduled)",
+      "surcharge_rate": 0.0,
+      "surcharge_display": "0% Core Fee",
+      "customer_meaning": "Customer chooses a desired delivery time / flexible shipment.",
+      "customer_meaning_vi": "Khách hàng chọn khung thời gian mong muốn, tiết kiệm chi phí (0% phụ phí dịch vụ). Thời gian khởi hành và đến nơi cụ thể được tính từ hệ thống khi ước tính/đặt đơn."
+    },
+    {
+      "mode": "EXPRESS",
+      "label": "Express Delivery",
+      "label_vi": "Giao hàng ưu tiên (Express)",
+      "surcharge_rate": 0.25,
+      "surcharge_display": "+25% Core Fee",
+      "customer_meaning": "Priority shipment for urgent deliveries.",
+      "customer_meaning_vi": "Ưu tiên xếp lịch bay sớm hơn Scheduled (+25% Core Fee). Thời gian dự kiến cụ thể được lấy từ kết quả ước tính hoặc đơn hàng trên hệ thống."
+    }
+  ],
+  "delivery_flow": {
+    "steps": [
+      "Enter sender and recipient information",
+      "Choose package category, weight and size",
+      "Choose origin and destination hubs",
+      "Choose Scheduled or Express",
+      "Review backend quotation",
+      "Complete payment",
+      "Bring package to origin hub before handover deadline",
+      "Track delivery until destination hub receives it",
+      "Recipient collects the package"
+    ],
+    "steps_vi": [
+      "Nhập thông tin người gửi và người nhận",
+      "Chọn danh mục hàng hóa, khối lượng và kích thước kiện hàng",
+      "Chọn trạm Hub gửi (Origin Hub) và trạm Hub nhận (Destination Hub)",
+      "Chọn hình thức giao Scheduled (Hẹn giờ) hoặc Express (Ưu tiên)",
+      "Xem báo giá chi tiết từ hệ thống Backend",
+      "Hoàn tất thanh toán qua PayOS",
+      "Mang kiện hàng tới Origin Hub trước hạn chót (Handover Deadline)",
+      "Theo dõi hành trình bay cho tới khi Destination Hub tiếp nhận hàng",
+      "Người nhận tới Destination Hub để nhận kiện hàng"
+    ]
+  },
+  "payment_status": {
+    "UNPAID": "Payment link has not been created or payment is not completed yet.",
+    "PENDING": "Payment has not been confirmed yet.",
+    "PAID": "Payment has been confirmed.",
+    "CANCELLED": "The payment session/order payment was cancelled.",
+    "FAILED": "The payment transaction failed.",
+    "REFUNDED": "The payment has been refunded."
+  },
+  "help_topics": {
+    "order_creation": {
+      "key": "order_creation",
+      "title": "Cách tạo đơn hàng (How to create a delivery)",
+      "summary": "Quy trình 9 bước đặt đơn giao hàng bằng Drone từ trạm Hub tới trạm Hub.",
+      "content": "Để tạo đơn hàng trên DroneOptAI: (1) Nhập thông tin người gửi/người nhận -> (2) Chọn loại hàng, cân nặng (tối đa 10kg) và kích thước (S/M/L/XL) -> (3) Chọn Origin Hub và Destination Hub -> (4) Chọn chế độ Scheduled hoặc Express -> (5) Kiểm tra báo giá từ hệ thống -> (6) Thanh toán qua PayOS -> (7) Mang kiện hàng tới Origin Hub trước giờ Handover Deadline -> (8) Theo dõi tiến độ bay -> (9) Người nhận lấy hàng tại Destination Hub."
+    },
+    "hub_to_hub": {
+      "key": "hub_to_hub",
+      "title": "Mô hình giao nhận Hub-to-Hub",
+      "summary": "Giao nhận hàng tại các trạm Hub cố định của DroneOptAI.",
+      "content": "DroneOptAI vận hành theo mô hình Hub-to-Hub: Người gửi mang kiện hàng tới trạm xuất phát (Origin Hub) và người nhận tới lấy hàng tại trạm đích (Destination Hub). Hệ thống không giao/nhận trực tiếp tại địa chỉ nhà riêng tự do ngoài mạng lưới Hub."
+    },
+    "package_rules": {
+      "key": "package_rules",
+      "title": "Quy định kích thước & khối lượng kiện hàng (Package Rules)",
+      "summary": "4 phân hạng kích thước S, M, L, XL với giới hạn tối đa 10 kg.",
+      "content": "Hệ thống hỗ trợ 8 danh mục hàng (food, documents, electronics, medical, clothing, household, fragile, other) và 4 cỡ kiện hàng: Size S (≤ 1 kg, 20×20×15 cm), Size M (≤ 3 kg, 30×25×20 cm), Size L (≤ 5 kg, 40×30×25 cm), Size XL (≤ 10 kg, 50×40×30 cm). Kiện hàng dễ vỡ (fragile) áp dụng phụ phí +15% Core Fee."
+    },
+    "pricing": {
+      "key": "pricing",
+      "title": "Cách tính cước phí vận chuyển (Pricing Rules)",
+      "summary": "Công thức Core Fee và các khoản phụ phí dịch vụ.",
+      "content": "Core Fee = Base Fee + Distance Fee (km × đơn giá/km) + Payload Fee (kg × đơn giá/kg). Mức giá theo size: S (20,000đ + 4,000đ/km + 3,000đ/kg), M (30,000đ + 5,000đ/km + 4,000đ/kg), L (45,000đ + 6,000đ/km + 5,000đ/kg), XL (65,000đ + 8,000đ/km + 6,000đ/kg). Các phụ phí tính trực tiếp trên Core Fee (không cộng dồn lãi kép): Fragile +15%, Insurance +10%, Express +25%, Scheduled +0%."
+    },
+    "delivery_modes": {
+      "key": "delivery_modes",
+      "title": "Hình thức giao hàng: Scheduled vs Express",
+      "summary": "So sánh chế độ giao hẹn giờ (Scheduled) và giao ưu tiên (Express).",
+      "content": "Scheduled (Giao hẹn giờ): 0% phụ phí dịch vụ, khách hàng chọn thời gian giao mong muốn. Express (Giao ưu tiên): +25% Core Fee, kiện hàng được ưu tiên xếp lịch sớm. Thời gian dự kiến khởi hành/đến nơi cụ thể luôn lấy trực tiếp từ hệ thống khi báo giá hoặc tạo đơn."
+    },
+    "handover_deadline": {
+      "key": "handover_deadline",
+      "title": "Hạn chót bàn giao kiện hàng (Handover Deadline)",
+      "summary": "Thời hạn người gửi phải mang hàng tới Origin Hub.",
+      "content": "Handover Deadline là thời điểm muộn nhất người gửi phải mang kiện hàng tới trạm xuất phát (Origin Hub) để kịp chuẩn bị lắp pin và xếp lịch bay cho Drone. Hạn chót cụ thể của từng đơn được hiển thị trong chi tiết đơn hàng."
+    },
+    "payment": {
+      "key": "payment",
+      "title": "Hướng dẫn thanh toán (Payment Help)",
+      "summary": "Thanh toán trực tuyến qua cổng PayOS / mã QR.",
+      "content": "Đơn hàng được thanh toán qua cổng PayOS (quét mã VietQR hoặc chuyển khoản theo link checkout). Các trạng thái thanh toán: PENDING (đang chờ xác nhận thanh toán), PAID (đã thanh toán thành công), CANCELLED (đã hủy phiên thanh toán)."
+    },
+    "fragile": {
+      "key": "fragile",
+      "title": "Hàng dễ vỡ (Fragile Items)",
+      "summary": "Quy định phụ phí đối với danh mục hàng dễ vỡ.",
+      "content": "Khi chọn danh mục hàng dễ vỡ (fragile), hệ thống áp dụng mức phụ phí xử lý +15% tính trên Core Fee. Các quy định bảo hiểm/bồi thường chi tiết ngoài quy tắc tính phí hiện chưa được công bố chính thức trên hệ thống."
+    },
+    "insurance": {
+      "key": "insurance",
+      "title": "Bảo hiểm kiện hàng (Package Insurance)",
+      "summary": "Tùy chọn bảo hiểm +10% Core Fee.",
+      "content": "Khách hàng có thể tùy chọn mua bảo hiểm kiện hàng với mức phí +10% tính trên Core Fee. Lưu ý: Nội dung chi tiết về phạm vi bảo hiểm, hạn mức bồi thường và quy trình khiếu nại hiện chưa có văn bản chính sách chính thức trên hệ thống."
+    },
+    "cancellation": {
+      "key": "cancellation",
+      "title": "Hủy hoặc thay đổi đơn hàng (Cancellation Policy)",
+      "summary": "Điều kiện kiểm tra khả năng hủy đơn hàng.",
+      "content": "Đơn hàng chỉ có thể yêu cầu hủy khi đang ở trạng thái chờ xử lý (PENDING), chưa bàn giao kiện hàng tại Origin Hub và chưa bước vào chuyến bay đang hoạt động. Để biết chính xác một đơn hàng cụ thể có hủy được không, hệ thống sẽ kiểm tra trực tiếp trạng thái thực tế của đơn hàng đó."
+    },
+    "notifications": {
+      "key": "notifications",
+      "title": "Thông báo hệ thống (Notifications)",
+      "summary": "Các sự kiện cập nhật trạng thái đơn hàng và nhắc nhận hàng.",
+      "content": "Hệ thống tự động gửi thông báo khi có cập nhật trạng thái chuyến bay, thanh toán, cảnh báo hủy chuyến quá hạn hoặc nhắc nhở người nhận tới Destination Hub lấy hàng."
+    },
+    "collection": {
+      "key": "collection",
+      "title": "Nhận hàng tại trạm đích (Destination Collection)",
+      "summary": "Quy định khi kiện hàng đã tới Destination Hub.",
+      "content": "Kiện hàng chỉ sẵn sàng để nhận ('Ready for collection') khi trạng thái bàn giao/đơn hàng xác nhận hàng đã tới Destination Hub. Khi hàng đã về trạm đích, hệ thống sẽ nhắc nhận hàng định kỳ mỗi 5 tiếng; nếu quá 5 ngày khách không tới nhận, chuyến hàng sẽ bị hủy theo quy định vận hành."
+    }
+  },
+  "undefined_policies": {
+    "prohibited_items": null,
+    "insurance_coverage": null,
+    "cancellation_refund_detail": null,
+    "hub_operating_hours": null,
+    "recipient_verification": null,
+    "express_sla": null,
+    "support_contact": null
+  }
+}
