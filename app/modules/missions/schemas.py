@@ -59,7 +59,7 @@ class MissionResponse(BaseModel):
 class ApproveRejectRequest(BaseModel):
     drone_id: Optional[int] = None
     battery_id: Optional[str] = None
-    operator_id: Optional[int] = None
+    operator_id: Optional[str] = None
     reason: Optional[str] = None
 
 
