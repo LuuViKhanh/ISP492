@@ -58,8 +58,8 @@ class MissionResponse(BaseModel):
 
 class ApproveRejectRequest(BaseModel):
     drone_id: Optional[int] = None
-    battery_id: Optional[Union[str, int]] = None
-    operator_id: Optional[Union[str, int]] = None
+    battery_id: Optional[str] = None
+    operator_id: Optional[int] = None
     reason: Optional[str] = None
 
 
