@@ -1,0 +1,62 @@
+[
+  {
+    "title": "Cách tạo đơn hàng giao drone",
+    "content": "Để tạo đơn hàng: (1) Chọn Hub xuất phát và Hub đích; (2) Nhập thông tin kiện hàng: trọng lượng (tối đa 10kg), loại hàng; (3) Chọn chế độ giao hàng Express hoặc Scheduled; (4) Xem báo giá và xác nhận. Đơn hàng sẽ ở trạng thái PENDING cho đến khi Operator lên lịch bay.",
+    "category": "order_process",
+    "role": "customer"
+  },
+  {
+    "title": "Kích thước kiện hàng cho phép",
+    "content": "DroneOptAI hỗ trợ 4 kích thước: Size S (≤1kg, ≤20x15x10cm), Size M (≤3kg, ≤35x25x20cm), Size L (≤5kg, ≤50x40x30cm), Size XL (≤10kg, ≤70x50x40cm). Vượt quá kích thước tối đa sẽ không được chấp nhận. Tổng trọng lượng tối đa toàn mạng lưới là 10kg.",
+    "category": "package_rules",
+    "role": "customer"
+  },
+  {
+    "title": "Các loại hàng hóa được phép vận chuyển",
+    "content": "DroneOptAI chấp nhận: Tài liệu, Điện tử, Quần áo, Thực phẩm đóng gói, Hàng gia dụng nhỏ, Đồ fragile (có phụ phí 15%), Hàng y tế không nguy hiểm. KHÔNG chấp nhận: chất lỏng dễ cháy, vũ khí, chất độc hại, pin lithium rời, động vật sống.",
+    "category": "package_rules",
+    "role": "customer"
+  },
+  {
+    "title": "Bảng giá cước phí giao hàng",
+    "content": "Phí = Base fee + Distance fee + Payload fee + Phụ phí. Size S: Base 20,000đ, 4,000đ/km, 3,000đ/kg. Size M: Base 30,000đ, 5,000đ/km, 4,000đ/kg. Size L: Base 45,000đ, 6,000đ/km, 5,000đ/kg. Size XL: Base 65,000đ, 8,000đ/km, 6,000đ/kg. Phụ phí: Express +25%, Fragile +15%, Bảo hiểm +10%.",
+    "category": "pricing",
+    "role": "customer"
+  },
+  {
+    "title": "Chế độ giao hàng Express và Scheduled",
+    "content": "Express: Giao trong 1-3 giờ, phụ phí +25% trên Core Fee. Khách hàng cần bàn giao hàng trong 3 giờ kể từ khi đặt. Scheduled: Chọn thời gian giao trước, phụ phí 0%. Cần bàn giao hàng trước giờ bay ít nhất 3 giờ. Khuyến nghị Scheduled cho hàng không gấp để tiết kiệm chi phí.",
+    "category": "delivery_modes",
+    "role": "customer"
+  },
+  {
+    "title": "Theo dõi đơn hàng và trạng thái giao hàng",
+    "content": "Các trạng thái đơn hàng: PENDING (chờ xử lý), SCHEDULED (đã lên lịch bay), IN_DELIVERY (drone đang bay), ARRIVED_AT_HUB (đã về hub đích, chờ nhận), DELIVERED (đã giao xong). Khách hàng có thể xem vị trí drone thời gian thực, tuyến đường và ETA trên trang Tracking.",
+    "category": "tracking",
+    "role": "customer"
+  },
+  {
+    "title": "Thời gian giao hàng dự kiến (ETA)",
+    "content": "ETA được tính dựa trên: tuyến đường bay (khoảng cách Hub-to-Hub), tốc độ drone (khoảng 10-12 m/s), điều kiện thời tiết và tình trạng đội bay. ETA hiển thị trong khung thời gian ước tính (estimated_window_start và estimated_window_end). ETA có thể thay đổi theo điều kiện thực tế.",
+    "category": "tracking",
+    "role": "customer"
+  },
+  {
+    "title": "Chính sách hủy đơn hàng",
+    "content": "Khách hàng chỉ có thể hủy đơn khi đơn đang ở trạng thái PENDING (chưa có drone được giao). Khi hủy, hệ thống sẽ gửi email xác nhận. Đơn đã vào trạng thái SCHEDULED hoặc đang bay (IN_DELIVERY) không thể hủy. Liên hệ Operator nếu cần hỗ trợ trong trường hợp khẩn cấp.",
+    "category": "cancellation_policy",
+    "role": "customer"
+  },
+  {
+    "title": "Quy trình nhận hàng tại Hub",
+    "content": "Sau khi drone hạ cánh tại Hub đích, hàng sẽ được bảo quản tối đa 5 ngày. Khách hàng sẽ nhận thông báo nhắc nhở mỗi 5 giờ. Nếu sau 5 ngày không đến nhận, đơn hàng sẽ tự động bị hủy. Khi đến nhận, xuất trình mã đơn hàng với Technician tại Hub.",
+    "category": "pickup_policy",
+    "role": "customer"
+  },
+  {
+    "title": "Bảo hiểm kiện hàng",
+    "content": "DroneOptAI cung cấp tùy chọn bảo hiểm kiện hàng với phí +10% trên Core Fee. Bảo hiểm chi trả trong trường hợp hư hỏng do sự cố kỹ thuật của drone. Không áp dụng cho hàng hóa bị hư hỏng do đóng gói không đúng cách hoặc hàng cấm vận chuyển. Chọn 'has_insurance=true' khi tạo đơn.",
+    "category": "insurance",
+    "role": "customer"
+  }
+]

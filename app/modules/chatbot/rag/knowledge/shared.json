@@ -1,0 +1,26 @@
+[
+  {
+    "title": "Giới thiệu hệ thống DroneOptAI",
+    "content": "DroneOptAI là hệ thống giao hàng bằng drone (UAV) tối ưu năng lượng, hỗ trợ mạng lưới giao hàng đa điểm xuất phát. Hệ thống sử dụng AI/ML để dự đoán mức tiêu thụ năng lượng, tối ưu tuyến đường bay và hỗ trợ ra quyết định vận hành theo thời gian thực.",
+    "category": "system_overview",
+    "role": "all"
+  },
+  {
+    "title": "Các vai trò trong hệ thống",
+    "content": "Hệ thống có 4 vai trò: (1) Customer - khách hàng tạo đơn hàng và theo dõi giao hàng; (2) Operator - điều phối viên quản lý chuyến bay, phê duyệt và giám sát drone; (3) Technician - kỹ thuật viên bảo trì drone và pin; (4) Admin - quản trị hệ thống, doanh thu và người dùng.",
+    "category": "system_overview",
+    "role": "all"
+  },
+  {
+    "title": "Mạng lưới Hub của DroneOptAI",
+    "content": "DroneOptAI vận hành mạng lưới các Hub trung chuyển tại TP.HCM. Mỗi Hub là điểm xuất phát và đích đến cho drone. Drone giao hàng từ Hub này sang Hub khác theo tuyến được tối ưu bởi AI. Hub có trạm sạc pin và bãi đỗ drone.",
+    "category": "network",
+    "role": "all"
+  },
+  {
+    "title": "Liên hệ và hỗ trợ",
+    "content": "Để được hỗ trợ, khách hàng có thể sử dụng chatbot AI 24/7 trên ứng dụng. Các vấn đề kỹ thuật phức tạp sẽ được chuyển đến đội ngũ hỗ trợ. Thời gian phản hồi thông thường trong vòng 2 giờ trong giờ làm việc.",
+    "category": "support",
+    "role": "all"
+  }
+]
