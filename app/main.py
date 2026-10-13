@@ -35,32 +35,31 @@ from app.modules.payments.router import router as payments_router
 from app.database.router import router as db_router
 
 import asyncio
-from app.database.db import async_engine, Base, AsyncSessionLocal
+from app.database.db import async_engine, Base
+from app.database.cron_db import run_with_retry
 from app.modules.fleet.technician.service import run_maintenance_alerts_logic, run_battery_overdue_alerts_logic
 from app.shared.workers import run_approval_deadline_watcher, run_telemetry_signal_loss_watcher, run_battery_charging_simulation, run_pickup_reminder_watcher
 
 async def run_hourly_cronjobs():
-    """Vòng lặp chạy ngầm mỗi tiếng (3600s)"""
+    """Vòng lặp chạy ngầm mỗi tiếng (3600s).
+    FDE-193: mỗi worker nhận session độc lập qua run_with_retry.
+    FDE-194: tự động retry khi gặp lỗi tạm thời (connection/timeout).
+    """
     while True:
-        try:
-            async with AsyncSessionLocal() as session:
-                await run_maintenance_alerts_logic(session)
-                await run_battery_overdue_alerts_logic(session)
-                await run_battery_charging_simulation(session)
-                await run_pickup_reminder_watcher(session)
-        except Exception as e:
-            print(f"[CRON ERROR] Lỗi khi chạy hourly cronjobs: {e}")
+        await run_with_retry(run_maintenance_alerts_logic,   "maintenance_alerts")
+        await run_with_retry(run_battery_overdue_alerts_logic, "battery_overdue_alerts")
+        await run_with_retry(run_battery_charging_simulation,  "battery_charging_sim")
+        await run_with_retry(run_pickup_reminder_watcher,      "pickup_reminder")
         await asyncio.sleep(3600)
 
 async def run_realtime_cronjobs():
-    """Vòng lặp chạy ngầm mỗi 3s cho realtime monitoring"""
+    """Vòng lặp chạy ngầm mỗi 3s cho realtime monitoring.
+    FDE-193: mỗi worker nhận session độc lập qua run_with_retry.
+    FDE-194: retry với max_retries=2 và backoff=1s (realtime cần nhanh hơn).
+    """
     while True:
-        try:
-            async with AsyncSessionLocal() as session:
-                await run_approval_deadline_watcher(session)
-                await run_telemetry_signal_loss_watcher(session)
-        except Exception as e:
-            print(f"[CRON ERROR] Lỗi khi chạy realtime cronjobs: {e}")
+        await run_with_retry(run_approval_deadline_watcher,    "approval_deadline",    max_retries=2, base_backoff=1.0)
+        await run_with_retry(run_telemetry_signal_loss_watcher, "telemetry_signal_loss", max_retries=2, base_backoff=1.0)
         await asyncio.sleep(3)
 
 @asynccontextmanager
