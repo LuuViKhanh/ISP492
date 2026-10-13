@@ -96,12 +96,16 @@ async def tool_get_pending_work_orders(db: AsyncSession, **kwargs) -> Dict[str, 
     }
 
 
+from app.modules.chatbot.rag.tool import get_rag_function_declaration, make_rag_tool_for_role
+
+_tool_search_kb_technician = make_rag_tool_for_role("technician")
+
+
 def get_technician_gemini_tools() -> list:
     if types is None:
         return []
-    return [
-        types.Tool(
-            function_declarations=[
+    rag_decl = get_rag_function_declaration()
+    decls = [
                 types.FunctionDeclaration(
                     name="get_fleet_status",
                     description="Xem tổng quan tình trạng đội Drone (sẵn sàng, đang bay, đang bảo trì).",
@@ -117,13 +121,15 @@ def get_technician_gemini_tools() -> list:
                     description="Xem danh sách các lệnh sửa chữa và bảo dưỡng (Work Orders) chưa hoàn thành.",
                     parameters=types.Schema(type=types.Type.OBJECT, properties={})
                 ),
-            ]
-        )
     ]
+    if rag_decl:
+        decls.append(rag_decl)
+    return [types.Tool(function_declarations=decls)]
 
 
 TECHNICIAN_TOOLS_MAP = {
     "get_fleet_status": tool_get_fleet_status,
     "get_battery_status": tool_get_battery_status,
     "get_pending_work_orders": tool_get_pending_work_orders,
+    "search_knowledge_base": _tool_search_kb_technician,
 }

@@ -1,0 +1,50 @@
+[
+  {
+    "title": "Tổng quan doanh thu hệ thống",
+    "content": "Doanh thu được tính từ Mission.delivery_fee của các chuyến bay đã hoàn thành (status=COMPLETED hoặc MISSION_COMPLETED). Dashboard Admin hiển thị: tổng doanh thu, doanh thu hôm nay, doanh thu tháng này, số đơn đã thanh toán. Không có module thanh toán riêng — phí được tính khi tạo đơn và ghi nhận khi giao thành công.",
+    "category": "revenue",
+    "role": "admin"
+  },
+  {
+    "title": "Quản lý người dùng và phân quyền",
+    "content": "Admin có quyền: (1) Xem danh sách tất cả users; (2) Tạo tài khoản mới cho nhân viên với role cụ thể; (3) Cập nhật thông tin, thăng/giáng role; (4) Khóa/mở khóa tài khoản (is_active); (5) Xóa tài khoản. Các role: Admin, Operator, Technician, Customer. Role được ánh xạ qua UUID trong bảng roles.",
+    "category": "user_management",
+    "role": "admin"
+  },
+  {
+    "title": "Audit Logs - Nhật ký hoạt động",
+    "content": "Mọi hành động quan trọng (đăng nhập, tạo đơn, thay đổi trạng thái) đều được ghi vào bảng audit_logs. Admin xem audit logs tại /system/audit-logs với filter theo: user_id, action type, resource_table, thời gian. Hỗ trợ phân trang. Dùng để điều tra sự cố và kiểm toán bảo mật.",
+    "category": "audit",
+    "role": "admin"
+  },
+  {
+    "title": "Thống kê hệ thống (System KPIs)",
+    "content": "Dashboard Admin cung cấp thống kê toàn hệ thống: số users theo role, tổng missions và tỉ lệ thành công, tình trạng fleet (drone theo trạng thái, utilization trung bình), pin (tổng pin, charge trung bình), AI predictions (số mission có dự báo, năng lượng trung bình, phân bố rủi ro LOW/MEDIUM/HIGH).",
+    "category": "system_stats",
+    "role": "admin"
+  },
+  {
+    "title": "Quản lý cấu hình hệ thống",
+    "content": "Admin có thể cấu hình: thông tin Hub (tên, địa chỉ, tọa độ, trạng thái Active/Inactive), thông số vận hành. Cấu hình quan trọng trong .env: GEMINI_API_KEY (chatbot AI), DATABASE_URL (cloud PostgreSQL Supabase), FRONTEND_URL (URL frontend), BREVO_API_KEY (email notifications).",
+    "category": "system_config",
+    "role": "admin"
+  },
+  {
+    "title": "Cảnh báo hệ thống và giám sát",
+    "content": "Admin theo dõi: số Maintenance Alert đang PENDING (cần Technician xử lý), số Incident đang OPEN (cần Operator xử lý), tổng số audit log entries. Cronjob nền chạy: mỗi 3 giây (giám sát mất tín hiệu drone, hủy chuyến quá hạn), mỗi 1 giờ (cảnh báo bảo trì, sạc pin, nhắc nhận hàng).",
+    "category": "system_monitoring",
+    "role": "admin"
+  },
+  {
+    "title": "Backup và Data Governance",
+    "content": "Hệ thống lưu trữ dữ liệu trên cloud PostgreSQL (Supabase). Backup tự động được Supabase quản lý. Admin có thể xuất audit logs để lưu trữ. Dữ liệu telemetry bay được lưu vô thời hạn cho mục đích phân tích. Chính sách: dữ liệu khách hàng được bảo mật và không chia sẻ với bên thứ ba.",
+    "category": "data_governance",
+    "role": "admin"
+  },
+  {
+    "title": "Kiến trúc kỹ thuật hệ thống",
+    "content": "DroneOptAI Backend: FastAPI (Python), PostgreSQL + pgvector (Supabase), SQLAlchemy async ORM. AI/ML: CatBoost model dự báo năng lượng, SHAP explainability, Google Gemini API cho chatbot. Infrastructure: Deploy trên Render.com, database Supabase (pgvector enabled). Cronjob: 2 vòng lặp async — realtime (3s) và hourly (3600s) với isolated DB pool.",
+    "category": "technical_architecture",
+    "role": "admin"
+  }
+]

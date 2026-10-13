@@ -318,7 +318,7 @@ async def use_battery_for_mission(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    battery = await db.get(Battery, battery_id)
+    battery = await db.get(Battery, str(battery_id))
     if not battery:
         raise HTTPException(status_code=404, detail="Battery not found")
         

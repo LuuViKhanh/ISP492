@@ -1,0 +1,50 @@
+[
+  {
+    "title": "Quy trình lên lịch và tạo chuyến bay (Mission)",
+    "content": "Để lên lịch bay cho một đơn hàng: (1) Kiểm tra đơn hàng ở trạng thái PENDING trong Order Management; (2) Dùng tool Mission Planning Analyze để nhận đề xuất tuyến đường và dự báo năng lượng từ AI; (3) Chọn drone phù hợp từ danh sách Eligible Drones tại Hub xuất phát; (4) Tạo Mission → trạng thái chuyển sang SCHEDULED. Không thể lên lịch cho đơn hàng đã có mission đang hoạt động.",
+    "category": "mission_planning",
+    "role": "operator"
+  },
+  {
+    "title": "Điều kiện drone được phép bay",
+    "content": "Drone chỉ được giao nhiệm vụ khi: trạng thái là AVAILABLE, đang đỗ tại Hub xuất phát của đơn hàng, tải trọng tối đa (payload_capacity_kg) >= trọng lượng kiện hàng. Drone đang bảo trì (MAINTENANCE) hoặc đang bay (IN_MISSION) không thể được giao việc mới.",
+    "category": "fleet_management",
+    "role": "operator"
+  },
+  {
+    "title": "Giám sát chuyến bay trực tiếp (Live Tracking)",
+    "content": "Trang Live Tracking cập nhật vị trí drone mỗi 3 giây bằng cách poll API /operator/missions/live-tracking. Hiển thị: tọa độ GPS, độ cao, tốc độ, mức pin, số Hub trung gian đã qua. Khi drone mất tín hiệu quá 3 giây, hệ thống tự động tạo cảnh báo sự cố và thông báo cho tất cả Operator.",
+    "category": "live_tracking",
+    "role": "operator"
+  },
+  {
+    "title": "Xử lý sự cố (Incident Management)",
+    "content": "Khi xảy ra sự cố: (1) Tạo Incident Report với mức độ nghiêm trọng (Low/Medium/High); (2) Nếu yêu cầu kiểm tra kỹ thuật, đánh dấu 'requires_technical_inspection=true' → hệ thống tự tạo Maintenance Alert; (3) Theo dõi tiến trình xử lý qua trạng thái OPEN → INVESTIGATING → CLOSED. Sự cố High-severity cần báo cáo ngay cho Admin.",
+    "category": "incident_management",
+    "role": "operator"
+  },
+  {
+    "title": "AI Decision Center - Dự báo năng lượng và tuyến đường",
+    "content": "AI Decision Center cung cấp: (1) Dự báo năng lượng tiêu thụ (Wh) cho từng chuyến bay dựa trên mô hình CatBoost; (2) Phân tích tuyến đường tối ưu với đề xuất route, thời gian xuất phát tốt nhất; (3) Phân loại rủi ro (LOW/MEDIUM/HIGH) dựa trên năng lượng dự báo; (4) SHAP analysis giải thích tại sao AI đưa ra quyết định đó. Sử dụng để tối ưu hiệu quả vận hành.",
+    "category": "ai_features",
+    "role": "operator"
+  },
+  {
+    "title": "Telemetry và dữ liệu bay",
+    "content": "Mỗi chuyến bay ghi nhận: tọa độ GPS (lat/lng), độ cao (m), tốc độ (m/s), điện áp pin (V), năng lượng tiêu thụ (Wh), dữ liệu thời tiết (nhiệt độ, độ ẩm, gió). Telemetry được push lên server theo batch. Operator có thể xem lại lịch sử telemetry để phân tích hiệu suất và so sánh với dự báo AI.",
+    "category": "telemetry",
+    "role": "operator"
+  },
+  {
+    "title": "Quy trình duyệt và hủy đơn hàng",
+    "content": "Operator có quyền: (1) Tạo Mission từ đơn PENDING; (2) Hủy đơn hàng khi cần thiết (ví dụ: điều kiện thời tiết xấu, không có drone phù hợp). Khi hủy đơn, hệ thống tự động gửi email thông báo đến khách hàng. Chỉ được hủy đơn khi đơn đang PENDING; đơn đã có chuyến bay đang hoạt động cần xử lý qua Incident.",
+    "category": "order_management",
+    "role": "operator"
+  },
+  {
+    "title": "Hub Checkpoint và xác nhận hành trình",
+    "content": "Khi drone bay qua trong vòng 200m của một Hub trung gian, hệ thống tự động ghi nhận Hub Checkpoint. Thông tin gồm: tên Hub, tọa độ thực tế khi qua, khoảng cách đến Hub, thời gian qua. Cooldown giữa 2 checkpoint của cùng Hub là 60 giây. Dùng để theo dõi hành trình và phục hồi sau sự cố.",
+    "category": "routing",
+    "role": "operator"
+  }
+]
