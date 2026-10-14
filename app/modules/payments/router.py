@@ -97,12 +97,21 @@ async def create_checkout(
     if not order.delivery_fee or order.delivery_fee <= 0:
         raise HTTPException(status_code=400, detail="Đơn hàng chưa có phí giao hàng (delivery_fee)")
 
-    # Nếu đã có link PENDING → trả lại link cũ
-    if order.payment_status == PaymentStatus.PENDING and order.payment_checkout_url:
+    # Nếu đã có link PENDING → trả lại từ DB (đã lưu lúc tạo)
+    if order.payment_status == PaymentStatus.PENDING and order.payment_checkout_url and order.payment_order_code:
+        # Nếu DB chưa có qr_code (đơn cũ tạo trước fix) → thử lấy từ PayOS status
+        qr = order.payment_qr_code
+        bin_ = order.payment_bin
+        acc_num = order.payment_account_number
+        acc_name = order.payment_account_name
         return CheckoutResponse(
             order_id=order_id,
             payment_order_code=order.payment_order_code,
             checkout_url=order.payment_checkout_url,
+            qr_code=qr,
+            bin=bin_,
+            account_number=acc_num,
+            account_name=acc_name,
             amount=int(round(order.delivery_fee)),
             payment_status=order.payment_status,
         )
@@ -139,17 +148,19 @@ async def create_checkout(
         print(f"[PayOS ERROR] {traceback.format_exc()}")
         raise HTTPException(status_code=400, detail=f"PayOS lỗi: {str(e)}")
 
-    # Lưu vào DB
+    # Lưu vào DB — bao gồm VietQR fields để reuse sau
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    order.payment_status       = PaymentStatus.PENDING
-    order.payment_order_code   = order_code
-    order.payment_checkout_url = response.checkoutUrl
-    order.updated_at           = now
+    res_data = response.to_json()
+    order.payment_status        = PaymentStatus.PENDING
+    order.payment_order_code    = order_code
+    order.payment_checkout_url  = res_data.get("checkoutUrl") or response.checkoutUrl
+    order.payment_qr_code       = res_data.get("qrCode")
+    order.payment_bin           = res_data.get("bin")
+    order.payment_account_number = res_data.get("accountNumber")
+    order.payment_account_name  = res_data.get("accountName")
+    order.updated_at            = now
     await db.commit()
     await db.refresh(order)
-
-    # Dùng to_json() để lấy đúng tất cả fields từ CreatePaymentResult
-    res_data = response.to_json()
 
     return CheckoutResponse(
         order_id=order_id,

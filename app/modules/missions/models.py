@@ -216,6 +216,10 @@ class Order(Base):
     payment_order_code: Mapped[int | None] = mapped_column(BigInteger, nullable=True, unique=True)
     payment_transaction_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     payment_checkout_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    payment_qr_code: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    payment_bin: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    payment_account_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    payment_account_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 class MissionLeg(Base):
