@@ -185,6 +185,31 @@ async def get_payment_status(
     if user.role == UserRole.CUSTOMER and str(order.customer_id) != str(user.id):
         raise HTTPException(status_code=403, detail="ORDER_ACCESS_DENIED")
 
+    # Nếu vẫn PENDING → chủ động hỏi PayOS để sync trạng thái thực tế
+    if order.payment_status == PaymentStatus.PENDING and order.payment_order_code:
+        try:
+            payos = get_payos()
+            payment_info = payos.getPaymentLinkInformation(order.payment_order_code)
+            info_data = payment_info.to_json() if hasattr(payment_info, "to_json") else {}
+            remote_status = str(info_data.get("status", "")).upper()
+            if remote_status == "PAID":
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                order.payment_status = PaymentStatus.PAID
+                order.paid_at = now
+                order.updated_at = now
+                transaction_list = info_data.get("transactions", [])
+                if transaction_list:
+                    order.payment_transaction_id = str(transaction_list[0].get("reference", ""))
+                await db.commit()
+                await db.refresh(order)
+            elif remote_status in ("CANCELLED", "EXPIRED"):
+                order.payment_status = PaymentStatus.FAILED
+                order.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                await db.commit()
+                await db.refresh(order)
+        except Exception:
+            pass  # Nếu PayOS lỗi thì trả về status hiện tại trong DB
+
     return PaymentStatusResponse(
         order_id=order_id,
         payment_status=order.payment_status or PaymentStatus.UNPAID,
@@ -243,7 +268,8 @@ async def payos_webhook(
 
     # ── Xử lý kết quả thanh toán ────────────────────────────────────────────
     order_code     = data.get("orderCode")
-    status_code    = payload.get("code")   # "00" ở root level theo docs PayOS
+    # PayOS gửi code trong data, không phải root level
+    status_code    = str(data.get("code", "") or payload.get("code", ""))
     transaction_id = str(data.get("reference", "") or data.get("transactionDateTime", ""))
 
     if not order_code:
