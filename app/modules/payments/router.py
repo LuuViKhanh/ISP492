@@ -97,15 +97,34 @@ async def create_checkout(
     if not order.delivery_fee or order.delivery_fee <= 0:
         raise HTTPException(status_code=400, detail="Đơn hàng chưa có phí giao hàng (delivery_fee)")
 
-    # Nếu đã có link PENDING → trả lại link cũ
-    if order.payment_status == PaymentStatus.PENDING and order.payment_checkout_url:
-        return CheckoutResponse(
-            order_id=order_id,
-            payment_order_code=order.payment_order_code,
-            checkout_url=order.payment_checkout_url,
-            amount=int(round(order.delivery_fee)),
-            payment_status=order.payment_status,
-        )
+    # Nếu đã có link PENDING → lấy lại thông tin đầy đủ từ PayOS để FE có QR/bin/account
+    if order.payment_status == PaymentStatus.PENDING and order.payment_checkout_url and order.payment_order_code:
+        try:
+            payos = get_payos()
+            payment_info = payos.getPaymentLinkInformation(order.payment_order_code)
+            info_data = payment_info.to_json() if hasattr(payment_info, "to_json") else {}
+            return CheckoutResponse(
+                order_id=order_id,
+                payment_order_code=order.payment_order_code,
+                checkout_url=info_data.get("checkoutUrl") or order.payment_checkout_url,
+                qr_code=info_data.get("qrCode"),
+                bin=info_data.get("bin"),
+                account_number=info_data.get("accountNumber"),
+                account_name=info_data.get("accountName"),
+                description=info_data.get("description"),
+                payment_link_id=info_data.get("paymentLinkId"),
+                amount=int(round(order.delivery_fee)),
+                payment_status=order.payment_status,
+            )
+        except Exception:
+            # Nếu PayOS lỗi thì trả về link cũ đơn giản
+            return CheckoutResponse(
+                order_id=order_id,
+                payment_order_code=order.payment_order_code,
+                checkout_url=order.payment_checkout_url,
+                amount=int(round(order.delivery_fee)),
+                payment_status=order.payment_status,
+            )
 
     # Tạo orderCode duy nhất (PayOS yêu cầu số nguyên dương)
     order_code = int(time.time() * 1000) % 9999999 + random.randint(1, 999)
