@@ -7,10 +7,10 @@
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
 | :--- | :--- | :--- |
 | id | BIGINT | **PK**, Non-nullable |
-| mission_id | BIGINT | Non-nullable |
+| mission_id | VARCHAR(50) | Non-nullable |
 | estimated_energy_wh | FLOAT | Non-nullable |
 | estimated_duration_m | FLOAT | Non-nullable |
-| risk_level | VARCHAR(6) | Non-nullable |
+| risk_level | VARCHAR(20) | Non-nullable |
 | shap_values_json | JSONB | Nullable |
 | predicted_at | DATETIME | Non-nullable |
 
@@ -18,8 +18,8 @@
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
 | :--- | :--- | :--- |
 | id | BIGINT | **PK**, Non-nullable |
-| mission_id | BIGINT | Non-nullable |
-| category | VARCHAR(20) | Non-nullable |
+| mission_id | VARCHAR(50) | Non-nullable |
+| category | VARCHAR(50) | Non-nullable |
 | content | TEXT | Non-nullable |
 | is_applied | BOOLEAN | Non-nullable |
 | created_at | DATETIME | Non-nullable |
