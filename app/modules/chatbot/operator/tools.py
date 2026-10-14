@@ -114,12 +114,16 @@ async def tool_search_mission_by_id(db: AsyncSession, mission_id: str, **kwargs)
     }
 
 
+from app.modules.chatbot.rag.tool import get_rag_function_declaration, make_rag_tool_for_role
+
+_tool_search_kb_operator = make_rag_tool_for_role("operator")
+
+
 def get_operator_gemini_tools() -> list:
     if types is None:
         return []
-    return [
-        types.Tool(
-            function_declarations=[
+    rag_decl = get_rag_function_declaration()
+    decls = [
                 types.FunctionDeclaration(
                     name="get_active_missions",
                     description="Lấy danh sách các chuyến bay Drone đang hoạt động trên bầu trời.",
@@ -151,9 +155,10 @@ def get_operator_gemini_tools() -> list:
                         required=["mission_id"]
                     )
                 ),
-            ]
-        )
     ]
+    if rag_decl:
+        decls.append(rag_decl)
+    return [types.Tool(function_declarations=decls)]
 
 
 OPERATOR_TOOLS_MAP = {
@@ -161,4 +166,5 @@ OPERATOR_TOOLS_MAP = {
     "get_operator_kpi": tool_get_operator_kpi,
     "get_recent_incidents": tool_get_recent_incidents,
     "search_mission_by_id": tool_search_mission_by_id,
+    "search_knowledge_base": _tool_search_kb_operator,
 }

@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Union
 from app.modules.fleet.models import WorkOrderStatus
 
 # ==================== DTO CHO CHECK AVAILABILITY ====================
@@ -26,7 +26,7 @@ class AvailableBatterySchema(BaseModel):
     serial_number: str
     capacity_wh: float
     status: str
-    drone_id: Optional[int]
+    drone_id: Optional[int] = None
     current_hub_id: Optional[int] = None
     charge_level_pct: Optional[int] = None
     create_at: Optional[datetime] = None
@@ -60,9 +60,9 @@ class WorkOrderResponse(BaseModel):
     battery_id: Optional[str] = None
     technician_id: str
     issue_description: str
-    action_taken: Optional[str]
+    action_taken: Optional[str] = None
     status: WorkOrderStatus
-    resolved_at: Optional[datetime]
+    resolved_at: Optional[datetime] = None
     alert_id: Optional[int] = None
     title: Optional[str] = None
     priority: Optional[str] = None

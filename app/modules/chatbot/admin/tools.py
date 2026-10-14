@@ -64,12 +64,16 @@ async def tool_get_user_role_counts(db: AsyncSession, **kwargs) -> Dict[str, Any
     }
 
 
+from app.modules.chatbot.rag.tool import get_rag_function_declaration, make_rag_tool_for_role
+
+_tool_search_kb_admin = make_rag_tool_for_role("admin")
+
+
 def get_admin_gemini_tools() -> list:
     if types is None:
         return []
-    return [
-        types.Tool(
-            function_declarations=[
+    rag_decl = get_rag_function_declaration()
+    decls = [
                 types.FunctionDeclaration(
                     name="get_system_executive_summary",
                     description="Lấy báo cáo tổng quan điều hành (doanh thu, đơn hàng, chuyến bay hoàn thành, số lượng drone).",
@@ -80,12 +84,14 @@ def get_admin_gemini_tools() -> list:
                     description="Thống kê số lượng người dùng theo từng vai trò (Admin, Operator, Technician, Customer).",
                     parameters=types.Schema(type=types.Type.OBJECT, properties={})
                 ),
-            ]
-        )
     ]
+    if rag_decl:
+        decls.append(rag_decl)
+    return [types.Tool(function_declarations=decls)]
 
 
 ADMIN_TOOLS_MAP = {
     "get_system_executive_summary": tool_get_system_executive_summary,
     "get_user_role_counts": tool_get_user_role_counts,
+    "search_knowledge_base": _tool_search_kb_admin,
 }

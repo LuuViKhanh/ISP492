@@ -1189,3 +1189,25 @@ CUSTOMER_TOOLS_MAP = {
     "lookup_order": tool_get_order_detail,
     "get_my_recent_orders": tool_get_my_orders,
 }
+
+# ── RAG: thêm search_knowledge_base vào Customer chatbot ──────────────────────
+try:
+    from app.modules.chatbot.rag.tool import get_rag_function_declaration, make_rag_tool_for_role as _make_rag
+
+    _tool_search_kb_customer = _make_rag("customer")
+    CUSTOMER_TOOLS_MAP["search_knowledge_base"] = _tool_search_kb_customer
+
+    _rag_decl = get_rag_function_declaration()
+    if _rag_decl is not None:
+        # Thêm RAG declaration vào list tools của Gemini
+        _orig_get_tools = get_customer_gemini_tools
+
+        def get_customer_gemini_tools() -> list:  # noqa: F811
+            tools = _orig_get_tools()
+            if tools and _rag_decl:
+                tools[0].function_declarations.append(_rag_decl)
+            return tools
+
+except ImportError:
+    pass
+
