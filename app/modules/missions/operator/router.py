@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func
 from datetime import timedelta
@@ -1010,9 +1010,13 @@ async def create_mission(
     mission = Mission(
         id=mission_id,
         order_id=request.orderId,
+        customer_id=order.customer_id,
         drone_id=request.droneId,
         origin_hub_id=order.origin_hub_id,
         destination_hub_id=order.destination_hub_id,
+        payload_weight=order.payload_kg,
+        delivery_fee=order.delivery_fee,
+        scheduled_time=order.requested_delivery_at or datetime.now(),
         status=MissionStatus.SCHEDULED,
         operator_id=user.id
     )
