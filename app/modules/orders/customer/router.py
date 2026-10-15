@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import uuid
@@ -174,6 +174,7 @@ async def estimate_order(
         service_fee=round(service_fee, 2),
         total_fee=round(delivery_fee + service_fee, 2),
         fee_details=fee_details,
+        distance_km=round(dist_km, 2),
         estimated_departure=estimated_departure,
         estimated_arrival=estimated_arrival,
         handover_deadline=handover_deadline
@@ -301,6 +302,54 @@ async def get_my_customer_order_detail(
         raise HTTPException(status_code=status_code, detail=res)
     res.pop("_actions", None)
     return res
+
+
+# ══════════════════════════════════════════════════════════════════════
+# DELETE ORDER (chỉ khi còn PENDING và chưa có mission)
+# ══════════════════════════════════════════════════════════════════════
+@router.delete("/orders/{order_id}", status_code=204, summary="Xóa đơn hàng (chỉ khi chưa xử lý)")
+async def delete_order(
+    order_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Customer xóa đơn hàng của mình.
+    - Chỉ được xóa khi order đang ở trạng thái **PENDING** và chưa có Mission nào.
+    - Nếu đã có Mission hoặc đã thanh toán → không cho xóa.
+    """
+    order = await db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if str(order.customer_id) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Không có quyền xóa đơn hàng này")
+
+    if order.status != OrderStatus.PENDING:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Không thể xóa đơn hàng đang ở trạng thái '{order.status.value}'. Chỉ xóa được khi PENDING."
+        )
+
+    # Kiểm tra đã có Mission chưa
+    mission_result = await db.execute(
+        select(Mission).where(Mission.order_id == order_id).limit(1)
+    )
+    if mission_result.scalars().first():
+        raise HTTPException(
+            status_code=400,
+            detail="Đơn hàng đã được tạo mission, không thể xóa. Liên hệ operator để hủy."
+        )
+
+    await db.delete(order)
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Không thể xóa đơn hàng do còn dữ liệu liên quan. Liên hệ operator để hủy."
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════
