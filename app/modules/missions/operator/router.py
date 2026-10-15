@@ -717,7 +717,7 @@ async def get_hub_checkpoints(
 
 
 from app.modules.missions.schemas import MissionPlanningAnalyzeRequest, MissionPlanningAnalyzeResponse, RouteOptionSchema, MissionCreateRequest
-from app.modules.missions.models import Order, OrderStatus
+from app.modules.missions.models import Order, OrderStatus, PaymentStatus
 from app.modules.ai_predictions.service import predict_flight_energy, haversine_distance
 
 @router.post("/mission-planning/analyze", response_model=MissionPlanningAnalyzeResponse)
@@ -986,9 +986,15 @@ async def create_mission(
     order = await db.get(Order, request.orderId)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-        
-    if order.status != OrderStatus.PENDING:
-        raise HTTPException(status_code=400, detail="Order is not in PENDING state")
+
+    if order.payment_status != PaymentStatus.PAID:
+        raise HTTPException(status_code=400, detail="Order chưa được thanh toán")
+
+    if order.status != OrderStatus.AT_HUB:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order đang ở trạng thái '{order.status.value}'. Chỉ tạo mission khi hàng đã có mặt tại hub (AT_HUB)."
+        )
         
     from app.shared.id_generator import generate_sequential_id
     mission_id = await generate_sequential_id(db, Mission, "MSN")
