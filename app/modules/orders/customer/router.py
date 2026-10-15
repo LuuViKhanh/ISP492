@@ -174,6 +174,7 @@ async def estimate_order(
         service_fee=round(service_fee, 2),
         total_fee=round(delivery_fee + service_fee, 2),
         fee_details=fee_details,
+        distance_km=round(dist_km, 2),
         estimated_departure=estimated_departure,
         estimated_arrival=estimated_arrival,
         handover_deadline=handover_deadline
