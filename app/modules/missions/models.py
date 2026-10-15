@@ -17,6 +17,8 @@ class PaymentStatus(str, enum.Enum):
 
 class OrderStatus(str, enum.Enum):
     PENDING = "PENDING"
+    AWAITING_DROP_OFF = "AWAITING_DROP_OFF"  # Đã thanh toán, chờ KH mang hàng đến hub
+    AT_HUB = "AT_HUB"                        # KH đã mang hàng đến hub, chờ operator tạo mission
     IN_DELIVERY = "IN_DELIVERY"
     DELIVERED_TO_HUB = "DELIVERED_TO_HUB"
     CANCELLED = "CANCELLED"
