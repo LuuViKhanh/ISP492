@@ -16,9 +16,9 @@ import requests
 from datetime import datetime, timezone
 
 # ─── CẤU HÌNH (chỉ sửa 3 dòng này) ──────────────────────────────────────────
-BASE_URL   = "https://isp492.onrender.com/api/v1"   # hoặc https://<app>.onrender.com/api/v1
-TOKEN      = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIzYjQ5MDhkMC1hZWYwLTQ3Y2MtYmMwMC05YzZjMTI1YjUwNzIiLCJyb2xlIjoiT3BlcmF0b3IiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzkxNDQ0NTM5fQ.4CuJKYk8VEBfYfNzCHHJJ9ifr5ijayrMdGPIJ3ThUlg"
-MISSION_ID = "MSN-20261007-0001"               # mission đang ở trạng thái APPROVED
+BASE_URL   = "https://arrive-metals-widely-drawings.trycloudflare.com/api/v1"   # hoặc https://<app>.onrender.com/api/v1
+TOKEN      = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIzYjQ5MDhkMC1hZWYwLTQ3Y2MtYmMwMC05YzZjMTI1YjUwNzIiLCJyb2xlIjoiT3BlcmF0b3IiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzkxOTYzMjM0fQ.Z6cNM65mxtJ3vtSPWUBTE51GsZ-et9t2FOKQBd66nto"
+MISSION_ID = "MSN-20261014-0004"               # mission đang ở trạng thái APPROVED
 # ─────────────────────────────────────────────────────────────────────────────
 
 INTERVAL_SEC = 2   # gửi mỗi N giây — giảm xuống 2s để animation mượt hơn

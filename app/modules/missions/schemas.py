@@ -31,6 +31,7 @@ class ActiveFlightsResponse(BaseModel):
 
 class MissionResponse(BaseModel):
     id: str
+    order_id: Optional[str] = None
     customer_id: Optional[str] = None
     operator_id: Optional[str] = None
     drone_id: Optional[int] = None
@@ -178,4 +179,10 @@ class MissionCreateRequest(BaseModel):
     orderId: str
     droneId: int
     routeId: str
+    route_string: Optional[str] = None
+    legs_detail: Optional[list[RouteLegSchema]] = None
+    distance_km: Optional[float] = None
+    predicted_energy_wh: Optional[float] = None
+    predicted_duration_min: Optional[int] = None
+
 
