@@ -341,7 +341,14 @@ async def delete_order(
         )
 
     await db.delete(order)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Không thể xóa đơn hàng do còn dữ liệu liên quan. Liên hệ operator để hủy."
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════
