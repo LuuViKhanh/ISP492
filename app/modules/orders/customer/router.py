@@ -9,7 +9,7 @@ from app.database.db import get_async_db
 from app.shared.dependencies import get_current_user, CurrentUser
 from app.modules.system.models import Hub
 from app.modules.missions.models import (
-    Order, OrderStatus, DeliveryMode,
+    Order, OrderStatus, PaymentStatus, DeliveryMode,
     Mission, MissionStatus, TelemetryLog, MissionHubCheckpoint,
 )
 from app.modules.fleet.models import Drone
@@ -324,6 +324,12 @@ async def delete_order(
 
     if str(order.customer_id) != str(current_user.id):
         raise HTTPException(status_code=403, detail="Không có quyền xóa đơn hàng này")
+
+    if order.payment_status == PaymentStatus.PAID:
+        raise HTTPException(
+            status_code=400,
+            detail="Đơn hàng đã thanh toán, không thể xóa. Liên hệ operator nếu muốn hủy."
+        )
 
     if order.status != OrderStatus.PENDING:
         raise HTTPException(
