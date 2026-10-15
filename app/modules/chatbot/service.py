@@ -135,7 +135,7 @@ async def execute_agent_chat(
 
     primary_model = settings.GEMINI_MODEL or "gemini-3.5-flash-lite"
     fallback_models = []
-    for m in [primary_model, "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.8-flash"]:
+    for m in [primary_model, "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]:
         if m and m not in fallback_models:
             fallback_models.append(m)
 
@@ -209,11 +209,22 @@ async def execute_agent_chat(
         raise last_err or RuntimeError("All Gemini fallback models timed out or are unavailable.")
 
     try:
-        # 3. Gọi Gemini lần 1 (Intent & Tool Routing)
-        response = await call_gemini(contents)
+        # 3. Vòng lặp Agentic Tool Loop (Tối đa 4 vòng để giải quyết các câu hỏi chuỗi như: tìm Hub -> tính phí -> trả lời)
+        MAX_TOOL_ROUNDS = 4
+        final_reply = ""
 
-        # 4. Thực thi các Tool Calls nếu Gemini yêu cầu
-        if response.function_calls:
+        for round_idx in range(MAX_TOOL_ROUNDS):
+            response = await call_gemini(contents)
+
+            # Nếu Gemini không yêu cầu gọi tool nữa, lấy câu trả lời văn bản
+            if not response.function_calls:
+                final_reply = (
+                    response.text
+                    or "Xin lỗi, tôi chưa hiểu rõ yêu cầu. Bạn có thể nói rõ hơn không?"
+                )
+                break
+
+            # Nếu Gemini yêu cầu gọi Tools:
             if response.candidates and response.candidates[0].content:
                 contents.append(response.candidates[0].content)
 
@@ -236,7 +247,6 @@ async def execute_agent_chat(
                         if merged_data is None:
                             merged_data = dict(tool_result)
                         else:
-                            # Giữ type của tool chính hoặc cập nhật các trường bổ sung
                             for k, v in tool_result.items():
                                 if k == "type" and merged_data.get("type"):
                                     continue
@@ -263,15 +273,26 @@ async def execute_agent_chat(
                     parts=function_response_parts,
                 )
             )
-
-            # 5. Gọi Gemini lần 2 để diễn đạt kết quả từ dữ liệu thật của Tool
-            followup_response = await call_gemini(contents)
-            final_reply = followup_response.text or "Đã xử lý thông tin thành công."
         else:
-            final_reply = (
-                response.text
-                or "Xin lỗi, tôi chưa hiểu rõ yêu cầu. Bạn có thể nói rõ hơn không?"
-            )
+            # Nếu sau 4 vòng lặp mà Gemini vẫn chưa ra text, yêu cầu Gemini tổng hợp câu trả lời
+            try:
+                summary_config = types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.3,
+                )
+                summary_res = await client.aio.models.generate_content(
+                    model=primary_model,
+                    contents=contents + [
+                        types.Content(
+                            role="user",
+                            parts=[types.Part.from_text(text="Dựa trên các dữ liệu đã tra cứu ở trên, hãy trả lời câu hỏi của khách hàng một cách chi tiết, đầy đủ và thân thiện.")],
+                        )
+                    ],
+                    config=summary_config,
+                )
+                final_reply = summary_res.text or "Dạ, em đã tra cứu thông tin theo yêu cầu của anh/chị ạ."
+            except Exception:
+                final_reply = "Dạ, em đã tra cứu thông tin theo yêu cầu của anh/chị ạ."
 
         # Đảm bảo `data` luôn có trường `type` chuẩn để FE render không cần regex
         if merged_data is None:

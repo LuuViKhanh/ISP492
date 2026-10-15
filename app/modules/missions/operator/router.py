@@ -1,7 +1,7 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func
-from datetime import timedelta
+from datetime import timedelta, datetime, timezone
 import math
 
 from app.database.db import get_async_db
@@ -716,23 +716,24 @@ async def get_hub_checkpoints(
 # ── Hubs & Locations ──────────────────────────────────────────────────────────────
 
 
-from app.modules.missions.schemas import MissionPlanningAnalyzeRequest, MissionPlanningAnalyzeResponse, RouteOptionSchema, MissionCreateRequest
-from app.modules.missions.models import Order, OrderStatus
+from app.modules.missions.schemas import (
+    MissionPlanningAnalyzeRequest, MissionPlanningAnalyzeResponse,
+    RouteOptionSchema, RouteLegSchema, MissionCreateRequest
+)
+from app.modules.missions.models import Order, OrderStatus, MissionLeg, MissionLegStatus
+from app.modules.ai_predictions.models import AIPrediction, AIRecommendation
 from app.modules.ai_predictions.service import predict_flight_energy, haversine_distance
+from app.shared.id_generator import generate_sequential_id
+from typing import Optional
 
-@router.post("/mission-planning/analyze", response_model=MissionPlanningAnalyzeResponse)
-async def analyze_mission_planning(
-    request: MissionPlanningAnalyzeRequest,
-    user: CurrentUser = Depends(allow_operator),
-    db: AsyncSession = Depends(get_async_db)
-):
-    order = await db.get(Order, request.orderId)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-        
+
+async def compute_mission_routes_internal(
+    db: AsyncSession,
+    order: Order,
+    drone_id: Optional[int] = None
+) -> tuple[list[RouteOptionSchema], list[dict]]:
     origin_hub = await db.get(Hub, order.origin_hub_id)
     dest_hub = await db.get(Hub, order.destination_hub_id)
-    
     if not origin_hub or not dest_hub:
         raise HTTPException(status_code=400, detail="Order is missing valid Hubs")
 
@@ -743,17 +744,31 @@ async def analyze_mission_planning(
         result = await db.execute(select(Hub))
         hubs = result.scalars().all()
     hub_dict = {h.id: h for h in hubs}
-    
-    # 2. Get suitable drones at origin
-    result = await db.execute(select(Drone).where(and_(Drone.status == DroneStatus.AVAILABLE, Drone.current_hub_id == origin_hub.id, Drone.payload_capacity_kg >= float(order.payload_kg or 0))))
-    available_drones = result.scalars().all()
-    suggested_drone = available_drones[0] if available_drones else None
-    suggested_drone_id = suggested_drone.id if suggested_drone else None
-    
+
+    # 2. Suggested drone
+    suggested_drone_id = drone_id
+    if not suggested_drone_id:
+        result = await db.execute(
+            select(Drone).where(
+                and_(
+                    Drone.status == DroneStatus.AVAILABLE,
+                    Drone.current_hub_id == origin_hub.id,
+                    Drone.payload_capacity_kg >= float(order.payload_kg or 0)
+                )
+            )
+        )
+        available_drones = result.scalars().all()
+        if available_drones:
+            suggested_drone_id = available_drones[0].id
+
     # 3. Get battery wait times at each hub
-    result = await db.execute(select(Battery).where(and_(Battery.status == batteries_status.ACTIVE, Battery.drone_id.is_(None))))
+    result = await db.execute(
+        select(Battery).where(
+            and_(Battery.status == batteries_status.ACTIVE, Battery.drone_id.is_(None))
+        )
+    )
     all_batteries = result.scalars().all()
-    
+
     hub_wait_times = {}
     for h in hubs:
         h_bats = [b for b in all_batteries if b.current_hub_id == h.id]
@@ -765,109 +780,126 @@ async def analyze_mission_planning(
                 hub_wait_times[h.id] = 0
             else:
                 hub_wait_times[h.id] = 90 - best_charge
-                
-    # Max battery capacity from origin hub
+
     origin_bats = [b for b in all_batteries if b.current_hub_id == origin_hub.id]
     drone_capacity_wh = max([b.capacity_wh for b in origin_bats]) if origin_bats else 100.0
     payload = float(order.payload_kg or 0)
 
-    def plan_route(mode="balanced"):
+    def plan_single_path(mode="energy", exclude_nodes=None):
+        if exclude_nodes is None:
+            exclude_nodes = set()
+
         distances = {h.id: float('inf') for h in hubs}
         distances[origin_hub.id] = 0
         previous_nodes = {h.id: None for h in hubs}
         explanations = {h.id: "" for h in hubs}
-        
+
         pq = [(0, origin_hub.id)]
-        
+
         while pq:
             current_cost, current_node = heapq.heappop(pq)
-            if current_node == dest_hub.id: break
-            if current_cost > distances[current_node]: continue
-                
+            if current_node == dest_hub.id:
+                break
+            if current_cost > distances[current_node]:
+                continue
+
             curr_h = hub_dict[current_node]
-            
+
             for n_hub in hubs:
-                if n_hub.id == current_node: continue
-                
-                dist_km = haversine_distance(curr_h.latitude or 0, curr_h.longitude or 0, n_hub.latitude or 0, n_hub.longitude or 0)
+                if n_hub.id == current_node or n_hub.id in exclude_nodes:
+                    continue
+
+                dist_km = haversine_distance(
+                    curr_h.latitude or 0, curr_h.longitude or 0,
+                    n_hub.latitude or 0, n_hub.longitude or 0
+                )
                 pred = predict_flight_energy(dist_km, payload)
                 energy_wh = pred["energy_wh"]
-                
-                # Check drone capacity constraint (max 80% usage)
+
+                # Check drone capacity constraint (max 80% usage per leg)
                 if energy_wh > drone_capacity_wh * 0.8:
                     continue
-                    
-                flight_time = dist_km * 2 # Roughly 2 mins per km
+
+                flight_time = dist_km * 2  # ~2 mins per km
                 wait_time = 0
                 exp = f"{n_hub.name} (Tốn {energy_wh:.1f}Wh)"
-                
+
                 if n_hub.id != dest_hub.id:
                     wait_time = hub_wait_times.get(n_hub.id, float('inf'))
                     if mode == "zero_wait" and wait_time > 0:
-                        continue # Strict zero wait time mode
+                        continue
                     if wait_time == float('inf'):
                         continue
                     if wait_time == 0:
-                        exp += f" - Đổi pin nhanh (0p)"
+                        exp += " - Đổi pin nhanh (0p)"
                     else:
                         exp += f" - Đợi sạc {wait_time}p"
-                
-                if mode == "shortest":
-                    new_cost = distances[current_node] + dist_km # Cost is physical distance
-                else:
-                    new_cost = distances[current_node] + flight_time + wait_time # Cost is time
-                
+
+                if mode == "energy":
+                    edge_cost = energy_wh
+                elif mode == "shortest":
+                    edge_cost = dist_km
+                elif mode == "zero_wait":
+                    edge_cost = flight_time
+                else:  # balanced
+                    edge_cost = flight_time + wait_time
+
+                new_cost = distances[current_node] + edge_cost
                 if new_cost < distances[n_hub.id]:
                     distances[n_hub.id] = new_cost
                     previous_nodes[n_hub.id] = current_node
                     explanations[n_hub.id] = exp
                     heapq.heappush(pq, (new_cost, n_hub.id))
-                    
+
         if distances[dest_hub.id] == float('inf'):
             return None
-            
+
         path = []
         curr = dest_hub.id
         while curr is not None:
             path.append(curr)
             curr = previous_nodes[curr]
         path.reverse()
-        
+
         relay_hubs_info = [explanations[n] for n in path if n not in (origin_hub.id, dest_hub.id)]
-        
-        # Calculate total metrics
-        total_dist = 0
-        total_energy = 0
+
+        total_dist = 0.0
+        total_energy = 0.0
         total_wait = 0
         legs_detail = []
         route_codes = []
-        
-        for i in range(len(path)-1):
+
+        for i in range(len(path) - 1):
             h1 = hub_dict[path[i]]
-            h2 = hub_dict[path[i+1]]
+            h2 = hub_dict[path[i + 1]]
             route_codes.append(h1.code or h1.name)
-            
-            d = haversine_distance(h1.latitude or 0, h1.longitude or 0, h2.latitude or 0, h2.longitude or 0)
+
+            d = haversine_distance(
+                h1.latitude or 0, h1.longitude or 0,
+                h2.latitude or 0, h2.longitude or 0
+            )
             e = predict_flight_energy(d, payload)["energy_wh"]
             total_dist += d
             total_energy += e
-            
+
             legs_detail.append({
+                "from_hub_id": h1.id,
+                "to_hub_id": h2.id,
                 "from_hub_code": h1.code or h1.name,
                 "to_hub_code": h2.code or h2.name,
                 "distance_km": round(d, 2)
             })
-            
-            if path[i+1] != dest_hub.id:
-                total_wait += hub_wait_times.get(path[i+1], 0)
-                
+
+            if path[i + 1] != dest_hub.id:
+                total_wait += hub_wait_times.get(path[i + 1], 0)
+
         last_hub = hub_dict[path[-1]]
         route_codes.append(last_hub.code or last_hub.name)
         route_string = " -> ".join(route_codes)
-                
         total_time = int(total_dist * 2) + total_wait
-        
+
         return {
+            "path": path,
             "relayHubs": relay_hubs_info,
             "distanceKm": round(total_dist, 2),
             "predictedEnergyWh": round(total_energy, 2),
@@ -877,95 +909,214 @@ async def analyze_mission_planning(
             "route_string": route_string
         }
 
-    routes = []
-    
-    # 1. Recommended (Balanced Time)
-    r1 = plan_route("balanced")
+    raw_routes = []
+    seen_route_strings = set()
+
+    # 1. Tuyến Tối ưu Năng lượng (Energy-Optimal: Dijkstra với cost = CatBoost energy_wh)
+    r1 = plan_single_path("energy")
     if r1:
-        routes.append(RouteOptionSchema(
-            routeId=f"R-{request.orderId}-REC",
-            route_string=r1["route_string"],
-            legs_detail=r1["legs_detail"],
-            distanceKm=r1["distanceKm"],
-            relayHubs=r1["relayHubs"],
-            predictedDurationMin=r1["predictedDurationMin"],
-            predictedEnergyWh=r1["predictedEnergyWh"],
-            batteryConsumptionPct=int((r1["predictedEnergyWh"]/drone_capacity_wh)*100) if drone_capacity_wh else 50,
-            remainingBatteryPct=max(0, 100 - int((r1["predictedEnergyWh"]/drone_capacity_wh)*100)) if drone_capacity_wh else 50,
-            confidencePct=90,
-            risk="LOW" if r1["predictedEnergyWh"] < drone_capacity_wh * 0.6 else "MEDIUM",
-            recommended=True,
-            reason=f"Tối ưu nhất: Thời gian bay ngắn, tổng chờ sạc {r1['wait_time']} phút.",
-            suggestedDroneId=suggested_drone_id
-        ))
+        raw_routes.append({"key": "ENG", "type": "energy", "data": r1})
+        seen_route_strings.add(r1["route_string"])
 
-    # 2. Zero Wait Time
-    r2 = plan_route("zero_wait")
-    if r2 and (not r1 or r2["distanceKm"] != r1["distanceKm"]):
-        routes.append(RouteOptionSchema(
-            routeId=f"R-{request.orderId}-FAST",
-            route_string=r2["route_string"],
-            legs_detail=r2["legs_detail"],
-            distanceKm=r2["distanceKm"],
-            relayHubs=r2["relayHubs"],
-            predictedDurationMin=r2["predictedDurationMin"],
-            predictedEnergyWh=r2["predictedEnergyWh"],
-            batteryConsumptionPct=int((r2["predictedEnergyWh"]/drone_capacity_wh)*100) if drone_capacity_wh else 50,
-            remainingBatteryPct=max(0, 100 - int((r2["predictedEnergyWh"]/drone_capacity_wh)*100)) if drone_capacity_wh else 50,
-            confidencePct=85,
-            risk="LOW",
-            recommended=False,
-            reason="Bay liên tục không phải chờ sạc (nhờ các Hub có sẵn pin đầy).",
-            suggestedDroneId=suggested_drone_id
-        ))
-        
-    # 3. Shortest Distance
-    r3 = plan_route("shortest")
-    if r3 and (not r1 or r3["distanceKm"] < r1["distanceKm"]):
-        routes.append(RouteOptionSchema(
-            routeId=f"R-{request.orderId}-SHORT",
-            route_string=r3["route_string"],
-            legs_detail=r3["legs_detail"],
-            distanceKm=r3["distanceKm"],
-            relayHubs=r3["relayHubs"],
-            predictedDurationMin=r3["predictedDurationMin"],
-            predictedEnergyWh=r3["predictedEnergyWh"],
-            batteryConsumptionPct=int((r3["predictedEnergyWh"]/drone_capacity_wh)*100) if drone_capacity_wh else 50,
-            remainingBatteryPct=max(0, 100 - int((r3["predictedEnergyWh"]/drone_capacity_wh)*100)) if drone_capacity_wh else 50,
-            confidencePct=88,
-            risk="HIGH" if r3["wait_time"] > 60 else "MEDIUM",
-            recommended=False,
-            reason=f"Quãng đường bay vật lý ngắn nhất, nhưng phải đợi sạc tổng cộng {r3['wait_time']} phút.",
-            suggestedDroneId=suggested_drone_id
-        ))
+    # 2. Tuyến Nhanh nhất / Không chờ sạc (Fastest / Zero Wait)
+    r2 = plan_single_path("zero_wait")
+    if r2 and r2["route_string"] in seen_route_strings:
+        intermediates_r1 = [nid for nid in r1["path"] if nid not in (origin_hub.id, dest_hub.id)]
+        if intermediates_r1:
+            r2_alt = plan_single_path("zero_wait", exclude_nodes={intermediates_r1[0]})
+            if r2_alt and r2_alt["route_string"] not in seen_route_strings:
+                r2 = r2_alt
+    if r2 and r2["route_string"] not in seen_route_strings:
+        raw_routes.append({"key": "FAST", "type": "fast", "data": r2})
+        seen_route_strings.add(r2["route_string"])
+    elif not r2:
+        r_bal = plan_single_path("balanced")
+        if r_bal and r_bal["route_string"] not in seen_route_strings:
+            raw_routes.append({"key": "FAST", "type": "fast", "data": r_bal})
+            seen_route_strings.add(r_bal["route_string"])
 
-    # If no route found
-    if not routes:
-        # Fallback to direct flight if completely blocked
-        dist = haversine_distance(origin_hub.latitude or 0, origin_hub.longitude or 0, dest_hub.latitude or 0, dest_hub.longitude or 0)
+    # 3. Tuyến Quãng đường ngắn nhất (Shortest Distance)
+    r3 = plan_single_path("shortest")
+    if r3 and r3["route_string"] in seen_route_strings:
+        used_intermediates = set()
+        for rr in raw_routes:
+            for nid in rr["data"]["path"]:
+                if nid not in (origin_hub.id, dest_hub.id):
+                    used_intermediates.add(nid)
+        if used_intermediates:
+            r3_alt = plan_single_path("shortest", exclude_nodes=used_intermediates)
+            if r3_alt and r3_alt["route_string"] not in seen_route_strings:
+                r3 = r3_alt
+    if r3 and r3["route_string"] not in seen_route_strings:
+        raw_routes.append({"key": "SHORT", "type": "shortest", "data": r3})
+        seen_route_strings.add(r3["route_string"])
+
+    # 4. Dự phòng nếu chưa đủ 3 tuyến: Tuyến cân bằng (Balanced)
+    if len(raw_routes) < 3:
+        r_bal = plan_single_path("balanced")
+        if r_bal and r_bal["route_string"] not in seen_route_strings:
+            raw_routes.append({"key": "BAL", "type": "balanced", "data": r_bal})
+            seen_route_strings.add(r_bal["route_string"])
+
+    # 5. Dự phòng nếu vẫn chưa đủ 3 tuyến: Tuyến bay thẳng (Direct Flight)
+    if len(raw_routes) < 3:
+        dist = haversine_distance(
+            origin_hub.latitude or 0, origin_hub.longitude or 0,
+            dest_hub.latitude or 0, dest_hub.longitude or 0
+        )
         e = predict_flight_energy(dist, payload)["energy_wh"]
-        routes.append(RouteOptionSchema(
-            routeId=f"R-{request.orderId}-DIR",
-            route_string=f"{origin_hub.code or origin_hub.name} -> {dest_hub.code or dest_hub.name}",
-            legs_detail=[{
-                "from_hub_code": origin_hub.code or origin_hub.name,
-                "to_hub_code": dest_hub.code or dest_hub.name,
-                "distance_km": round(dist, 2)
-            }],
-            distanceKm=round(dist, 2),
-            relayHubs=["(Cảnh báo: Không đủ trạm sạc khả dụng, bay thẳng trực tiếp)"],
-            predictedDurationMin=int(dist * 2),
-            predictedEnergyWh=round(e, 2),
-            batteryConsumptionPct=int((e/drone_capacity_wh)*100) if drone_capacity_wh else 50,
-            remainingBatteryPct=max(0, 100 - int((e/drone_capacity_wh)*100)) if drone_capacity_wh else 50,
-            confidencePct=50,
-            risk="HIGH",
-            recommended=True,
-            reason="Hệ thống không tìm được tuyến khả dụng, hiển thị tuyến bay thẳng (rủi ro cao).",
-            suggestedDroneId=suggested_drone_id
-        ))
+        dir_string = f"{origin_hub.code or origin_hub.name} -> {dest_hub.code or dest_hub.name}"
+        if dir_string not in seen_route_strings:
+            r_dir = {
+                "path": [origin_hub.id, dest_hub.id],
+                "relayHubs": [],
+                "distanceKm": round(dist, 2),
+                "predictedEnergyWh": round(e, 2),
+                "predictedDurationMin": int(dist * 2),
+                "wait_time": 0,
+                "legs_detail": [{
+                    "from_hub_id": origin_hub.id,
+                    "to_hub_id": dest_hub.id,
+                    "from_hub_code": origin_hub.code or origin_hub.name,
+                    "to_hub_code": dest_hub.code or dest_hub.name,
+                    "distance_km": round(dist, 2)
+                }],
+                "route_string": dir_string
+            }
+            raw_routes.append({"key": "DIR", "type": "direct", "data": r_dir})
+            seen_route_strings.add(dir_string)
 
-    return MissionPlanningAnalyzeResponse(routes=routes)
+    # 6. Dự phòng để ĐẢM BẢO LUÔN CÓ ĐỦ 3 TUYẾN ĐƯỜNG: Tìm tuyến trung gian qua các Hub lân cận
+    if len(raw_routes) < 3:
+        candidates = []
+        for h in hubs:
+            if h.id not in (origin_hub.id, dest_hub.id):
+                d1 = haversine_distance(origin_hub.latitude or 0, origin_hub.longitude or 0, h.latitude or 0, h.longitude or 0)
+                d2 = haversine_distance(h.latitude or 0, h.longitude or 0, dest_hub.latitude or 0, dest_hub.longitude or 0)
+                candidates.append((d1 + d2, h.id))
+        candidates.sort(key=lambda x: x[0])
+
+        for _, mid_hub_id in candidates:
+            if len(raw_routes) >= 3:
+                break
+            d_leg1 = haversine_distance(origin_hub.latitude or 0, origin_hub.longitude or 0, hub_dict[mid_hub_id].latitude or 0, hub_dict[mid_hub_id].longitude or 0)
+            d_leg2 = haversine_distance(hub_dict[mid_hub_id].latitude or 0, hub_dict[mid_hub_id].longitude or 0, dest_hub.latitude or 0, dest_hub.longitude or 0)
+            e_leg1 = predict_flight_energy(d_leg1, payload)["energy_wh"]
+            e_leg2 = predict_flight_energy(d_leg2, payload)["energy_wh"]
+
+            cand_path = [origin_hub.id, mid_hub_id, dest_hub.id]
+            cand_route_codes = [origin_hub.code or origin_hub.name, hub_dict[mid_hub_id].code or hub_dict[mid_hub_id].name, dest_hub.code or dest_hub.name]
+            cand_route_string = " -> ".join(cand_route_codes)
+
+            if cand_route_string not in seen_route_strings:
+                w_mid = hub_wait_times.get(mid_hub_id, 0)
+                w_val = w_mid if w_mid != float('inf') else 15
+                tot_dist = d_leg1 + d_leg2
+                tot_energy = e_leg1 + e_leg2
+                cand_data = {
+                    "path": cand_path,
+                    "relayHubs": [hub_dict[mid_hub_id].name],
+                    "distanceKm": round(tot_dist, 2),
+                    "predictedEnergyWh": round(tot_energy, 2),
+                    "predictedDurationMin": int(tot_dist * 2) + int(w_val),
+                    "wait_time": int(w_val),
+                    "legs_detail": [
+                        {
+                            "from_hub_id": origin_hub.id,
+                            "to_hub_id": mid_hub_id,
+                            "from_hub_code": origin_hub.code or origin_hub.name,
+                            "to_hub_code": hub_dict[mid_hub_id].code or hub_dict[mid_hub_id].name,
+                            "distance_km": round(d_leg1, 2)
+                        },
+                        {
+                            "from_hub_id": mid_hub_id,
+                            "to_hub_id": dest_hub.id,
+                            "from_hub_code": hub_dict[mid_hub_id].code or hub_dict[mid_hub_id].name,
+                            "to_hub_code": dest_hub.code or dest_hub.name,
+                            "distance_km": round(d_leg2, 2)
+                        }
+                    ],
+                    "route_string": cand_route_string
+                }
+                raw_routes.append({"key": f"ALT{len(raw_routes)+1}", "type": "alternative", "data": cand_data})
+                seen_route_strings.add(cand_route_string)
+
+
+    # Đóng gói Schema
+    routes_schemas = []
+    raw_data_list = []
+    for entry in raw_routes:
+        k = entry["key"]
+        d = entry["data"]
+        batt_pct = int((d["predictedEnergyWh"] / drone_capacity_wh) * 100) if drone_capacity_wh else 50
+        rem_batt_pct = max(0, 100 - batt_pct)
+        risk = "LOW" if d["predictedEnergyWh"] < drone_capacity_wh * 0.6 else ("MEDIUM" if d["predictedEnergyWh"] < drone_capacity_wh * 0.8 else "HIGH")
+
+        schema = RouteOptionSchema(
+            routeId=f"R-{order.id}-{k}",
+            route_string=d["route_string"],
+            legs_detail=[
+                RouteLegSchema(
+                    from_hub_code=leg["from_hub_code"],
+                    to_hub_code=leg["to_hub_code"],
+                    distance_km=leg["distance_km"]
+                ) for leg in d["legs_detail"]
+            ],
+            distanceKm=d["distanceKm"],
+            relayHubs=d["relayHubs"],
+            predictedDurationMin=d["predictedDurationMin"],
+            predictedEnergyWh=d["predictedEnergyWh"],
+            batteryConsumptionPct=batt_pct,
+            remainingBatteryPct=rem_batt_pct,
+            confidencePct=90 if risk == "LOW" else (85 if risk == "MEDIUM" else 75),
+            risk=risk,
+            recommended=False,
+            reason="",
+            suggestedDroneId=suggested_drone_id
+        )
+        routes_schemas.append(schema)
+        raw_data_list.append(d)
+
+    # ĐÁNH DẤU RECOMMEND CHO TUYẾN TỐI ƯU HIỆU SUẤT NĂNG LƯỢNG NHẤT
+    if routes_schemas:
+        best_idx = 0
+        min_energy = float('inf')
+        for idx, s in enumerate(routes_schemas):
+            if s.predictedEnergyWh < min_energy:
+                min_energy = s.predictedEnergyWh
+                best_idx = idx
+
+        for idx, (s, d) in enumerate(zip(routes_schemas, raw_data_list)):
+            if idx == best_idx:
+                s.recommended = True
+                s.reason = f"Được AI đề xuất: Tuyến đường tối ưu hiệu suất năng lượng nhất (chỉ tiêu thụ {s.predictedEnergyWh:.1f} Wh, ~{s.batteryConsumptionPct}% pin), tiết kiệm pin tối đa."
+            else:
+                s.recommended = False
+                if "FAST" in s.routeId:
+                    s.reason = f"Tuyến bay nhanh nhất: Dự kiến {s.predictedDurationMin} phút, thời gian chờ sạc {d.get('wait_time', 0)} phút."
+                elif "SHORT" in s.routeId:
+                    s.reason = f"Quãng đường ngắn nhất: Cự ly {s.distanceKm} km, tiêu thụ {s.predictedEnergyWh:.1f} Wh."
+                elif "DIR" in s.routeId:
+                    s.reason = f"Tuyến bay thẳng trực tiếp: Cự ly {s.distanceKm} km, không qua trạm sạc trung gian."
+                else:
+                    s.reason = f"Tuyến cân bằng: Cự ly {s.distanceKm} km, thời gian {s.predictedDurationMin} phút."
+
+    return routes_schemas, raw_data_list
+
+
+@router.post("/mission-planning/analyze", response_model=MissionPlanningAnalyzeResponse)
+async def analyze_mission_planning(
+    request: MissionPlanningAnalyzeRequest,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db)
+):
+    order = await db.get(Order, request.orderId)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    routes_schemas, _ = await compute_mission_routes_internal(db, order, request.droneId)
+    return MissionPlanningAnalyzeResponse(routes=routes_schemas)
+
 
 @router.post("", response_model=MissionResponse)
 async def create_mission(
@@ -979,32 +1130,140 @@ async def create_mission(
     - **Mục đích**: Chính thức xác nhận tạo chuyến bay để giao một Order cụ thể.
     - **Hoạt động**:
         1. Validate `Order` bắt buộc phải đang ở trạng thái `PENDING`.
-        2. Tạo bản ghi `Mission` trong Database với trạng thái `SCHEDULED` (Chờ cất cánh).
-        3. Lưu lại lịch sử ai là người tạo (operator_id) và lưu lại các dự đoán (predicted energy) để làm mốc so sánh (benchmarking) sau này khi chuyến bay kết thúc.
-    - **Ghi chú**: Chuyến bay lúc này chỉ ở dạng SCHEDULED, Drone sẽ CHƯA CẤT CÁNH cho đến khi Origin Hub bấm xác nhận "Đã nhận kiện hàng từ khách" (Final Validation).
+        2. Chặn tạo trùng lặp nếu Order đã có Mission đang chờ hoặc đang bay.
+        3. Khớp thông tin tuyến đường Operator đã chọn (`routeId`).
+        4. Tạo bản ghi `Mission` trong Database với trạng thái `SCHEDULED` và cự ly `distance_m`.
+        5. Tạo chi tiết các chặng bay `MissionLeg` (`sequence_no`, `from_hub_id`, `to_hub_id`, `status='PENDING'`).
+        6. Lưu snapshot dự đoán AI vào `AIPrediction` và `AIRecommendation`.
     """
     order = await db.get(Order, request.orderId)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-        
+
     if order.status != OrderStatus.PENDING:
         raise HTTPException(status_code=400, detail="Order is not in PENDING state")
-        
-    from app.shared.id_generator import generate_sequential_id
+
+    # Kiểm tra xem đơn hàng đã có Mission active chưa
+    existing_mission_res = await db.execute(
+        select(Mission).where(
+            Mission.order_id == request.orderId,
+            Mission.status.in_([MissionStatus.SCHEDULED, MissionStatus.IN_PROGRESS])
+        )
+    )
+    if existing_mission_res.scalars().first():
+        raise HTTPException(
+            status_code=400,
+            detail="Đơn hàng này đã có nhiệm vụ bay đang được lên lịch hoặc đang thực hiện"
+        )
+
+    drone = await db.get(Drone, request.droneId)
+    if not drone:
+        raise HTTPException(status_code=404, detail="Drone not found")
+
+    # Tái hiện các tùy chọn tuyến đường để khớp với routeId mà Operator đã chọn
+    routes_schemas, raw_data_list = await compute_mission_routes_internal(db, order, request.droneId)
+
+    selected_schema = None
+    selected_data = None
+    for s, d in zip(routes_schemas, raw_data_list):
+        if s.routeId == request.routeId:
+            selected_schema = s
+            selected_data = d
+            break
+
+    # Nếu không khớp chính xác routeId, chọn tuyến recommended hoặc tuyến đầu tiên
+    if not selected_data and routes_schemas:
+        for s, d in zip(routes_schemas, raw_data_list):
+            if s.recommended:
+                selected_schema = s
+                selected_data = d
+                break
+        if not selected_data:
+            selected_schema = routes_schemas[0]
+            selected_data = raw_data_list[0]
+
+    # Tìm pin khả dụng của Drone hoặc pin tại Origin Hub
+    result = await db.execute(
+        select(Battery).where(
+            Battery.drone_id == drone.id,
+            Battery.status == batteries_status.ACTIVE
+        )
+    )
+    assigned_battery = result.scalars().first()
+    if not assigned_battery:
+        result = await db.execute(
+            select(Battery).where(
+                Battery.current_hub_id == order.origin_hub_id,
+                Battery.status == batteries_status.ACTIVE,
+                Battery.drone_id.is_(None)
+            )
+        )
+        assigned_battery = result.scalars().first()
+    battery_id = assigned_battery.id if assigned_battery else None
+
     mission_id = await generate_sequential_id(db, Mission, "MSN")
 
-    # Tạo Mission mới
+    total_dist_km = selected_schema.distanceKm if selected_schema else 0.0
+    total_energy_wh = selected_schema.predictedEnergyWh if selected_schema else 0.0
+    duration_min = selected_schema.predictedDurationMin if selected_schema else 0
+    route_str = selected_schema.route_string if selected_schema else ""
+
+    # 1. Tạo bản ghi Mission
     mission = Mission(
         id=mission_id,
         order_id=request.orderId,
+        customer_id=order.customer_id,
         drone_id=request.droneId,
+        battery_id=battery_id,
         origin_hub_id=order.origin_hub_id,
         destination_hub_id=order.destination_hub_id,
+        payload_weight=order.payload_kg,
+        distance_m=round(total_dist_km * 1000, 2),
+        delivery_fee=order.delivery_fee,
+        scheduled_time=order.requested_delivery_at or datetime.now(),
         status=MissionStatus.SCHEDULED,
         operator_id=user.id
     )
-    
     db.add(mission)
+    await db.flush()
+
+    # 2. Tạo các chặng bay (MissionLeg)
+    legs = selected_data.get("legs_detail", []) if selected_data else []
+    for idx, leg_item in enumerate(legs):
+        m_leg = MissionLeg(
+            mission_id=mission_id,
+            sequence_no=idx + 1,
+            from_hub_id=leg_item["from_hub_id"],
+            to_hub_id=leg_item["to_hub_id"],
+            battery_id=battery_id if idx == 0 else None,
+            status=MissionLegStatus.PENDING,
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
+        db.add(m_leg)
+
+    # 3. Lưu AI Snapshot
+    ai_pred = AIPrediction(
+        mission_id=mission_id,
+        estimated_energy_wh=round(total_energy_wh, 2),
+        estimated_duration_m=float(duration_min),
+        risk_level=selected_schema.risk if selected_schema else "Low",
+        predicted_at=datetime.now(timezone.utc)
+    )
+    db.add(ai_pred)
+
+    ai_rec = AIRecommendation(
+        mission_id=mission_id,
+        category="Mission Planning",
+        content=f"Lộ trình {route_str} được chọn theo phân tích AI ({total_energy_wh:.1f} Wh).",
+        is_applied=True,
+        created_at=datetime.now(timezone.utc)
+    )
+    db.add(ai_rec)
+
+    # 4. Ghi nhận thời gian planning trên Order
+    order.planning_at = datetime.now()
+
     await db.commit()
     await db.refresh(mission)
 
