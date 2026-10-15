@@ -415,9 +415,8 @@ async def collect_telemetry(
         mission.start_time = now
         mission.departed_at = now
 
-        # ── Cập nhật Order status + Gửi Email ────────────────────────────────
+        # ── Cập nhật Order status → IN_DELIVERY ────────────────────────────────
         try:
-            from app.core.email import send_delivery_email
             from app.modules.missions.models import Order as OrderModel
             if mission.order_id:
                 order_result = await db.execute(
@@ -425,22 +424,10 @@ async def collect_telemetry(
                 )
                 order_obj = order_result.scalar_one_or_none()
                 if order_obj:
-                    # Cập nhật order status → IN_DELIVERY
                     order_obj.status = OrderStatus.IN_DELIVERY
                     order_obj.updated_at = now
-
-                    # Gửi email đến receiver_email
-                    if order_obj.receiver_email:
-                        await send_delivery_email(
-                            to_email=order_obj.receiver_email,
-                            order_id=order_obj.id,
-                            mission_code=mission.id,  # Mission ID là mã mission
-                            frontend_url=settings.FRONTEND_URL,
-                        )
-                    else:
-                        print(f"[EMAIL] Order {order_obj.id} không có receiver_email, bỏ qua")
         except Exception as email_err:
-            print(f"[EMAIL] Lỗi khi cập nhật order/gửi email: {email_err}")
+            print(f"[ORDER] Lỗi khi cập nhật order status IN_DELIVERY: {email_err}")
 
     # ── 2. Fetch weather + Lưu telemetry logs ─────────────────────────────────
     from app.shared.weather import fetch_weather
@@ -1020,5 +1007,20 @@ async def create_mission(
     db.add(mission)
     await db.commit()
     await db.refresh(mission)
+
+    # Gửi email thông báo cho người nhận hàng
+    try:
+        from app.core.email import send_mission_scheduled_email
+        from app.core.config import settings
+        if order.receiver_email:
+            await send_mission_scheduled_email(
+                to_email=order.receiver_email,
+                order_id=order.id,
+                mission_id=mission.id,
+                frontend_url=settings.FRONTEND_URL,
+            )
+    except Exception as e:
+        print(f"[EMAIL] Lỗi gửi mission scheduled email: {e}")
+
     return mission
 
