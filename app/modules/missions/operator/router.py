@@ -1008,16 +1008,13 @@ async def create_mission(
     await db.commit()
     await db.refresh(mission)
 
-    # Gửi email thông báo cho customer
+    # Gửi email thông báo cho người nhận hàng
     try:
         from app.core.email import send_mission_scheduled_email
         from app.core.config import settings
-        from app.modules.auth.models import User
-        customer = await db.get(User, order.customer_id)
-        customer_email = customer.email if customer else order.receiver_email
-        if customer_email:
+        if order.receiver_email:
             await send_mission_scheduled_email(
-                to_email=customer_email,
+                to_email=order.receiver_email,
                 order_id=order.id,
                 mission_id=mission.id,
                 frontend_url=settings.FRONTEND_URL,
