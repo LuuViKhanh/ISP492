@@ -27,7 +27,7 @@ from typing import Optional
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
-from app.modules.missions.models import Order, PaymentStatus, OrderStatus
+from app.modules.missions.models import Order, PaymentStatus, OrderStatus, OrderStatus
 from app.core.config import settings
 from app.modules.payments.payos_client import get_payos
 
@@ -208,6 +208,8 @@ async def get_payment_status(
                 order.payment_status = PaymentStatus.PAID
                 order.paid_at = now
                 order.updated_at = now
+                if order.status == OrderStatus.PENDING:
+                    order.status = OrderStatus.AWAITING_DROP_OFF
                 transaction_list = info_data.get("transactions", [])
                 if transaction_list:
                     order.payment_transaction_id = str(transaction_list[0].get("reference", ""))
@@ -297,10 +299,13 @@ async def payos_webhook(
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     if status_code == "00":
-        order.payment_status        = PaymentStatus.PAID
+        order.payment_status         = PaymentStatus.PAID
         order.payment_transaction_id = transaction_id
-        order.paid_at               = now
-        order.updated_at            = now
+        order.paid_at                = now
+        order.updated_at             = now
+        # Chuyển order sang AWAITING_DROP_OFF — KH cần mang hàng đến hub
+        if order.status == OrderStatus.PENDING:
+            order.status = OrderStatus.AWAITING_DROP_OFF
     else:
         order.payment_status = PaymentStatus.FAILED
         order.updated_at     = now
