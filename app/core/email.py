@@ -26,6 +26,78 @@ def send_reset_email(to_email: str, reset_link: str):
     response.raise_for_status()
 
 
+async def send_mission_scheduled_email(
+    to_email: str,
+    order_id: str,
+    mission_id: str | None = None,
+    frontend_url: str | None = None,
+) -> bool:
+    """
+    Gửi email thông báo đơn hàng đã được lên lịch bay (operator tạo mission).
+    """
+    tracking_url = f"{frontend_url}/orders/{order_id}/tracking" if frontend_url else ""
+    tracking_section = f"""
+        <p>
+            <a href="{tracking_url}" style="
+                display: inline-block;
+                padding: 10px 20px;
+                background-color: #7c3aed;
+                color: #ffffff;
+                text-decoration: none;
+                border-radius: 6px;
+                font-weight: bold;
+            ">Theo dõi đơn hàng</a>
+        </p>
+    """ if tracking_url else ""
+
+    mission_line = f"<p><b>Mã chuyến bay:</b> {mission_id}</p>" if mission_id else ""
+
+    html_body = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background-color: #7c3aed; padding: 20px; text-align: center;">
+            <h1 style="color: #ffffff; margin: 0;">📅 DroneOptAI</h1>
+        </div>
+        <div style="padding: 24px; background-color: #f9fafb; border: 1px solid #e5e7eb;">
+            <h2 style="color: #111827;">Đơn hàng đã được lên lịch giao!</h2>
+            <p>Xin chào,</p>
+            <p>Đơn hàng của bạn đã được hệ thống xác nhận và lên lịch chuyến bay drone.</p>
+            <p><b>Mã đơn hàng:</b> {order_id}</p>
+            {mission_line}
+            <p>Drone sẽ cất cánh sau khi trạm gửi xác nhận nhận hàng từ bạn.</p>
+            {tracking_section}
+            <p style="color: #6b7280; font-size: 13px; margin-top: 24px;">
+                Nếu bạn có thắc mắc, vui lòng liên hệ hỗ trợ qua email này.
+            </p>
+        </div>
+        <div style="padding: 12px; text-align: center; color: #9ca3af; font-size: 12px;">
+            DroneOptAI — Hệ thống giao hàng bằng drone
+        </div>
+    </div>
+    """
+
+    try:
+        response = httpx.post(
+            "https://api.brevo.com/v3/smtp/email",
+            headers={
+                "api-key": settings.BREVO_API_KEY,
+                "Content-Type": "application/json",
+            },
+            json={
+                "sender": {"name": "DroneOptAI", "email": settings.EMAIL_FROM},
+                "to": [{"email": to_email}],
+                "subject": f"[DroneOptAI] Đơn hàng {order_id} đã được lên lịch bay 📅",
+                "htmlContent": html_body,
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        print(f"[EMAIL] Gửi mission scheduled thành công đến {to_email}")
+        return True
+    except Exception as e:
+        print(f"[EMAIL] Lỗi gửi mission scheduled email: {e}")
+        return False
+
+
 async def send_delivery_email(
     to_email: str,
     order_id: str,

@@ -624,7 +624,7 @@ async def create_work_order(
     wo = WorkOrder(
         drone_id=body.drone_id,
         battery_id=body.battery_id,
-        technician_id=int(user.id) if user.id.isdigit() else 0,
+        technician_id=user.id,
         issue_description=body.issue_description,
         status=WorkOrderStatus.PENDING,
     )

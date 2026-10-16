@@ -15,7 +15,7 @@ class DroneProfileResponse(BaseModel):
     battery_level_pct: Optional[int] = None
     utilization_pct: Optional[float] = None
     hub_name: Optional[str] = None
-    installed_battery_id: Optional[Union[str, int]] = None
+    installed_battery_id: Optional[str] = None
     battery_code: Optional[str] = None
     last_flight_at: Optional[datetime] = None
     last_maintenance_at: Optional[datetime] = None
@@ -39,7 +39,7 @@ class IncomingMissionResponse(BaseModel):
 
 
 class BatteryResponse(BaseModel):
-    id: Union[str, int]
+    id: str
     serial_number: str
     capacity_wh: float
     status: str
@@ -63,8 +63,8 @@ class DroneStatusUpdate(BaseModel):
 class MaintenanceHistoryItem(BaseModel):
     id: int
     drone_id: int
-    battery_id: Optional[Union[str, int]] = None
-    technician_id: Optional[Union[str, int]] = None
+    battery_id: Optional[str] = None
+    technician_id: str
     issue_description: str
     action_taken: Optional[str] = None
     status: WorkOrderStatus

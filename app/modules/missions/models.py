@@ -17,6 +17,8 @@ class PaymentStatus(str, enum.Enum):
 
 class OrderStatus(str, enum.Enum):
     PENDING = "PENDING"
+    AWAITING_DROP_OFF = "AWAITING_DROP_OFF"  # Đã thanh toán, chờ KH mang hàng đến hub
+    AT_HUB = "AT_HUB"                        # KH đã mang hàng đến hub, chờ operator tạo mission
     IN_DELIVERY = "IN_DELIVERY"
     DELIVERED_TO_HUB = "DELIVERED_TO_HUB"
     CANCELLED = "CANCELLED"
@@ -216,6 +218,10 @@ class Order(Base):
     payment_order_code: Mapped[int | None] = mapped_column(BigInteger, nullable=True, unique=True)
     payment_transaction_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     payment_checkout_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    payment_qr_code: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    payment_bin: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    payment_account_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    payment_account_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 class MissionLeg(Base):

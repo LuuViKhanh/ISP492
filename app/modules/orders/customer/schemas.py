@@ -35,6 +35,7 @@ class OrderEstimateResponse(BaseModel):
     service_fee: float
     total_fee: float
     fee_details: FeeDetails
+    distance_km: float
     estimated_departure: Optional[datetime] = None
     estimated_arrival: Optional[datetime] = None
     handover_deadline: Optional[datetime] = None

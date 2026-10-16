@@ -22,7 +22,7 @@ class AvailableDroneSchema(BaseModel):
 class AvailableBatterySchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     
-    id: Union[str, int]
+    id: str
     serial_number: str
     capacity_wh: float
     status: str
@@ -41,7 +41,7 @@ class AvailabilityResponse(BaseModel):
 # ==================== DTO CHO WORK ORDER (BẢO TRÌ) ====================
 class WorkOrderCreate(BaseModel):
     drone_id: int
-    battery_id: Optional[Union[str, int]] = None
+    battery_id: Optional[str] = None
     issue_description: str
 
 class WorkOrderUpdate(BaseModel):
@@ -57,8 +57,8 @@ class WorkOrderResponse(BaseModel):
 
     id: int
     drone_id: int
-    battery_id: Optional[Union[str, int]] = None
-    technician_id: Optional[Union[str, int]] = None
+    battery_id: Optional[str] = None
+    technician_id: str
     issue_description: str
     action_taken: Optional[str] = None
     status: WorkOrderStatus

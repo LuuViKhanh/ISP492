@@ -68,7 +68,7 @@ class BatteryUpdate(BaseModel):
 
 
 class BatteryResponse(BaseModel):
-    id: Union[str, int]
+    id: str
     serial_number: str
     capacity_wh: float
     status: batteries_status
