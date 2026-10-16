@@ -716,8 +716,12 @@ async def get_hub_checkpoints(
 # ── Hubs & Locations ──────────────────────────────────────────────────────────────
 
 
-from app.modules.missions.schemas import MissionPlanningAnalyzeRequest, MissionPlanningAnalyzeResponse, RouteOptionSchema, MissionCreateRequest
-from app.modules.missions.models import Order, OrderStatus, PaymentStatus
+from app.modules.missions.schemas import (
+    MissionPlanningAnalyzeRequest, MissionPlanningAnalyzeResponse,
+    RouteOptionSchema, RouteLegSchema, MissionCreateRequest
+)
+from app.modules.missions.models import Order, OrderStatus, PaymentStatus, MissionLeg, MissionLegStatus
+from app.modules.ai_predictions.models import AIPrediction, AIRecommendation
 from app.modules.ai_predictions.service import predict_flight_energy, haversine_distance
 from app.shared.id_generator import generate_sequential_id
 from typing import Optional
@@ -1144,8 +1148,65 @@ async def create_mission(
             status_code=400,
             detail=f"Order đang ở trạng thái '{order.status.value}'. Chỉ tạo mission khi hàng đã có mặt tại hub (AT_HUB)."
         )
-        
-    from app.shared.id_generator import generate_sequential_id
+
+    # Kiểm tra xem đơn hàng đã có Mission active chưa
+    existing_mission_res = await db.execute(
+        select(Mission).where(
+            Mission.order_id == request.orderId,
+            Mission.status.in_([MissionStatus.SCHEDULED, MissionStatus.IN_PROGRESS])
+        )
+    )
+    if existing_mission_res.scalars().first():
+        raise HTTPException(
+            status_code=400,
+            detail="Đơn hàng này đã có nhiệm vụ bay đang được lên lịch hoặc đang thực hiện"
+        )
+
+    drone = await db.get(Drone, request.droneId)
+    if not drone:
+        raise HTTPException(status_code=404, detail="Drone not found")
+
+    # Tái hiện các tùy chọn tuyến đường để khớp với routeId mà Operator đã chọn
+    routes_schemas, raw_data_list = await compute_mission_routes_internal(db, order, request.droneId)
+
+    selected_schema = None
+    selected_data = None
+    for s, d in zip(routes_schemas, raw_data_list):
+        if s.routeId == request.routeId:
+            selected_schema = s
+            selected_data = d
+            break
+
+    # Nếu không khớp chính xác routeId, chọn tuyến recommended hoặc tuyến đầu tiên
+    if not selected_data and routes_schemas:
+        for s, d in zip(routes_schemas, raw_data_list):
+            if s.recommended:
+                selected_schema = s
+                selected_data = d
+                break
+        if not selected_data:
+            selected_schema = routes_schemas[0]
+            selected_data = raw_data_list[0]
+
+    # Tìm pin khả dụng của Drone hoặc pin tại Origin Hub
+    result = await db.execute(
+        select(Battery).where(
+            Battery.drone_id == drone.id,
+            Battery.status == batteries_status.ACTIVE
+        )
+    )
+    assigned_battery = result.scalars().first()
+    if not assigned_battery:
+        result = await db.execute(
+            select(Battery).where(
+                Battery.current_hub_id == order.origin_hub_id,
+                Battery.status == batteries_status.ACTIVE,
+                Battery.drone_id.is_(None)
+            )
+        )
+        assigned_battery = result.scalars().first()
+    battery_id = assigned_battery.id if assigned_battery else None
+
     mission_id = await generate_sequential_id(db, Mission, "MSN")
 
     total_dist_km = selected_schema.distanceKm if selected_schema else 0.0
@@ -1226,5 +1287,7 @@ async def create_mission(
     except Exception as e:
         print(f"[EMAIL] Lỗi gửi mission scheduled email: {e}")
 
-    return mission
+    m_dict = {c.name: getattr(mission, c.name) for c in mission.__table__.columns}
+    m_dict["route_path_string"] = route_str
+    return MissionResponse(**m_dict)
 
