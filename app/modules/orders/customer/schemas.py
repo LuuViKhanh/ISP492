@@ -50,7 +50,9 @@ class CreateOrderRequest(BaseModel):
     delivery_mode: DeliveryMode
     requested_delivery_at: Optional[datetime] = None
     sender_phone: Optional[str] = None
+    receiver_name: Optional[str] = None
     receiver_phone: Optional[str] = None
+    receiver_email: Optional[str] = None
     has_insurance: bool = False
 
 class OrderCreateResponse(BaseModel):
