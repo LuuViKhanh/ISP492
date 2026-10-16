@@ -188,6 +188,7 @@ class Order(Base):
     id: Mapped[str] = mapped_column(String(50), primary_key=True)
     customer_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     sender_phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    receiver_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     receiver_phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
     package_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     package_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
