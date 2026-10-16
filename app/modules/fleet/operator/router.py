@@ -37,6 +37,7 @@ class DroneOverviewResponse(BaseModel):
 class BatteryOverviewResponse(BaseModel):
     id: str
     serial_number: str
+    battery_model: Optional[str] = None
     capacity_wh: float
     status: batteries_status
     drone_id: Optional[int]
@@ -130,6 +131,7 @@ async def list_all_batteries(
         response.append({
             "id": battery.id,
             "serial_number": battery.serial_number,
+            "battery_model": battery.battery_model,
             "capacity_wh": battery.capacity_wh,
             "status": battery.status,
             "drone_id": battery.drone_id,
