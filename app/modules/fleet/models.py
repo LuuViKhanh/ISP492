@@ -15,6 +15,33 @@ class batteries_status(str, enum.Enum):
     ACTIVE = "Active"
     REPLACED = "Replaced"
 
+
+class BatteryAvailableStatus(str, enum.Enum):
+    """Computed status — không lưu DB, chỉ dùng trong API response."""
+    CHARGING = "Charging"   # đang sạc tại hub (charge_level_pct < 100)
+    READY    = "Ready"      # sạc đầy 100%, sẵn sàng lắp
+    IN_USE   = "In Use"     # đang gắn trên drone
+    REPLACED = "Replaced"   # hết vòng đời
+
+
+def compute_battery_available_status(battery: "Battery") -> BatteryAvailableStatus:
+    """
+    Tính toán trạng thái khả dụng của pin từ các field hiện có.
+
+    Rules (ưu tiên từ trên xuống):
+    1. status = Replaced                          → Replaced
+    2. drone_id IS NOT NULL                       → In Use (đang gắn trên drone)
+    3. charge_level_pct >= 100                    → Ready  (đủ 100%, có thể lắp ngay)
+    4. còn lại                                    → Charging (đang sạc tại hub)
+    """
+    if battery.status == batteries_status.REPLACED:
+        return BatteryAvailableStatus.REPLACED
+    if battery.drone_id is not None:
+        return BatteryAvailableStatus.IN_USE
+    if (battery.charge_level_pct or 0) >= 100:
+        return BatteryAvailableStatus.READY
+    return BatteryAvailableStatus.CHARGING
+
 class WorkOrderStatus(str, enum.Enum):
     PENDING = "Pending"
     IN_PROGRESS = "In Progress"

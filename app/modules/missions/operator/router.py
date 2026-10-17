@@ -19,7 +19,7 @@ from app.modules.missions.schemas import (
     HubCheckpointResponse, TelemetryIngestResponse,
 )
 from app.modules.fleet.models import Drone, Battery, DroneStatus, batteries_status
-from app.modules.fleet.schemas import CheckAvailabilityRequest, AvailabilityResponse
+from app.modules.fleet.schemas import CheckAvailabilityRequest, AvailabilityResponse, AvailableBatterySchema
 
 router = APIRouter(prefix="/operator/missions", tags=["Missions"])
 
@@ -82,7 +82,10 @@ async def check_fleet_availability(
 
     available_batteries = (await db.execute(select(Battery).where(and_(*battery_conditions)))).scalars().all()
 
-    return AvailabilityResponse(available_drones=available_drones, available_batteries=available_batteries)
+    return AvailabilityResponse(
+        available_drones=available_drones,
+        available_batteries=[AvailableBatterySchema.from_battery(b) for b in available_batteries],
+    )
 
 
 @router.get("/planned", response_model=list[MissionResponse])
