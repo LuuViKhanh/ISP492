@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
-from app.modules.fleet.models import Drone, DroneStatus, Battery, batteries_status
+from app.modules.fleet.models import Drone, DroneStatus, Battery, batteries_status, BatteryAvailableStatus, compute_battery_available_status
 
 router = APIRouter(prefix="/admin/fleet", tags=["Fleet"])
 
@@ -75,6 +75,8 @@ class BatteryResponse(BaseModel):
     drone_id: Optional[int] = None
     current_hub_id: Optional[int] = None
     charge_level_pct: Optional[int] = None
+    battery_model: Optional[str] = None
+    available_status: Optional[BatteryAvailableStatus] = None  # computed, không lưu DB
 
     class Config:
         from_attributes = True
@@ -183,13 +185,28 @@ async def delete_drone(
 
 # ── Battery Endpoints ─────────────────────────────────────────────────────────
 
+def _battery_to_response(battery: Battery) -> BatteryResponse:
+    """Chuyển Battery ORM object thành BatteryResponse kèm computed available_status."""
+    return BatteryResponse(
+        id=battery.id,
+        serial_number=battery.serial_number,
+        capacity_wh=battery.capacity_wh,
+        status=battery.status,
+        drone_id=battery.drone_id,
+        current_hub_id=battery.current_hub_id,
+        charge_level_pct=battery.charge_level_pct,
+        battery_model=battery.battery_model,
+        available_status=compute_battery_available_status(battery),
+    )
+
+
 @router.get("/batteries", response_model=list[BatteryResponse], summary="Lấy danh sách tất cả pin")
 async def list_batteries(
     user: CurrentUser = Depends(allow_admin),
     db: AsyncSession = Depends(get_async_db),
 ):
     result = await db.execute(select(Battery).order_by(Battery.id))
-    return result.scalars().all()
+    return [_battery_to_response(b) for b in result.scalars().all()]
 
 
 @router.get("/batteries/{battery_id}", response_model=BatteryResponse, summary="Xem chi tiết một pin")
@@ -201,7 +218,7 @@ async def get_battery(
     battery = await db.get(Battery, str(battery_id))
     if not battery:
         raise HTTPException(status_code=404, detail="Battery not found")
-    return battery
+    return _battery_to_response(battery)
 
 
 @router.post("/batteries", response_model=BatteryResponse, status_code=201, summary="Thêm pin mới vào kho")
@@ -232,7 +249,7 @@ async def create_battery(
     db.add(battery)
     await db.commit()
     await db.refresh(battery)
-    return battery
+    return _battery_to_response(battery)
 
 
 @router.put("/batteries/{battery_id}", response_model=BatteryResponse, summary="Cập nhật thông tin pin")
@@ -261,7 +278,7 @@ async def update_battery(
 
     await db.commit()
     await db.refresh(battery)
-    return battery
+    return _battery_to_response(battery)
 
 
 @router.delete("/batteries/{battery_id}", status_code=204, summary="Xóa pin khỏi hệ thống")

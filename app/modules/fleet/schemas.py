@@ -1,7 +1,7 @@
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 from typing import List, Optional, Union
-from app.modules.fleet.models import WorkOrderStatus
+from app.modules.fleet.models import WorkOrderStatus, BatteryAvailableStatus, compute_battery_available_status
 
 # ==================== DTO CHO CHECK AVAILABILITY ====================
 class CheckAvailabilityRequest(BaseModel):
@@ -32,6 +32,14 @@ class AvailableBatterySchema(BaseModel):
     create_at: Optional[datetime] = None
     update_at: Optional[datetime] = None
     battery_model: Optional[str] = None
+    available_status: Optional[BatteryAvailableStatus] = None  # computed, không lưu DB
+
+    @classmethod
+    def from_battery(cls, battery) -> "AvailableBatterySchema":
+        """Tạo schema kèm computed available_status từ Battery ORM object."""
+        data = {c.name: getattr(battery, c.name) for c in battery.__table__.columns}
+        data["available_status"] = compute_battery_available_status(battery)
+        return cls(**data)
 
 class AvailabilityResponse(BaseModel):
     available_drones: List[AvailableDroneSchema]

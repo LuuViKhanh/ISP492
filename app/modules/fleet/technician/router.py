@@ -301,6 +301,7 @@ async def get_hub_batteries(
         response.append({
             "id": b.id,
             "serial_number": b.serial_number,
+            "battery_model": b.battery_model,
             "capacity_wh": b.capacity_wh,
             "status": b.status,
             "drone_id": b.drone_id,
