@@ -156,6 +156,17 @@ class RouteLegSchema(BaseModel):
     to_hub_code: str
     distance_km: float
 
+
+class HubBatteryStatus(BaseModel):
+    """Trạng thái pin tại một Hub trung gian trong relay route."""
+    hub_id: int
+    hub_code: str
+    hub_name: str
+    ready_count: int            # số pin Ready (sạc 100%, tương thích, chưa gắn drone)
+    compatible_models: list[str]
+    feasible: bool              # True nếu có ít nhất 1 pin Ready tương thích
+
+
 class RouteOptionSchema(BaseModel):
     routeId: str
     route_string: str
@@ -171,6 +182,10 @@ class RouteOptionSchema(BaseModel):
     recommended: bool
     reason: Optional[str] = None
     suggestedDroneId: Optional[int] = None
+    # Battery feasibility — bổ sung mới
+    feasible: bool = True
+    infeasible_reason: Optional[str] = None
+    relay_battery_status: list[HubBatteryStatus] = []
 
 class MissionPlanningAnalyzeResponse(BaseModel):
     routes: list[RouteOptionSchema]
