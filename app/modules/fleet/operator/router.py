@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
-from app.modules.fleet.models import Drone, Battery, DroneStatus, batteries_status
+from app.modules.fleet.models import Drone, Battery, DroneStatus, batteries_status, BatteryAvailableStatus, compute_battery_available_status
 from app.modules.system.models import Hub
 from typing import Optional
 from pydantic import BaseModel
@@ -40,11 +40,11 @@ class BatteryOverviewResponse(BaseModel):
     battery_model: Optional[str] = None
     capacity_wh: float
     status: batteries_status
-    drone_id: Optional[int]
-    current_hub_id: Optional[int]
-    hub_name: Optional[str]
-    charge_level_pct: Optional[int]
-    battery_model: Optional[str]
+    drone_id: Optional[int] = None
+    current_hub_id: Optional[int] = None
+    hub_name: Optional[str] = None
+    charge_level_pct: Optional[int] = None
+    available_status: BatteryAvailableStatus  # computed, không lưu DB
 
     class Config:
         from_attributes = True
@@ -116,18 +116,49 @@ async def get_drone(
 
 @router.get("/batteries", response_model=list[BatteryOverviewResponse], summary="Tất cả pin ở mọi hub")
 async def list_all_batteries(
+    hub_id: Optional[int] = Query(None, description="Lọc pin theo Hub ID"),
+    available_status: Optional[BatteryAvailableStatus] = Query(
+        None,
+        description="Lọc theo trạng thái khả dụng: Charging | Ready | In Use | Replaced"
+    ),
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Operator xem toàn bộ pin ở tất cả các hub."""
-    result = await db.execute(
+    """
+    Operator xem toàn bộ pin ở tất cả các hub, kèm `available_status` tính toán thực tế.
+
+    **Query params (tuỳ chọn):**
+    - `hub_id` — chỉ lấy pin thuộc Hub đó
+    - `available_status` — lọc theo trạng thái:
+        - `Charging` — đang sạc tại hub (charge < 100%)
+        - `Ready`    — sạc đầy 100%, sẵn sàng lắp cho drone
+        - `In Use`   — đang gắn trên drone
+        - `Replaced` — hết vòng đời
+
+    **Dùng để chọn hub thay pin:** lọc `available_status=Ready` kèm `hub_id` để biết
+    hub nào đang có pin sẵn sàng thay khi drone dừng trên route.
+    """
+    stmt = (
         select(Battery, Hub.name.label("hub_name"))
         .outerjoin(Hub, Battery.current_hub_id == Hub.id)
         .order_by(Battery.current_hub_id, Battery.id)
     )
+
+    # Lọc theo hub_id nếu có
+    if hub_id is not None:
+        stmt = stmt.where(Battery.current_hub_id == hub_id)
+
+    result = await db.execute(stmt)
     rows = result.all()
+
     response = []
     for battery, hub_name in rows:
+        computed = compute_battery_available_status(battery)
+
+        # Lọc theo available_status nếu có (filter sau khi tính toán)
+        if available_status is not None and computed != available_status:
+            continue
+
         response.append({
             "id": battery.id,
             "serial_number": battery.serial_number,
@@ -138,6 +169,6 @@ async def list_all_batteries(
             "current_hub_id": battery.current_hub_id,
             "hub_name": hub_name,
             "charge_level_pct": battery.charge_level_pct,
-            "battery_model": battery.battery_model,
+            "available_status": computed,
         })
     return response
