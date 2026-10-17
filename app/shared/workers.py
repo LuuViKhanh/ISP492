@@ -183,7 +183,7 @@ async def run_battery_charging_simulation(db: AsyncSession):
 # ── Hằng số cấu hình cho nhắc nhận hàng ────────────────────────────
 PICKUP_REMINDER_REF = "PICKUP_REMINDER"          # Marker để nhận diện thông báo nhắc (dedup)
 PICKUP_REMINDER_INTERVAL = timedelta(hours=5)    # Cứ mỗi 5 tiếng nhắc 1 lần
-PICKUP_CANCEL_AFTER = timedelta(days=5)          # Quá 5 ngày không nhận thì hủy
+PICKUP_CANCEL_AFTER = timedelta(days=3)          # Quá 3 ngày không nhận thì hủy
 
 
 def _as_naive_utc(dt: datetime | None) -> datetime | None:
@@ -255,7 +255,7 @@ async def run_pickup_reminder_watcher(db: AsyncSession):
                     title="Kiện hàng đã bị hủy",
                     message=(
                         f"Kiện hàng của chuyến bay #{mission.id} đã bị hủy do bạn không "
-                        f"tới nhận trong vòng 5 ngày kể từ khi hàng về Hub."
+                        f"tới nhận trong vòng 3 ngày kể từ khi hàng về Hub."
                     ),
                     notifications_type=NotificationType.MISSION_STATUS,
                     mission_id=str(mission.id),
@@ -269,7 +269,7 @@ async def run_pickup_reminder_watcher(db: AsyncSession):
                     title="Hủy kiện hàng quá hạn nhận",
                     message=(
                         f"Chuyến bay #{mission.id} đã tự động hủy do khách không tới "
-                        f"nhận hàng sau 5 ngày."
+                        f"nhận hàng sau 3 ngày."
                     ),
                     notifications_type=NotificationType.MISSION_STATUS,
                     mission_id=str(mission.id),
@@ -305,7 +305,7 @@ async def run_pickup_reminder_watcher(db: AsyncSession):
                 title="Kiện hàng đang chờ bạn tới nhận",
                 message=(
                     f"Kiện hàng của chuyến bay #{mission.id} đã về Hub và đang chờ bạn "
-                    f"tới nhận. Vui lòng tới nhận sớm; sau 5 ngày kể từ khi hàng về Hub, "
+                    f"tới nhận. Vui lòng tới nhận sớm; sau 3 ngày kể từ khi hàng về Hub, "
                     f"đơn sẽ tự động bị hủy."
                 ),
                 notifications_type=NotificationType.MISSION_STATUS,
