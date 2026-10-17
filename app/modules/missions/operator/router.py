@@ -323,12 +323,13 @@ async def get_mission(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Trả về toàn bộ thông tin mission bao gồm pickup_location_id và dropoff_location_id."""
+    """Trả về toàn bộ thông tin mission kèm chi tiết tuyến đường đã lên lịch (giống cấu trúc mission-planning/analyze)."""
     mission = await db.get(Mission, mission_id)
 
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
-    return mission
+    return await build_mission_detail_response(db, mission)
+
 
 
 '''
@@ -1169,8 +1170,17 @@ async def compute_mission_routes_internal(
                 RouteLegSchema(
                     from_hub_code=leg["from_hub_code"],
                     to_hub_code=leg["to_hub_code"],
-                    distance_km=leg["distance_km"]
-                ) for leg in d["legs_detail"]
+                    distance_km=leg["distance_km"],
+                    sequence_no=idx + 1,
+                    from_hub_id=leg.get("from_hub_id"),
+                    to_hub_id=leg.get("to_hub_id"),
+                    from_hub_name=hub_dict[leg["from_hub_id"]].name if leg.get("from_hub_id") in hub_dict else None,
+                    to_hub_name=hub_dict[leg["to_hub_id"]].name if leg.get("to_hub_id") in hub_dict else None,
+                    from_latitude=hub_dict[leg["from_hub_id"]].latitude if leg.get("from_hub_id") in hub_dict else None,
+                    from_longitude=hub_dict[leg["from_hub_id"]].longitude if leg.get("from_hub_id") in hub_dict else None,
+                    to_latitude=hub_dict[leg["to_hub_id"]].latitude if leg.get("to_hub_id") in hub_dict else None,
+                    to_longitude=hub_dict[leg["to_hub_id"]].longitude if leg.get("to_hub_id") in hub_dict else None,
+                ) for idx, leg in enumerate(d["legs_detail"])
             ],
             distanceKm=d["distanceKm"],
             relayHubs=d["relayHubs"],
@@ -1246,6 +1256,232 @@ async def compute_mission_routes_internal(
             schema.reason = f"Tuyến không khả thi: {reason}"
 
     return routes_schemas, raw_data_list
+
+
+async def build_missions_response_list(
+    db: AsyncSession,
+    missions: list[Mission]
+) -> list[MissionResponse]:
+    """
+    Đóng gói danh sách Mission kèm thông tin chi tiết tuyến đường đã lên lịch
+    (giống cấu trúc RouteOptionSchema của POST /api/v1/operator/missions/mission-planning/analyze).
+    """
+    if not missions:
+        return []
+
+    mission_ids = [m.id for m in missions]
+
+    # 1. Lấy tất cả Hubs
+    hub_res = await db.execute(select(Hub))
+    hub_dict = {h.id: h for h in hub_res.scalars().all()}
+
+    # 2. Lấy tất cả MissionLeg của các mission
+    legs_res = await db.execute(
+        select(MissionLeg)
+        .where(MissionLeg.mission_id.in_(mission_ids))
+        .order_by(MissionLeg.mission_id, MissionLeg.sequence_no.asc(), MissionLeg.id.asc())
+    )
+    legs_by_mission: dict[str, list[MissionLeg]] = {}
+    for leg in legs_res.scalars().all():
+        if leg.mission_id not in legs_by_mission:
+            legs_by_mission[leg.mission_id] = []
+        legs_by_mission[leg.mission_id].append(leg)
+
+    # 3. Lấy AIPrediction & AIRecommendation mới nhất của từng mission
+    preds_res = await db.execute(
+        select(AIPrediction)
+        .where(AIPrediction.mission_id.in_(mission_ids))
+        .order_by(AIPrediction.id.desc())
+    )
+    pred_by_mission: dict[str, AIPrediction] = {}
+    for p in preds_res.scalars().all():
+        if p.mission_id not in pred_by_mission:
+            pred_by_mission[p.mission_id] = p
+
+    recs_res = await db.execute(
+        select(AIRecommendation)
+        .where(AIRecommendation.mission_id.in_(mission_ids))
+        .order_by(AIRecommendation.id.desc())
+    )
+    rec_by_mission: dict[str, AIRecommendation] = {}
+    for r in recs_res.scalars().all():
+        if r.mission_id not in rec_by_mission:
+            rec_by_mission[r.mission_id] = r
+
+    # 4. Lấy danh sách Pin để tính % tiêu hao pin giống mission-planning/analyze
+    bats_res = await db.execute(select(Battery))
+    all_batteries = bats_res.scalars().all()
+    battery_by_id = {b.id: b for b in all_batteries}
+
+    responses: list[MissionResponse] = []
+    for m in missions:
+        m_dict = {c.name: getattr(m, c.name) for c in m.__table__.columns}
+        payload = float(m.payload_weight or 0.0)
+
+        # Xác định capacity_wh của pin để tính % tiêu thụ
+        drone_capacity_wh = 100.0
+        if m.battery_id and str(m.battery_id) in battery_by_id:
+            drone_capacity_wh = float(battery_by_id[str(m.battery_id)].capacity_wh or 100.0)
+        else:
+            origin_bats = [
+                b for b in all_batteries
+                if b.status == batteries_status.ACTIVE and b.current_hub_id == m.origin_hub_id
+            ]
+            if origin_bats:
+                drone_capacity_wh = float(max(b.capacity_wh or 100.0 for b in origin_bats))
+
+        m_legs = legs_by_mission.get(m.id, [])
+        legs_detail: list[RouteLegSchema] = []
+        relay_hubs: list[str] = []
+
+        if m_legs:
+            for idx, leg in enumerate(m_legs):
+                h1 = hub_dict.get(leg.from_hub_id)
+                h2 = hub_dict.get(leg.to_hub_id)
+                from_code = (h1.code or h1.name) if h1 else str(leg.from_hub_id)
+                to_code = (h2.code or h2.name) if h2 else str(leg.to_hub_id)
+
+                d = haversine_distance(
+                    h1.latitude or 0, h1.longitude or 0,
+                    h2.latitude or 0, h2.longitude or 0
+                ) if (h1 and h2) else 0.0
+                e = predict_flight_energy(d, payload)["energy_wh"]
+
+                legs_detail.append(
+                    RouteLegSchema(
+                        from_hub_code=from_code,
+                        to_hub_code=to_code,
+                        distance_km=round(d, 2),
+                        sequence_no=leg.sequence_no or (idx + 1),
+                        from_hub_id=leg.from_hub_id,
+                        to_hub_id=leg.to_hub_id,
+                        from_hub_name=h1.name if h1 else None,
+                        to_hub_name=h2.name if h2 else None,
+                        from_latitude=h1.latitude if h1 else None,
+                        from_longitude=h1.longitude if h1 else None,
+                        to_latitude=h2.latitude if h2 else None,
+                        to_longitude=h2.longitude if h2 else None,
+                        status=leg.status.value if hasattr(leg.status, "value") else (str(leg.status) if leg.status else None),
+                    )
+                )
+
+                if idx < len(m_legs) - 1:
+                    hub_label = h2.name if h2 else to_code
+                    relay_hubs.append(f"{hub_label} (Tốn {e:.1f}Wh) - Đổi pin nhanh (0p)")
+
+            route_codes = [legs_detail[0].from_hub_code] + [l.to_hub_code for l in legs_detail]
+            route_string = " -> ".join(route_codes)
+        else:
+            h1 = hub_dict.get(m.origin_hub_id)
+            h2 = hub_dict.get(m.destination_hub_id)
+            from_code = (h1.code or h1.name) if h1 else (str(m.origin_hub_id) if m.origin_hub_id else "?")
+            to_code = (h2.code or h2.name) if h2 else (str(m.destination_hub_id) if m.destination_hub_id else "?")
+            route_string = f"{from_code} -> {to_code}"
+
+            if h1 or h2:
+                d = (m.distance_m / 1000.0) if m.distance_m else (
+                    haversine_distance(
+                        h1.latitude or 0, h1.longitude or 0,
+                        h2.latitude or 0, h2.longitude or 0
+                    ) if (h1 and h2) else 0.0
+                )
+                legs_detail.append(
+                    RouteLegSchema(
+                        from_hub_code=from_code,
+                        to_hub_code=to_code,
+                        distance_km=round(d, 2),
+                        sequence_no=1,
+                        from_hub_id=m.origin_hub_id,
+                        to_hub_id=m.destination_hub_id,
+                        from_hub_name=h1.name if h1 else None,
+                        to_hub_name=h2.name if h2 else None,
+                        from_latitude=h1.latitude if h1 else None,
+                        from_longitude=h1.longitude if h1 else None,
+                        to_latitude=h2.latitude if h2 else None,
+                        to_longitude=h2.longitude if h2 else None,
+                        status="PENDING",
+                    )
+                )
+
+        dist_km = round(m.distance_m / 1000.0, 2) if m.distance_m else round(sum(l.distance_km for l in legs_detail), 2)
+        ai_pred = pred_by_mission.get(m.id)
+        ai_rec = rec_by_mission.get(m.id)
+
+        if ai_pred and ai_pred.estimated_energy_wh is not None:
+            pred_energy = round(float(ai_pred.estimated_energy_wh), 2)
+        else:
+            pred_energy = round(
+                sum(predict_flight_energy(l.distance_km, payload)["energy_wh"] for l in legs_detail),
+                2
+            )
+
+        if ai_pred and ai_pred.estimated_duration_m is not None:
+            pred_duration = int(ai_pred.estimated_duration_m)
+        else:
+            pred_duration = int(dist_km * 2)
+
+        batt_pct = int((pred_energy / drone_capacity_wh) * 100) if drone_capacity_wh else 50
+        rem_batt_pct = max(0, 100 - batt_pct)
+
+        if ai_pred and ai_pred.risk_level:
+            risk = str(ai_pred.risk_level).upper()
+        else:
+            risk = "LOW" if pred_energy < drone_capacity_wh * 0.6 else ("MEDIUM" if pred_energy < drone_capacity_wh * 0.8 else "HIGH")
+
+        conf_pct = 90 if risk == "LOW" else (85 if risk == "MEDIUM" else 75)
+        reason = (
+            ai_rec.content
+            if (ai_rec and ai_rec.content)
+            else f"Lộ trình {route_string} được chọn theo phân tích AI ({pred_energy:.1f} Wh)."
+        )
+        route_id = f"R-{m.order_id or m.id}-SCH"
+
+        scheduled_route = RouteOptionSchema(
+            routeId=route_id,
+            route_string=route_string,
+            legs_detail=legs_detail,
+            distanceKm=dist_km,
+            relayHubs=relay_hubs,
+            predictedDurationMin=pred_duration,
+            predictedEnergyWh=pred_energy,
+            batteryConsumptionPct=batt_pct,
+            remainingBatteryPct=rem_batt_pct,
+            confidencePct=conf_pct,
+            risk=risk,
+            recommended=True,
+            reason=reason,
+            suggestedDroneId=m.drone_id,
+        )
+
+        m_dict["route_path_string"] = route_string
+        m_dict["routeId"] = route_id
+        m_dict["route_string"] = route_string
+        m_dict["legs_detail"] = legs_detail
+        m_dict["distanceKm"] = dist_km
+        m_dict["relayHubs"] = relay_hubs
+        m_dict["predictedDurationMin"] = pred_duration
+        m_dict["predictedEnergyWh"] = pred_energy
+        m_dict["batteryConsumptionPct"] = batt_pct
+        m_dict["remainingBatteryPct"] = rem_batt_pct
+        m_dict["confidencePct"] = conf_pct
+        m_dict["risk"] = risk
+        m_dict["recommended"] = True
+        m_dict["reason"] = reason
+        m_dict["suggestedDroneId"] = m.drone_id
+        m_dict["scheduled_route"] = scheduled_route
+        m_dict["routes"] = [scheduled_route]
+
+        responses.append(MissionResponse(**m_dict))
+
+    return responses
+
+
+async def build_mission_detail_response(
+    db: AsyncSession,
+    mission: Mission
+) -> MissionResponse:
+    res = await build_missions_response_list(db, [mission])
+    return res[0]
 
 
 @router.post("/mission-planning/analyze", response_model=MissionPlanningAnalyzeResponse)
@@ -1442,7 +1678,6 @@ async def create_mission(
     except Exception as e:
         print(f"[EMAIL] Lỗi gửi mission scheduled email: {e}")
 
-    m_dict = {c.name: getattr(mission, c.name) for c in mission.__table__.columns}
-    m_dict["route_path_string"] = route_str
-    return MissionResponse(**m_dict)
+    return await build_mission_detail_response(db, mission)
+
 
