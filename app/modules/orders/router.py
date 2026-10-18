@@ -56,7 +56,12 @@ def calculate_planning_state(order: Order, mission: Mission = None) -> str | Non
     ):
         return None
 
-    # 2. Nếu đơn hàng đã có Mission
+    # 2. Chỉ những đơn hàng đã được Technician xác nhận nhận hàng tại Hub (AT_HUB)
+    # mới được phép tạo mission hoặc hiển thị trạng thái lập lịch (Issue #2)
+    if order.status != OrderStatus.AT_HUB:
+        return None
+
+    # 3. Nếu đơn hàng đã có Mission (khi đã AT_HUB)
     if mission:
         # Đã bay xong -> Không hiện Ready for planning hay Planned nữa
         if mission.status in COMPLETED_MISSION_STATUSES or mission.arrived_at is not None:
@@ -67,10 +72,6 @@ def calculate_planning_state(order: Order, mission: Mission = None) -> str | Non
         # Mission trước đó bị hủy/lỗi -> Cần lập lịch lại
         if mission.status in FAILED_MISSION_STATUSES:
             return "NEEDS_REPLANNING"
-
-    # 3. Nếu chưa có Mission: chỉ những đơn hàng đã được nhận vào Hub (AT_HUB) mới sẵn sàng lập Mission
-    if order.status != OrderStatus.AT_HUB:
-        return None
 
     if order.replan_required_at:
         return "NEEDS_REPLANNING"
@@ -128,8 +129,8 @@ async def list_orders(
         latest_mission = mission_by_order.get(o.id)
         planning_state = calculate_planning_state(o, latest_mission)
         origin_pkg = OriginPackageSchema(
-            received=True if (o.origin_received_at or o.status == OrderStatus.AT_HUB) else False,
-            received_at=o.origin_received_at
+            received=True if o.status == OrderStatus.AT_HUB else False,
+            received_at=o.origin_received_at if o.status == OrderStatus.AT_HUB else None
         )
         order_resp = OrderResponse.model_validate(o)
         order_resp.planningState = planning_state
@@ -157,6 +158,7 @@ async def get_order(
         1. Lấy thông tin đơn hàng theo `order_id`.
         2. Truy vấn DB xem đơn hàng này đã có `Mission` nào chưa để trả về `planningState` tương ứng.
     """
+    order_id = order_id.strip()
     order = await db.get(Order, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -172,8 +174,8 @@ async def get_order(
     
     planning_state = calculate_planning_state(order, latest_mission)
     origin_pkg = OriginPackageSchema(
-        received=True if (order.origin_received_at or order.status == OrderStatus.AT_HUB) else False,
-        received_at=order.origin_received_at
+        received=True if order.status == OrderStatus.AT_HUB else False,
+        received_at=order.origin_received_at if order.status == OrderStatus.AT_HUB else None
     )
     
     order_resp = OrderResponse.model_validate(order)
@@ -203,10 +205,11 @@ async def get_eligible_drones(
     - **Hoạt động**:
         1. Tìm Origin Hub của `order_id` truyền vào.
         2. Lọc các Drone đang nằm tại Origin Hub này (`current_hub_id == origin_hub_id`).
-        3. Kiểm tra Drone phải ở trạng thái rảnh (`AVAILABLE`).
+        3. Kiểm tra Drone phải ở trạng thái rảnh (`AVAILABLE`) và chưa bị gán cho Mission active khác.
         4. Đảm bảo sức tải của Drone (`payload_capacity_kg`) phải lớn hơn hoặc bằng khối lượng của đơn hàng (`payload_kg`).
     - **Lưu ý**: Khác với API check-availability cũ (chỉ kiểm tra chung chung toàn hệ thống), API này tuân thủ nguyên tắc thực tế: Hàng ở Hub nào thì chỉ được dùng Drone đang đỗ ở Hub đó.
     """
+    order_id = order_id.strip()
     order = await db.get(Order, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -216,7 +219,17 @@ async def get_eligible_drones(
     hub = await db.get(Hub, order.origin_hub_id)
     if not hub:
         raise HTTPException(status_code=404, detail="Origin Hub not found")
-        
+
+    # Loại trừ các drone đang được phân công cho mission active khác
+    busy_drones_res = await db.execute(
+        select(Mission.drone_id).where(
+            Mission.drone_id.is_not(None),
+            Mission.order_id != order_id,
+            Mission.status.in_(list(ACTIVE_MISSION_STATUSES))
+        )
+    )
+    busy_drone_ids = {row[0] for row in busy_drones_res.all() if row[0] is not None}
+
     # Find all drones at this hub
     drones_query = select(Drone).where(and_(
         Drone.current_hub_id == hub.id,
@@ -224,10 +237,7 @@ async def get_eligible_drones(
         Drone.payload_capacity_kg >= (order.payload_kg or 0)
     ))
     drones_result = await db.execute(drones_query)
-    eligible_drones = drones_result.scalars().all()
-    
-    # We can refine this to check for active missions for these drones
-    # but for now we rely on DroneStatus.AVAILABLE
+    eligible_drones = [d for d in drones_result.scalars().all() if d.id not in busy_drone_ids]
     
     total_drones_result = await db.execute(select(func.count(Drone.id)).where(Drone.current_hub_id == hub.id))
     total_drones = total_drones_result.scalar() or 0

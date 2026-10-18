@@ -216,7 +216,7 @@ async def run_pickup_reminder_watcher(db: AsyncSession):
     """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    # Lấy các kiện đang chờ khách tới nhận
+    # Lấy các kiện đang chờ khách tới nhận (drone đã đáp hub đích: arrived_at != None, khách chưa nhận: arrival_confirmed_at == None)
     result = await db.execute(
         select(Mission).where(
             and_(
@@ -225,7 +225,6 @@ async def run_pickup_reminder_watcher(db: AsyncSession):
                 Mission.status.notin_([
                     MissionStatus.CANCELLED,
                     MissionStatus.MISSION_COMPLETED,
-                    MissionStatus.COMPLETED,
                 ]),
             )
         )
@@ -244,9 +243,18 @@ async def run_pickup_reminder_watcher(db: AsyncSession):
 
         waited = now - arrived_at
 
-        # ── Vế 1: Quá 5 ngày -> hủy hàng ──────────────────────────
+        # ── Vế 1: Quá 3 ngày -> hủy hàng ──────────────────────────
         if waited >= PICKUP_CANCEL_AFTER:
             mission.status = MissionStatus.CANCELLED
+            mission.handling_status = None
+
+            if mission.order_id:
+                from app.modules.missions.models import Order, OrderStatus
+                order_obj = await db.get(Order, mission.order_id)
+                if order_obj:
+                    order_obj.status = OrderStatus.CANCELLED
+                    order_obj.cancelled_at = now
+                    order_obj.updated_at = now
 
             # Notify Customer
             if mission.customer_id:

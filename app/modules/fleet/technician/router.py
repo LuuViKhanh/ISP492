@@ -28,6 +28,42 @@ router = APIRouter(prefix="/technician/fleet", tags=["Fleet"])
 allow_technician = RoleChecker([UserRole.TECHNICIAN, UserRole.ADMIN])
 
 
+from typing import Optional
+from pydantic import BaseModel
+
+
+class ConfirmArrivalRequest(BaseModel):
+    has_issue: Optional[bool] = False
+    has_incident: Optional[bool] = False
+    issue_description: Optional[str] = None
+    drone_status: Optional[str] = None
+    battery_faulty: Optional[bool] = False
+
+
+async def _resolve_mission(db: AsyncSession, mission_or_order_id: str) -> Mission:
+    from sqlalchemy import func
+    clean_id = (mission_or_order_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="mission_id is required")
+
+    mission = await db.get(Mission, clean_id)
+    if not mission:
+        res = await db.execute(
+            select(Mission)
+            .where(
+                (Mission.id == clean_id)
+                | (Mission.order_id == clean_id)
+                | (func.upper(func.trim(Mission.id)) == clean_id.upper())
+                | (func.upper(func.trim(Mission.order_id)) == clean_id.upper())
+            )
+            .order_by(Mission.id.desc())
+        )
+        mission = res.scalars().first()
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    return mission
+
+
 # ── Incoming & Confirm Arrival ───────────────────────────────────────────────
 
 @router.get("/incoming")
@@ -35,22 +71,38 @@ async def get_incoming_drones(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    from sqlalchemy import cast, String
+    from sqlalchemy import cast, String, or_
+    from app.modules.missions.models import MissionLeg
     import traceback
     try:
         query = (
             select(
                 Mission.id,
+                Mission.order_id,
+                Mission.origin_hub_id,
+                Mission.destination_hub_id,
                 cast(Mission.status, String).label("status"),
                 cast(Mission.handling_status, String).label("handling_status"),
+                Drone.id.label("drone_id"),
                 Drone.name.label("drone_code"),
                 Drone.model.label("model"),
+                Drone.current_hub_id.label("drone_current_hub_id"),
+                Battery.id.label("battery_id"),
                 Battery.serial_number.label("battery_code"),
                 Battery.charge_level_pct.label("battery_percent")
             )
             .outerjoin(Drone, Mission.drone_id == Drone.id)
             .outerjoin(Battery, Mission.battery_id == Battery.id)
             .where(
+                # Issue #4: Mission đã xử lý hoàn tất (COMPLETED/MISSION_COMPLETED/CANCELLED...)
+                # không còn nằm ở danh sách Transit đang hoạt động mà chuyển sang History
+                Mission.status.notin_([
+                    MissionStatus.COMPLETED,
+                    MissionStatus.MISSION_COMPLETED,
+                    MissionStatus.CANCELLED,
+                    MissionStatus.FAILED,
+                    MissionStatus.REJECTED,
+                ]),
                 Mission.handling_status.in_([
                     HandlingStatus.INCOMING,
                     HandlingStatus.AT_HUB,
@@ -61,25 +113,68 @@ async def get_incoming_drones(
         )
         
         if user.hub_id and str(user.hub_id).isdigit():
-            query = query.where(Mission.destination_hub_id == int(user.hub_id))
+            tech_hub_id = int(user.hub_id)
+            leg_mission_ids_subq = (
+                select(MissionLeg.mission_id)
+                .where(
+                    or_(
+                        MissionLeg.to_hub_id == tech_hub_id,
+                        MissionLeg.from_hub_id == tech_hub_id,
+                    )
+                )
+            )
+            query = query.where(
+                or_(
+                    Mission.destination_hub_id == tech_hub_id,
+                    Drone.current_hub_id == tech_hub_id,
+                    Mission.id.in_(leg_mission_ids_subq),
+                )
+            )
             
-        query = query.order_by(Mission.scheduled_time.desc().nullslast())
+        query = query.order_by(Mission.scheduled_time.desc().nullslast(), Mission.id.desc())
         
         result = await db.execute(query)
         rows = result.all()
         
         response = []
+        seen_ids = set()
         for row in rows:
-            m_id, m_status, m_handling, drone_code, model, battery_code, battery_percent = row
+            (
+                m_id,
+                order_id,
+                origin_hub_id,
+                dest_hub_id,
+                m_status,
+                m_handling,
+                drone_id,
+                drone_code,
+                model,
+                drone_curr_hub_id,
+                battery_id,
+                battery_code,
+                battery_percent,
+            ) = row
+            if m_id in seen_ids:
+                continue
+            seen_ids.add(m_id)
             
             status_val = m_status.value if hasattr(m_status, "value") else m_status
             handling_val = m_handling.value if hasattr(m_handling, "value") else m_handling
             
             response.append({
+                "id": str(m_id),
+                "mission_id": str(m_id),
                 "mission_code": str(m_id),
+                "order_id": order_id,
+                "origin_hub_id": origin_hub_id,
+                "destination_hub_id": dest_hub_id,
+                "drone_id": drone_id,
                 "drone_code": drone_code,
+                "drone_current_hub_id": drone_curr_hub_id,
                 "model": model,
                 "mission_state": status_val if m_status else None,
+                "status": status_val if m_status else None,
+                "battery_id": battery_id,
                 "battery_code": battery_code,
                 "battery_percent": battery_percent,
                 "handling_status": handling_val if m_handling else None
@@ -91,45 +186,159 @@ async def get_incoming_drones(
         return JSONResponse(status_code=500, content={"error": str(e), "trace": traceback.format_exc()})
 
 
+@router.get("/history", summary="Lịch sử các chuyến bay đã hoàn thành tiếp nhận tại Hub")
+async def get_transit_history(
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    from sqlalchemy import cast, String, or_
+    from app.modules.missions.models import MissionLeg
+    import traceback
+    try:
+        query = (
+            select(
+                Mission.id,
+                Mission.order_id,
+                Mission.origin_hub_id,
+                Mission.destination_hub_id,
+                Mission.arrived_at,
+                Mission.end_time,
+                cast(Mission.status, String).label("status"),
+                cast(Mission.handling_status, String).label("handling_status"),
+                Drone.id.label("drone_id"),
+                Drone.name.label("drone_code"),
+                Drone.model.label("model"),
+                Battery.id.label("battery_id"),
+                Battery.serial_number.label("battery_code"),
+                Battery.charge_level_pct.label("battery_percent")
+            )
+            .outerjoin(Drone, Mission.drone_id == Drone.id)
+            .outerjoin(Battery, Mission.battery_id == Battery.id)
+            .where(
+                Mission.status.in_([
+                    MissionStatus.COMPLETED,
+                    MissionStatus.MISSION_COMPLETED,
+                ])
+            )
+        )
+
+        if user.hub_id and str(user.hub_id).isdigit():
+            tech_hub_id = int(user.hub_id)
+            leg_mission_ids_subq = (
+                select(MissionLeg.mission_id)
+                .where(
+                    or_(
+                        MissionLeg.to_hub_id == tech_hub_id,
+                        MissionLeg.from_hub_id == tech_hub_id,
+                    )
+                )
+            )
+            query = query.where(
+                or_(
+                    Mission.destination_hub_id == tech_hub_id,
+                    Mission.origin_hub_id == tech_hub_id,
+                    Mission.id.in_(leg_mission_ids_subq),
+                )
+            )
+
+        query = query.order_by(Mission.arrived_at.desc().nullslast(), Mission.id.desc())
+        result = await db.execute(query)
+        rows = result.all()
+
+        response = []
+        for row in rows:
+            (
+                m_id,
+                order_id,
+                origin_hub_id,
+                dest_hub_id,
+                arrived_at,
+                end_time,
+                m_status,
+                m_handling,
+                drone_id,
+                drone_code,
+                model,
+                battery_id,
+                battery_code,
+                battery_percent,
+            ) = row
+            status_val = m_status.value if hasattr(m_status, "value") else m_status
+            handling_val = m_handling.value if hasattr(m_handling, "value") else m_handling
+            response.append({
+                "id": str(m_id),
+                "mission_id": str(m_id),
+                "mission_code": str(m_id),
+                "order_id": order_id,
+                "origin_hub_id": origin_hub_id,
+                "destination_hub_id": dest_hub_id,
+                "arrived_at": arrived_at.isoformat() if arrived_at else None,
+                "end_time": end_time.isoformat() if end_time else None,
+                "drone_id": drone_id,
+                "drone_code": drone_code,
+                "model": model,
+                "mission_state": status_val if m_status else None,
+                "status": status_val if m_status else None,
+                "battery_id": battery_id,
+                "battery_code": battery_code,
+                "battery_percent": battery_percent,
+                "handling_status": handling_val if m_handling else None,
+            })
+        return response
+    except Exception as e:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=500, content={"error": str(e), "trace": traceback.format_exc()})
+
+
 @router.post("/missions/{mission_id}/confirm-arrival")
 async def confirm_arrival(
     mission_id: str,
+    body: Optional[ConfirmArrivalRequest] = None,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Technician confirm drone đã đáp hub đích — kết thúc mission hoàn toàn.
+    Technician confirm drone đã đáp hub đích — kết thúc mission hoàn toàn (Issue #4).
 
     Actions:
-    - mission.status → COMPLETED, arrival_confirmed_by/at ghi nhận.
+    - mission.status → COMPLETED, arrived_at/end_time ghi nhận, handling_status → None (chuyển khỏi danh sách Transit sang History).
     - Tất cả MissionLeg còn lại → COMPLETED (leg cuối chưa mark).
-    - Drone: current_hub_id = destination_hub_id, status → Available (hoặc Maintenance nếu có incident mở).
-    - Battery (pin trên drone): drone_id = None, current_hub_id = destination_hub_id (tháo khỏi drone, đưa về hub sạc).
+    - Drone: được tiếp nhận và kiểm tra sơ bộ; current_hub_id = destination_hub_id;
+      không có lỗi → lưu vào Hub Fleet với status Available;
+      có incident hoặc phát hiện lỗi (body.has_issue / has_incident) → lưu vào Hub Fleet với status Maintenance.
+    - Battery (pin trên drone): tháo khỏi drone (drone_id = None), current_hub_id = destination_hub_id
+      (chuyển sang Battery Management để sạc hoặc kiểm tra nếu có vấn đề).
     - Order: status → DELIVERED_TO_HUB, gửi email thông báo.
     """
     from app.modules.missions.models import MissionLeg, MissionLegStatus, Order as OrderModel, OrderStatus, Incident, IncidentStatus
-    from app.modules.fleet.models import DroneStatus
+    from app.modules.fleet.models import DroneStatus, batteries_status
     from app.core.email import send_hub_arrival_email
     from app.modules.system.models import Hub as HubModel
 
-    mission = await db.get(Mission, mission_id)
-    if not mission:
-        raise HTTPException(status_code=404, detail="Mission not found")
-    if mission.arrival_confirmed_by:
+    mission = await _resolve_mission(db, mission_id)
+
+    # Nếu mission đã xử lý hoàn tất trước đó (handling_status đã được xóa và drone đã được tiếp nhận)
+    if (
+        mission.status in [MissionStatus.COMPLETED, MissionStatus.MISSION_COMPLETED]
+        and mission.handling_status is None
+        and mission.arrived_at is not None
+    ):
         raise HTTPException(status_code=400, detail="Arrival already confirmed")
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    dest_hub_id = mission.destination_hub_id or (int(user.hub_id) if (user.hub_id and str(user.hub_id).isdigit()) else None)
 
-    # ── 1. Cập nhật Mission ───────────────────────────────────────────────────
-    mission.arrival_confirmed_by = user.id
-    mission.arrival_confirmed_at = now
-    mission.arrived_at = now           # trigger pickup reminder countdown (3 ngày)
-    mission.status = MissionStatus.COMPLETED
-    mission.end_time = now
+    # ── 1. Cập nhật Mission (rời danh sách Transit đang hoạt động sang History) ──
+    if not mission.arrived_at:
+        mission.arrived_at = now       # trigger pickup reminder countdown (3 ngày chờ KH lấy hàng)
+    if mission.status != MissionStatus.MISSION_COMPLETED:
+        mission.status = MissionStatus.COMPLETED
+    mission.end_time = mission.end_time or now
+    mission.handling_status = None     # xóa handling_status để không còn nằm trong /incoming (Transit)
 
     # ── 2. Mark tất cả MissionLeg còn lại → COMPLETED ────────────────────────
     legs_result = await db.execute(
-        select(MissionLeg).where(MissionLeg.mission_id == mission_id)
+        select(MissionLeg).where(MissionLeg.mission_id == mission.id)
     )
     legs = legs_result.scalars().all()
     for leg in legs:
@@ -137,27 +346,53 @@ async def confirm_arrival(
             leg.status = MissionLegStatus.COMPLETED
             leg.completed_at = now
 
-    # ── 3. Drone: cập nhật hub, reset status ─────────────────────────────────
+    # ── 3. Drone: tiếp nhận & kiểm tra sơ bộ → Available hoặc Maintenance ────
     drone = await db.get(Drone, mission.drone_id) if mission.drone_id else None
-    if drone and mission.destination_hub_id:
-        drone.current_hub_id = mission.destination_hub_id
+    has_issue_flag = False
+    if body:
+        if body.has_issue or body.has_incident:
+            has_issue_flag = True
+        if body.drone_status and str(body.drone_status).strip().lower() == "maintenance":
+            has_issue_flag = True
 
-        # Kiểm tra có incident OPEN hoặc INVESTIGATING không → Maintenance, ngược lại → Available
+    if drone:
+        if dest_hub_id:
+            drone.current_hub_id = dest_hub_id
+
+        # Kiểm tra có incident OPEN hoặc INVESTIGATING không, hoặc Technician báo lỗi
         incident_result = await db.execute(
             select(Incident).where(
-                Incident.mission_id == mission_id,
+                Incident.mission_id == mission.id,
                 Incident.status.in_([IncidentStatus.OPEN, IncidentStatus.INVESTIGATING])
             ).limit(1)
         )
         has_open_incident = incident_result.scalars().first() is not None
-        drone.status = DroneStatus.MAINTENANCE if has_open_incident else DroneStatus.AVAILABLE
+        drone.status = DroneStatus.MAINTENANCE if (has_open_incident or has_issue_flag) else DroneStatus.AVAILABLE
 
-    # ── 4. Battery: tháo khỏi drone, đưa về hub để sạc ──────────────────────
+    # ── 4. Battery: tháo khỏi drone, chuyển sang Battery Management tại Hub đích ──
+    released_battery_id = mission.battery_id
     if mission.battery_id:
         battery = await db.get(Battery, mission.battery_id)
         if battery:
             battery.drone_id = None
-            battery.current_hub_id = mission.destination_hub_id  # về hub đích để sạc
+            if dest_hub_id:
+                battery.current_hub_id = dest_hub_id
+            if body and body.battery_faulty:
+                battery.status = batteries_status.MAINTENANCE
+
+    # Đảm bảo bất kỳ viên pin nào khác đang gắn trên drone này cũng được tháo ra đưa về Battery Management
+    if mission.drone_id:
+        attached_bats_res = await db.execute(
+            select(Battery).where(Battery.drone_id == mission.drone_id)
+        )
+        for b in attached_bats_res.scalars().all():
+            b.drone_id = None
+            if dest_hub_id:
+                b.current_hub_id = dest_hub_id
+            if body and body.battery_faulty:
+                b.status = batteries_status.MAINTENANCE
+            if not released_battery_id:
+                released_battery_id = b.id
 
     # ── 5. Order: DELIVERED_TO_HUB + Email ───────────────────────────────────
     try:
@@ -169,12 +404,12 @@ async def confirm_arrival(
             if order_obj:
                 order_obj.status = OrderStatus.DELIVERED_TO_HUB
                 order_obj.destination_received_at = now
-                order_obj.destination_received_by = user.id
+                order_obj.destination_received_by = str(user.id)
                 order_obj.updated_at = now
 
                 hub_name = None
-                if mission.destination_hub_id:
-                    hub = await db.get(HubModel, mission.destination_hub_id)
+                if dest_hub_id:
+                    hub = await db.get(HubModel, dest_hub_id)
                     hub_name = hub.name if hub else None
 
                 if order_obj.receiver_email:
@@ -190,11 +425,15 @@ async def confirm_arrival(
     await db.commit()
 
     return {
-        "message": "Arrival confirmed. Mission hoàn tất.",
-        "mission_id": mission_id,
+        "message": "Arrival confirmed. Mission hoàn tất, Drone đã đưa vào Hub Fleet và Pin đã chuyển sang Battery Management.",
+        "mission_id": mission.id,
+        "order_id": mission.order_id,
+        "mission_status": mission.status.value if hasattr(mission.status, "value") else str(mission.status),
+        "handling_status": None,
         "confirmed_by": user.id,
+        "drone_id": drone.id if drone else None,
         "drone_status": drone.status.value if drone else None,
-        "battery_released": mission.battery_id,
+        "battery_released": released_battery_id,
         "legs_completed": len(legs),
     }
 
@@ -760,7 +999,7 @@ async def confirm_relay_arrival(
     Technician confirm drone đã đáp xuống relay hub trung gian trong chuyến bay multi-leg.
 
     Actions:
-    - Validate mission đang IN_PROGRESS và có relay hub (nhiều legs).
+    - Validate mission đang IN_PROGRESS (hoặc SCHEDULED/FLYING/ACTIVE_MISSION) và có relay hub (nhiều legs).
     - Tìm MissionLeg đang IN_PROGRESS hoặc PENDING đầu tiên chưa completed.
     - Mark leg hiện tại → COMPLETED.
     - Cập nhật mission.handling_status → AT_HUB (chờ swap pin).
@@ -769,10 +1008,14 @@ async def confirm_relay_arrival(
     from app.modules.missions.models import MissionLeg, MissionLegStatus
     from app.modules.fleet.models import DroneStatus
 
-    mission = await db.get(Mission, mission_id)
-    if not mission:
-        raise HTTPException(status_code=404, detail="Mission not found")
-    if mission.status not in [MissionStatus.IN_PROGRESS, MissionStatus.FLYING, MissionStatus.ACTIVE_MISSION]:
+    mission = await _resolve_mission(db, mission_id)
+    if mission.status not in [
+        MissionStatus.IN_PROGRESS,
+        MissionStatus.FLYING,
+        MissionStatus.ACTIVE_MISSION,
+        MissionStatus.SCHEDULED,
+        MissionStatus.APPROVED,
+    ]:
         raise HTTPException(
             status_code=400,
             detail=f"Mission đang ở trạng thái '{mission.status.value}', không thể confirm relay arrival. Mission phải đang IN_PROGRESS/FLYING."
@@ -781,7 +1024,7 @@ async def confirm_relay_arrival(
     # Lấy tất cả legs của mission, theo thứ tự
     legs_result = await db.execute(
         select(MissionLeg)
-        .where(MissionLeg.mission_id == mission_id)
+        .where(MissionLeg.mission_id == mission.id)
         .order_by(MissionLeg.sequence_no)
     )
     legs = legs_result.scalars().all()
@@ -817,6 +1060,12 @@ async def confirm_relay_arrival(
             detail="Đây là chặng cuối cùng. Dùng confirm-arrival để kết thúc mission thay thế."
         )
 
+    # Đảm bảo mission đang ở FLYING (khớp với bảng flow FE và live-tracking/telemetry)
+    if mission.status in [MissionStatus.SCHEDULED, MissionStatus.APPROVED, MissionStatus.IN_PROGRESS]:
+        mission.status = MissionStatus.FLYING
+        mission.start_time = mission.start_time or now
+        mission.departed_at = mission.departed_at or now
+
     # Cập nhật leg hiện tại → COMPLETED
     current_leg.status = MissionLegStatus.COMPLETED
     current_leg.completed_at = now
@@ -827,6 +1076,7 @@ async def confirm_relay_arrival(
         drone = await db.get(Drone, mission.drone_id)
         if drone:
             drone.current_hub_id = relay_hub_id
+            drone.status = DroneStatus.AVAILABLE
 
     # Cập nhật mission handling_status → AT_HUB (chờ Technician swap pin)
     mission.handling_status = HandlingStatus.AT_HUB
@@ -836,7 +1086,8 @@ async def confirm_relay_arrival(
     relay_hub = await db.get(Hub, relay_hub_id) if relay_hub_id else None
     return {
         "message": "Relay arrival confirmed. Drone đang chờ swap pin tại relay hub.",
-        "mission_id": mission_id,
+        "mission_id": mission.id,
+        "order_id": mission.order_id,
         "completed_leg": {
             "id": current_leg.id,
             "sequence_no": current_leg.sequence_no,
@@ -851,20 +1102,21 @@ async def confirm_relay_arrival(
             "to_hub_id": next_leg.to_hub_id,
         },
         "relay_hub": relay_hub.name if relay_hub else str(relay_hub_id),
+        "relay_hub_id": relay_hub_id,
         "handling_status": mission.handling_status.value,
+        "status": mission.status.value if hasattr(mission.status, "value") else str(mission.status),
     }
 
 
-from pydantic import BaseModel
-
 class SwapBatteryRequest(BaseModel):
-    new_battery_id: str
+    new_battery_id: Optional[str] = None
+    battery_id: Optional[str] = None
 
 
 @router.post("/missions/{mission_id}/swap-battery", summary="Thay pin tại relay hub trung gian")
 async def swap_battery_at_relay(
     mission_id: str,
-    body: SwapBatteryRequest,
+    body: Optional[SwapBatteryRequest] = None,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -872,7 +1124,7 @@ async def swap_battery_at_relay(
     Technician thay pin cho drone tại relay hub trung gian.
 
     Yêu cầu:
-    - Mission phải đang IN_PROGRESS, handling_status = AT_HUB (đã confirm relay arrival).
+    - Mission phải đang FLYING/IN_PROGRESS, handling_status = AT_HUB (đã confirm relay arrival).
     - Pin mới phải: tại đúng relay hub, sạc 100%, status ACTIVE, chưa gắn drone khác, model tương thích.
 
     Actions:
@@ -882,60 +1134,116 @@ async def swap_battery_at_relay(
     - Ghi MissionBatterySwapHistory.
     - mission.handling_status → READY (sẵn sàng dispatch).
     """
+    from sqlalchemy import and_
     from app.modules.missions.models import MissionLeg, MissionLegStatus, MissionBatterySwapHistory
     from app.modules.fleet.models import DroneStatus, batteries_status
     from app.modules.missions.technician.router import get_compatible_battery_models
 
-    mission = await db.get(Mission, mission_id)
-    if not mission:
-        raise HTTPException(status_code=404, detail="Mission not found")
-    if mission.handling_status != HandlingStatus.AT_HUB:
+    mission = await _resolve_mission(db, mission_id)
+    if mission.handling_status not in [HandlingStatus.AT_HUB, HandlingStatus.READY]:
         raise HTTPException(
             status_code=400,
             detail=f"Mission phải ở trạng thái AT_HUB (đã confirm relay arrival) trước khi swap pin. Hiện tại: {mission.handling_status}."
         )
 
-    # Lấy relay hub hiện tại từ drone
+    # Lấy relay hub hiện tại từ drone hoặc leg tiếp theo
     drone = await db.get(Drone, mission.drone_id) if mission.drone_id else None
     if not drone:
         raise HTTPException(status_code=400, detail="Mission chưa được gán drone.")
-    relay_hub_id = drone.current_hub_id
+
+    next_leg_result = await db.execute(
+        select(MissionLeg)
+        .where(
+            MissionLeg.mission_id == mission.id,
+            MissionLeg.status == MissionLegStatus.PENDING,
+        )
+        .order_by(MissionLeg.sequence_no)
+        .limit(1)
+    )
+    next_leg = next_leg_result.scalars().first()
+
+    relay_hub_id = drone.current_hub_id or (next_leg.from_hub_id if next_leg else None)
+    if not relay_hub_id and user.hub_id and str(user.hub_id).isdigit():
+        relay_hub_id = int(user.hub_id)
     if not relay_hub_id:
         raise HTTPException(status_code=400, detail="Không xác định được relay hub hiện tại của drone.")
 
-    # Validate pin mới
-    new_battery = await db.get(Battery, body.new_battery_id)
-    if not new_battery:
-        raise HTTPException(status_code=404, detail=f"Không tìm thấy pin '{body.new_battery_id}'.")
-
-    if new_battery.current_hub_id != relay_hub_id:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Pin {new_battery.id} không thuộc relay hub hiện tại (Hub {relay_hub_id})."
-        )
-    if new_battery.status != batteries_status.ACTIVE:
-        raise HTTPException(status_code=400, detail=f"Pin {new_battery.id} không ở trạng thái Active.")
-    if (new_battery.charge_level_pct or 0) < 100:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Pin {new_battery.id} chưa sạc đủ 100% (hiện {new_battery.charge_level_pct}%)."
-        )
-    if new_battery.drone_id is not None and new_battery.drone_id != mission.drone_id:
-        raise HTTPException(status_code=400, detail=f"Pin {new_battery.id} đang gắn trên drone khác.")
-
-    # Validate model tương thích
     compatible_models = await get_compatible_battery_models(db, drone.model)
-    if compatible_models and new_battery.battery_model and new_battery.battery_model not in compatible_models:
+    target_battery_id = None
+    if body:
+        target_battery_id = (body.new_battery_id or body.battery_id or "").strip() or None
+
+    if target_battery_id:
+        new_battery = await db.get(Battery, target_battery_id)
+        if not new_battery:
+            raise HTTPException(status_code=404, detail=f"Không tìm thấy pin '{target_battery_id}'.")
+
+        if new_battery.current_hub_id != relay_hub_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Pin {new_battery.id} không thuộc relay hub hiện tại (Hub {relay_hub_id})."
+            )
+        if new_battery.status != batteries_status.ACTIVE:
+            raise HTTPException(status_code=400, detail=f"Pin {new_battery.id} không ở trạng thái Active.")
+        if (new_battery.charge_level_pct or 0) < 100:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Pin {new_battery.id} chưa sạc đủ 100% (hiện {new_battery.charge_level_pct}%)."
+            )
+        if new_battery.drone_id is not None and new_battery.drone_id != mission.drone_id:
+            raise HTTPException(status_code=400, detail=f"Pin {new_battery.id} đang gắn trên drone khác.")
+        if compatible_models and new_battery.battery_model and new_battery.battery_model not in compatible_models:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Pin {new_battery.id} (model: {new_battery.battery_model}) không tương thích với {drone.model}. Cần: {', '.join(compatible_models)}."
+            )
+    else:
+        # Tự động chọn pin 100% tương thích tại relay hub nếu FE không truyền mã pin cụ thể
+        auto_stmt = select(Battery).where(
+            and_(
+                Battery.current_hub_id == relay_hub_id,
+                Battery.battery_model.in_(compatible_models),
+                Battery.charge_level_pct >= 100,
+                Battery.status == batteries_status.ACTIVE,
+                Battery.drone_id.is_(None),
+            )
+        ).order_by(Battery.id)
+        res_auto = await db.execute(auto_stmt)
+        new_battery = res_auto.scalars().first()
+        if not new_battery:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Tại Relay Hub #{relay_hub_id} hiện không có viên pin nào sạc đầy 100% tương thích với {drone.model}."
+            )
+
+    # Kiểm tra pin mới chưa bị giữ bởi Mission active khác
+    active_m_res = await db.execute(
+        select(Mission).where(
+            and_(
+                Mission.battery_id == new_battery.id,
+                Mission.id != mission.id,
+                Mission.status.in_([
+                    MissionStatus.SCHEDULED,
+                    MissionStatus.IN_PROGRESS,
+                    MissionStatus.APPROVED,
+                    MissionStatus.FLYING,
+                    MissionStatus.ACTIVE_MISSION,
+                ])
+            )
+        )
+    )
+    other_m = active_m_res.scalars().first()
+    if other_m:
         raise HTTPException(
             status_code=400,
-            detail=f"Pin {new_battery.id} (model: {new_battery.battery_model}) không tương thích với {drone.model}. Cần: {', '.join(compatible_models)}."
+            detail=f"Pin {new_battery.id} đang được giữ bởi nhiệm vụ bay khác ({other_m.id})."
         )
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     old_battery_id = mission.battery_id
 
     # Tháo pin cũ
-    if old_battery_id and old_battery_id != body.new_battery_id:
+    if old_battery_id and old_battery_id != new_battery.id:
         old_battery = await db.get(Battery, old_battery_id)
         if old_battery:
             old_battery.drone_id = None
@@ -947,22 +1255,12 @@ async def swap_battery_at_relay(
     mission.battery_id = new_battery.id
 
     # Cập nhật battery_id cho leg tiếp theo (PENDING)
-    next_leg_result = await db.execute(
-        select(MissionLeg)
-        .where(
-            MissionLeg.mission_id == mission_id,
-            MissionLeg.status == MissionLegStatus.PENDING,
-        )
-        .order_by(MissionLeg.sequence_no)
-        .limit(1)
-    )
-    next_leg = next_leg_result.scalars().first()
     if next_leg:
         next_leg.battery_id = new_battery.id
 
     # Ghi lịch sử swap
     swap_record = MissionBatterySwapHistory(
-        mission_id=mission_id,
+        mission_id=mission.id,
         hub_id=relay_hub_id,
         old_battery_id=old_battery_id,
         new_battery_id=new_battery.id,
@@ -977,12 +1275,14 @@ async def swap_battery_at_relay(
 
     return {
         "message": "Swap pin thành công. Drone sẵn sàng bay tiếp.",
-        "mission_id": mission_id,
+        "mission_id": mission.id,
+        "order_id": mission.order_id,
         "relay_hub_id": relay_hub_id,
         "old_battery_id": old_battery_id,
         "new_battery_id": new_battery.id,
         "new_battery_serial": new_battery.serial_number,
         "handling_status": mission.handling_status.value,
+        "status": mission.status.value if hasattr(mission.status, "value") else str(mission.status),
     }
 
 
@@ -993,52 +1293,109 @@ async def dispatch_drone(
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Technician dispatch drone bay tiếp chặng kế tiếp sau khi swap pin tại relay hub.
-    Technician không cần chờ Operator phê duyệt lại.
+    Technician dispatch drone bay tiếp chặng kế tiếp sau khi swap pin tại relay hub (hoặc xuất phát từ origin hub).
+    Technician chủ động cho drone bay tiếp, không cần chờ Operator phê duyệt lại (Issue #3).
 
     Yêu cầu:
-    - Mission đang IN_PROGRESS, handling_status = READY (đã swap pin xong).
+    - handling_status = READY (đã chuẩn bị / thay pin xong).
 
     Actions:
+    - Cập nhật mission.status → FLYING ("Flying") (khớp với bảng status FE và live-tracking).
     - Leg tiếp theo (PENDING) → IN_PROGRESS, started_at = now.
     - mission.handling_status → INCOMING (drone đang bay, không còn ở hub).
     - Drone.status → In Flight, drone.current_hub_id = None.
-    - Notify Operator qua log (ghi AIRecommendation hoặc tương tự).
+    - Tạo thông báo (Notification) gửi trực tiếp cho tất cả Operators để tiếp tục theo dõi chuyến bay.
     """
-    from app.modules.missions.models import MissionLeg, MissionLegStatus
+    from app.modules.missions.models import (
+        MissionLeg,
+        MissionLegStatus,
+        Order as OrderModel,
+        OrderStatus,
+        Notification,
+        NotificationType,
+    )
     from app.modules.fleet.models import DroneStatus
+    from app.shared.workers import get_operator_ids
 
-    mission = await db.get(Mission, mission_id)
-    if not mission:
-        raise HTTPException(status_code=404, detail="Mission not found")
+    mission = await _resolve_mission(db, mission_id)
     if mission.handling_status != HandlingStatus.READY:
         raise HTTPException(
             status_code=400,
-            detail=f"Mission phải ở trạng thái READY (đã swap pin) trước khi dispatch. Hiện tại: {mission.handling_status}."
+            detail=f"Mission phải ở trạng thái READY (đã lắp/thay pin) trước khi dispatch. Hiện tại: {mission.handling_status}."
         )
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # Tìm leg tiếp theo cần bay (PENDING)
     next_leg_result = await db.execute(
         select(MissionLeg)
         .where(
-            MissionLeg.mission_id == mission_id,
+            MissionLeg.mission_id == mission.id,
             MissionLeg.status == MissionLegStatus.PENDING,
         )
         .order_by(MissionLeg.sequence_no)
         .limit(1)
     )
     next_leg = next_leg_result.scalars().first()
+
+    # Nếu chưa có leg PENDING nhưng có leg đang IN_PROGRESS (trường hợp re-dispatch), dùng leg đó
+    if not next_leg:
+        inprog_leg_res = await db.execute(
+            select(MissionLeg)
+            .where(
+                MissionLeg.mission_id == mission.id,
+                MissionLeg.status == MissionLegStatus.IN_PROGRESS,
+            )
+            .order_by(MissionLeg.sequence_no)
+            .limit(1)
+        )
+        next_leg = inprog_leg_res.scalars().first()
+
+    # Nếu mission legacy chưa có bản ghi MissionLeg nào thì tự khởi tạo leg 1
+    if not next_leg:
+        all_legs_res = await db.execute(
+            select(MissionLeg).where(MissionLeg.mission_id == mission.id)
+        )
+        if not all_legs_res.scalars().all() and mission.origin_hub_id and mission.destination_hub_id:
+            next_leg = MissionLeg(
+                mission_id=mission.id,
+                sequence_no=1,
+                from_hub_id=mission.origin_hub_id,
+                to_hub_id=mission.destination_hub_id,
+                battery_id=mission.battery_id,
+                status=MissionLegStatus.PENDING,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(next_leg)
+            await db.flush()
+
     if not next_leg:
         raise HTTPException(
             status_code=400,
             detail="Không còn chặng bay nào ở trạng thái PENDING. Tất cả legs đã hoàn thành?"
         )
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-
     # Chuyển leg sang IN_PROGRESS
     next_leg.status = MissionLegStatus.IN_PROGRESS
     next_leg.started_at = now
+    if mission.battery_id and not next_leg.battery_id:
+        next_leg.battery_id = mission.battery_id
+
+    # Cập nhật trạng thái Mission sang FLYING ("Flying") khớp với bảng flow
+    mission.status = MissionStatus.FLYING
+    if not mission.start_time:
+        mission.start_time = now
+    if not mission.departed_at:
+        mission.departed_at = now
+    mission.handling_status = HandlingStatus.INCOMING
+
+    # Nếu Order đang ở AT_HUB, chuyển sang IN_DELIVERY khi drone cất cánh
+    if mission.order_id:
+        order_obj = await db.get(OrderModel, mission.order_id)
+        if order_obj and order_obj.status == OrderStatus.AT_HUB:
+            order_obj.status = OrderStatus.IN_DELIVERY
+            order_obj.updated_at = now
 
     # Drone cất cánh → In Flight, rời hub
     if mission.drone_id:
@@ -1047,16 +1404,11 @@ async def dispatch_drone(
             drone.status = DroneStatus.IN_FLIGHT
             drone.current_hub_id = None
 
-    # Mission handling → INCOMING (drone đang bay, không ở hub)
-    mission.handling_status = HandlingStatus.INCOMING
-
-    await db.commit()
-
     # Thông tin leg đang bay và leg tiếp theo (nếu có)
     remaining_legs_result = await db.execute(
         select(MissionLeg)
         .where(
-            MissionLeg.mission_id == mission_id,
+            MissionLeg.mission_id == mission.id,
             MissionLeg.status == MissionLegStatus.PENDING,
         )
         .order_by(MissionLeg.sequence_no)
@@ -1064,11 +1416,42 @@ async def dispatch_drone(
     remaining = remaining_legs_result.scalars().all()
 
     from app.modules.system.models import Hub as HubModel
+    from_hub = await db.get(HubModel, next_leg.from_hub_id) if next_leg.from_hub_id else None
     to_hub = await db.get(HubModel, next_leg.to_hub_id) if next_leg.to_hub_id else None
+    from_hub_label = from_hub.name if from_hub else f"Hub #{next_leg.from_hub_id}"
+    to_hub_label = to_hub.name if to_hub else f"Hub #{next_leg.to_hub_id}"
+    total_legs = next_leg.sequence_no + len(remaining)
+
+    notify_msg = (
+        f"Technician đã Dispatch Drone #{mission.drone_id} cho nhiệm vụ {mission.id} "
+        f"(Đơn: {mission.order_id or 'N/A'}): bay chặng {next_leg.sequence_no}/{total_legs} "
+        f"từ {from_hub_label} → {to_hub_label}."
+    )
+
+    # Gửi Notification thực tế vào Database cho tất cả Operators (Issue #3)
+    try:
+        operator_ids = await get_operator_ids(db)
+        for op_id in operator_ids:
+            db.add(Notification(
+                user_id=op_id,
+                title=f"Drone #{mission.drone_id} đã Dispatch chặng {next_leg.sequence_no}/{total_legs}",
+                message=notify_msg,
+                notifications_type=NotificationType.MISSION_STATUS,
+                mission_id=str(mission.id),
+                reference_id="TECHNICIAN_DISPATCH",
+                created_at=now,
+            ))
+    except Exception as e:
+        print(f"[NOTIFICATION] Lỗi gửi thông báo dispatch cho Operator: {e}")
+
+    await db.commit()
 
     return {
-        "message": f"Drone đã được dispatch. Bay tiếp chặng {next_leg.sequence_no} → {to_hub.name if to_hub else next_leg.to_hub_id}.",
-        "mission_id": mission_id,
+        "message": f"Drone đã được dispatch. Bay tiếp chặng {next_leg.sequence_no} → {to_hub_label}.",
+        "mission_id": mission.id,
+        "order_id": mission.order_id,
+        "status": mission.status.value if hasattr(mission.status, "value") else str(mission.status),
+        "handling_status": mission.handling_status.value,
         "dispatched_leg": {
             "id": next_leg.id,
             "sequence_no": next_leg.sequence_no,
@@ -1078,8 +1461,7 @@ async def dispatch_drone(
             "started_at": now.isoformat(),
         },
         "remaining_legs": len(remaining),
-        "handling_status": mission.handling_status.value,
-        "notify_operator": f"Drone #{mission.drone_id} đã cất cánh từ relay hub, đang bay chặng {next_leg.sequence_no}/{next_leg.sequence_no + len(remaining)}.",
+        "notify_operator": notify_msg,
     }
 
 # ── Background Workers / Cronjobs ─────────────────────────────────────────────
