@@ -75,12 +75,25 @@ def get_technician_missions():
 
 
 async def get_mission_by_order_id(db: AsyncSession, orderId: str):
-    # orderId could be a mission ID or an order ID. We just check both.
+    clean_id = (orderId or "").strip()
+    # orderId could be a mission ID or an order ID. We check both, prioritizing latest mission.
     result = await db.execute(
-        select(Mission).where((Mission.order_id == orderId) | (Mission.id == orderId))
+        select(Mission)
+        .where((Mission.order_id == clean_id) | (Mission.id == clean_id))
+        .order_by(Mission.id.desc())
     )
-    
     mission = result.scalars().first()
+    if not mission:
+        from sqlalchemy import func
+        result = await db.execute(
+            select(Mission)
+            .where(
+                (func.upper(func.trim(Mission.order_id)) == clean_id.upper())
+                | (func.upper(func.trim(Mission.id)) == clean_id.upper())
+            )
+            .order_by(Mission.id.desc())
+        )
+        mission = result.scalars().first()
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
     return mission
@@ -98,6 +111,10 @@ async def get_outbound_deliveries(
     Lấy danh sách kiện hàng chờ gửi đi tại origin hub.
     Flow mới: query từ Order (payment_status=PAID), không cần có Mission.
     Hiển thị từ lúc KH thanh toán xong cho đến khi drone cất cánh, kèm đầy đủ thông tin Drone & Pin.
+    Lưu ý (Issue #1 & #2):
+    - Trường `id` luôn trả về `order_id` để FE gọi `/outbound/{orderId}/receive` không bị lỗi 404.
+    - Khi đơn hàng chưa được Technician xác nhận nhận tại Hub (`order_status != AT_HUB`),
+      không trả về thông tin Mission/Drone/Pin (tránh hiển thị mission/drone khi đơn còn AWAITING_DROP_OFF).
     """
     import traceback
     try:
@@ -106,6 +123,8 @@ async def get_outbound_deliveries(
                 Order.id.label("order_id"),
                 Order.status.label("order_status"),
                 Order.payment_status.label("payment_status"),
+                Order.origin_hub_id.label("origin_hub_id"),
+                Order.origin_received_at.label("origin_received_at"),
                 Order.package_label,
                 Order.package_type,
                 Order.payload_kg,
@@ -124,7 +143,20 @@ async def get_outbound_deliveries(
                 Battery.battery_model.label("battery_model"),
             )
             .outerjoin(Hub, Order.destination_hub_id == Hub.id)
-            .outerjoin(Mission, Mission.order_id == Order.id)
+            .outerjoin(
+                Mission,
+                and_(
+                    Mission.order_id == Order.id,
+                    Mission.status.in_([
+                        MissionStatus.SCHEDULED,
+                        MissionStatus.APPROVED,
+                        MissionStatus.PENDING_APPROVAL,
+                        MissionStatus.IN_PROGRESS,
+                        MissionStatus.FLYING,
+                        MissionStatus.ACTIVE_MISSION,
+                    ])
+                )
+            )
             .outerjoin(Drone, Mission.drone_id == Drone.id)
             .outerjoin(Battery, Mission.battery_id == Battery.id)
             .where(
@@ -140,36 +172,55 @@ async def get_outbound_deliveries(
         if user.hub_id and str(user.hub_id).isdigit():
             query = query.where(Order.origin_hub_id == int(user.hub_id))
 
-        result = await db.execute(query.order_by(Order.created_at.desc()))
+        result = await db.execute(query.order_by(Order.created_at.desc(), Mission.id.desc()))
         rows = result.all()
 
-        return [
-            {
-                "id": row.mission_id,
+        seen_orders = set()
+        items = []
+        for row in rows:
+            if row.order_id in seen_orders:
+                continue
+            seen_orders.add(row.order_id)
+
+            order_status_val = row.order_status.value if hasattr(row.order_status, "value") else row.order_status
+            is_at_hub = (row.order_status == OrderStatus.AT_HUB) or (str(order_status_val) == OrderStatus.AT_HUB.value)
+
+            # Issue #2: Chỉ hiển thị thông tin Mission & Drone khi đơn hàng đã AT_HUB
+            m_status_val = (
+                row.mission_status.value if hasattr(row.mission_status, "value") else row.mission_status
+            ) if is_at_hub else None
+            h_status_val = (
+                row.handling_status.value if hasattr(row.handling_status, "value") else row.handling_status
+            ) if is_at_hub else None
+
+            items.append({
+                "id": row.order_id,
                 "order_id": row.order_id,
                 "order_code": row.order_id,
-                "order_status": row.order_status.value if hasattr(row.order_status, "value") else row.order_status,
+                "order_status": order_status_val,
+                "origin_hub_id": row.origin_hub_id,
+                "origin_received_at": row.origin_received_at.isoformat() if row.origin_received_at else None,
                 "package_label": row.package_label,
                 "package_type": row.package_type,
                 "payload_kg": row.payload_kg,
                 "delivery_mode": row.delivery_mode.value if hasattr(row.delivery_mode, "value") else row.delivery_mode,
                 "destination_hub": row.destination_hub_name,
                 "receiver_phone": row.receiver_phone,
-                "mission_id": row.mission_id,
-                "mission_code": row.mission_id,
-                "mission_status": row.mission_status.value if hasattr(row.mission_status, "value") else row.mission_status,
-                "status": row.mission_status.value if hasattr(row.mission_status, "value") else row.mission_status,
-                "handling_status": row.handling_status.value if hasattr(row.handling_status, "value") else row.handling_status,
-                "drone_id": row.drone_id,
-                "drone": row.drone_name,
-                "drone_model": row.drone_model,
-                "battery_id": row.battery_id,
-                "battery": row.battery_serial,
-                "battery_model": row.battery_model,
+                "mission_id": row.mission_id if is_at_hub else None,
+                "mission_code": row.mission_id if is_at_hub else None,
+                "mission_status": m_status_val,
+                "status": m_status_val,
+                "handling_status": h_status_val,
+                "drone_id": row.drone_id if is_at_hub else None,
+                "drone": row.drone_name if is_at_hub else None,
+                "drone_model": row.drone_model if is_at_hub else None,
+                "battery_id": row.battery_id if is_at_hub else None,
+                "battery": row.battery_serial if is_at_hub else None,
+                "battery_model": row.battery_model if is_at_hub else None,
                 "created_at": row.created_at.isoformat() if row.created_at else None,
-            }
-            for row in rows
-        ]
+            })
+
+        return items
     except Exception as e:
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=500, content={"error": str(e), "trace": traceback.format_exc()})
@@ -184,22 +235,108 @@ async def receive_outbound_delivery(
     """
     Xác nhận KH đã mang hàng đến hub gửi.
     Flow mới: update Order.status = AT_HUB, không cần có Mission.
+    Hỗ trợ tìm kiếm linh hoạt theo order_id (hoặc mission_id nếu FE truyền nhầm id cũ).
     """
-    # Tìm Order theo order_id
-    order_result = await db.execute(select(Order).where(Order.id == orderId))
+    from sqlalchemy import func
+
+    clean_id = (orderId or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="orderId is required")
+
+    # 1. Tìm Order theo order_id (chính xác hoặc không phân biệt hoa thường/khoảng trắng)
+    order_result = await db.execute(select(Order).where(Order.id == clean_id))
     order = order_result.scalar_one_or_none()
+
     if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
+        order_result = await db.execute(
+            select(Order).where(func.upper(func.trim(Order.id)) == clean_id.upper())
+        )
+        order = order_result.scalars().first()
+
+    # 2. Fallback: Nếu FE truyền mission_id (ví dụ từ cache cũ trả về id = mission_id), suy ngược ra Order
+    if not order:
+        mission_res = await db.execute(
+            select(Mission).where(
+                (Mission.id == clean_id)
+                | (func.upper(func.trim(Mission.id)) == clean_id.upper())
+                | (func.upper(func.trim(Mission.order_id)) == clean_id.upper())
+            ).order_by(Mission.id.desc())
+        )
+        linked_mission = mission_res.scalars().first()
+        if linked_mission and linked_mission.order_id:
+            order_result = await db.execute(
+                select(Order).where(
+                    (Order.id == linked_mission.order_id)
+                    | (func.upper(func.trim(Order.id)) == linked_mission.order_id.strip().upper())
+                )
+            )
+            order = order_result.scalars().first()
+
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Order '{clean_id}' not found")
+
+    # 3. Kiểm tra điều kiện Hub của Technician (nếu Technician được gán hub_id cụ thể)
+    if user.hub_id and str(user.hub_id).isdigit() and order.origin_hub_id:
+        if int(user.hub_id) != int(order.origin_hub_id):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Đơn hàng {order.id} thuộc Hub xuất phát #{order.origin_hub_id}, không thuộc Hub #{user.hub_id} của Technician."
+            )
 
     if order.payment_status != PaymentStatus.PAID:
         raise HTTPException(status_code=400, detail="Order chưa được thanh toán")
 
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    # Nếu đơn đã ở trạng thái AT_HUB rồi thì xử lý idempotent (không báo lỗi)
+    if order.status == OrderStatus.AT_HUB:
+        if not order.origin_received_at:
+            order.origin_received_at = now
+        if not order.origin_received_by:
+            order.origin_received_by = str(user.id)
+        order.updated_at = now
+        await db.commit()
+        return {
+            "message": "Package already received at Hub",
+            "order_id": order.id,
+            "order_status": OrderStatus.AT_HUB.value,
+            "origin_received_at": order.origin_received_at.isoformat() if order.origin_received_at else None,
+        }
+
     if order.status not in [OrderStatus.PENDING, OrderStatus.AWAITING_DROP_OFF]:
-        raise HTTPException(status_code=400, detail=f"Order đang ở trạng thái '{order.status.value}', không thể nhận hàng")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order đang ở trạng thái '{order.status.value}', không thể nhận hàng"
+        )
+
+    # Issue #2: Nếu có bất kỳ Mission nào bị tạo sớm (seed/legacy) khi đơn còn PENDING/AWAITING_DROP_OFF,
+    # hủy mission tạo sớm đó và giải phóng drone/pin để Operator tạo mission chính thức sau khi AT_HUB.
+    premature_missions_res = await db.execute(
+        select(Mission).where(
+            Mission.order_id == order.id,
+            Mission.status.in_([
+                MissionStatus.SCHEDULED,
+                MissionStatus.PENDING_APPROVAL,
+                MissionStatus.APPROVED,
+            ])
+        )
+    )
+    for pm in premature_missions_res.scalars().all():
+        pm.status = MissionStatus.CANCELLED
+        pm.handling_status = None
 
     order.status = OrderStatus.AT_HUB
+    order.origin_received_at = now
+    order.origin_received_by = str(user.id)
+    order.updated_at = now
+
     await db.commit()
-    return {"message": "Package received at Hub", "order_id": orderId, "order_status": OrderStatus.AT_HUB}
+    return {
+        "message": "Package received at Hub",
+        "order_id": order.id,
+        "order_status": OrderStatus.AT_HUB.value,
+        "origin_received_at": order.origin_received_at.isoformat() if order.origin_received_at else None,
+    }
 
 
 @deliveries_router.post("/outbound/{orderId}/prepare-battery", summary="Lắp Pin chuẩn bị bay")
@@ -217,9 +354,16 @@ async def prepare_battery_for_delivery(
     - Nếu FE gửi `battery_id` trong request body: Backend sẽ kiểm tra viên pin Technician chỉ định.
     - Nếu FE không gửi `battery_id`: Backend sẽ tự động tìm 1 viên pin sạc 100% tương thích tại Hub (Fallback).
     """
+    from sqlalchemy import func
+    clean_id = (orderId or "").strip()
+
     # 1. Kiểm tra Order và trạng thái nhận hàng tại Hub (theo flow mới của main)
-    order_result = await db.execute(select(Order).where(Order.id == orderId))
-    order = order_result.scalar_one_or_none()
+    order_result = await db.execute(
+        select(Order).where(
+            (Order.id == clean_id) | (func.upper(func.trim(Order.id)) == clean_id.upper())
+        )
+    )
+    order = order_result.scalars().first()
 
     if order:
         if order.status != OrderStatus.AT_HUB:
@@ -229,15 +373,23 @@ async def prepare_battery_for_delivery(
             )
         mission_result = await db.execute(
             select(Mission).where(
-                Mission.order_id == orderId,
+                Mission.order_id == order.id,
                 Mission.status == MissionStatus.SCHEDULED
-            ).limit(1)
+            ).order_by(Mission.id.desc()).limit(1)
         )
         mission = mission_result.scalars().first()
         if not mission:
-            # Fallback tìm theo order_id nếu mission có status khác SCHEDULED
+            # Fallback tìm theo order_id nếu mission có status active khác SCHEDULED
             mission_fallback = await db.execute(
-                select(Mission).where(Mission.order_id == orderId).order_by(Mission.id.desc()).limit(1)
+                select(Mission).where(
+                    Mission.order_id == order.id,
+                    Mission.status.in_([
+                        MissionStatus.APPROVED,
+                        MissionStatus.IN_PROGRESS,
+                        MissionStatus.FLYING,
+                        MissionStatus.ACTIVE_MISSION,
+                    ])
+                ).order_by(Mission.id.desc()).limit(1)
             )
             mission = mission_fallback.scalars().first()
         if not mission:
@@ -247,8 +399,15 @@ async def prepare_battery_for_delivery(
             )
     else:
         # Hỗ trợ trường hợp truyền trực tiếp mission_id
-        mission = await get_mission_by_order_id(db, orderId)
-        if mission.handling_status not in [None, HandlingStatus.AT_HUB]:
+        mission = await get_mission_by_order_id(db, clean_id)
+        if mission.order_id:
+            parent_order = await db.get(Order, mission.order_id)
+            if parent_order and parent_order.status != OrderStatus.AT_HUB:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Hàng chưa được nhận vào hub (cần AT_HUB trước)"
+                )
+        if mission.handling_status not in [None, HandlingStatus.AT_HUB, HandlingStatus.READY]:
             raise HTTPException(
                 status_code=400,
                 detail="Kiện hàng phải ở trạng thái tại trạm (At hub) trước khi chuẩn bị pin."
@@ -363,6 +522,12 @@ async def prepare_battery_for_delivery(
             detail=f"Pin {battery.id} hiện đang được giữ bởi một nhiệm vụ bay đang hoạt động khác ({other_mission.id})."
         )
 
+    # Nếu trước đó drone đang gắn viên pin khác, tháo viên pin cũ ra
+    if mission.battery_id and mission.battery_id != battery.id:
+        old_bat = await db.get(Battery, mission.battery_id)
+        if old_bat and old_bat.drone_id == mission.drone_id:
+            old_bat.drone_id = None
+
     # --- TIẾN HÀNH GÁN PIN VÀ ĐỒNG BỘ TRẠNG THÁI ---
     mission.battery_id = battery.id
     mission.handling_status = HandlingStatus.READY
@@ -379,7 +544,7 @@ async def prepare_battery_for_delivery(
 
     return {
         "message": "Battery prepared, ready to fly",
-        "order_id": mission.order_id or orderId,
+        "order_id": mission.order_id or clean_id,
         "mission_id": mission.id,
         "battery_id": battery.id,
         "battery_serial": battery.serial_number,
@@ -392,7 +557,7 @@ async def prepare_battery_for_delivery(
         "status": status_val,
         "mission": {
             "id": mission.id,
-            "order_id": mission.order_id or orderId,
+            "order_id": mission.order_id or clean_id,
             "battery_id": mission.battery_id,
             "drone_id": mission.drone_id,
             "handling_status": handling_status_val,
@@ -428,11 +593,14 @@ async def get_confirmations(
         ).outerjoin(
             Battery, Mission.battery_id == Battery.id
         ).outerjoin(
-            User, Mission.customer_id == User.email
+            User, (Mission.customer_id == User.id) | (Mission.customer_id == User.email)
         ).where(
             Mission.arrived_at.is_not(None),
             Mission.arrival_confirmed_at.is_(None),
-            Mission.status != MissionStatus.MISSION_COMPLETED
+            Mission.status.notin_([
+                MissionStatus.MISSION_COMPLETED,
+                MissionStatus.CANCELLED,
+            ])
         )
         if user.hub_id and str(user.hub_id).isdigit():
             query = query.where(Mission.destination_hub_id == int(user.hub_id))
@@ -442,6 +610,7 @@ async def get_confirmations(
         return [
             {
                 "id": row.id,
+                "order_id": row.order_id,
                 "order_code": row.order_id,
                 "mission_code": row.mission_code,
                 "origin_hub": row.origin_hub_name,
@@ -469,16 +638,72 @@ async def confirm_pickup(
     if mission.arrived_at is None:
         raise HTTPException(status_code=400, detail="Mission has not arrived yet")
         
-    if mission.arrival_confirmed_at is not None:
+    if mission.arrival_confirmed_at is not None and mission.status == MissionStatus.MISSION_COMPLETED:
         raise HTTPException(status_code=400, detail="Pickup already confirmed")
         
-    mission.arrival_confirmed_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    mission.arrival_confirmed_at = now
     mission.arrival_confirmed_by = user.id
     mission.status = MissionStatus.MISSION_COMPLETED
+    mission.handling_status = None
     
     await db.commit()
     await db.refresh(mission)
-    return {"message": "Pickup confirmed successfully", "mission": mission}
+    return {
+        "message": "Pickup confirmed successfully",
+        "mission_id": mission.id,
+        "order_id": mission.order_id,
+        "status": mission.status.value if hasattr(mission.status, "value") else str(mission.status),
+        "mission": mission,
+    }
+
+
+from app.modules.fleet.technician.router import (
+    ConfirmArrivalRequest,
+    SwapBatteryRequest,
+    confirm_arrival as _fleet_confirm_arrival,
+    confirm_relay_arrival as _fleet_confirm_relay_arrival,
+    swap_battery_at_relay as _fleet_swap_battery_at_relay,
+    dispatch_drone as _fleet_dispatch_drone,
+)
+
+
+@missions_router.post("/{mission_id}/confirm-arrival", summary="Confirm drone đáp hub đích (hoàn tất mission)")
+async def technician_mission_confirm_arrival(
+    mission_id: str,
+    body: Optional[ConfirmArrivalRequest] = None,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    return await _fleet_confirm_arrival(mission_id=mission_id, body=body, user=user, db=db)
+
+
+@missions_router.post("/{mission_id}/confirm-relay-arrival", summary="Confirm drone đáp relay hub trung gian")
+async def technician_mission_confirm_relay_arrival(
+    mission_id: str,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    return await _fleet_confirm_relay_arrival(mission_id=mission_id, user=user, db=db)
+
+
+@missions_router.post("/{mission_id}/swap-battery", summary="Thay pin tại relay hub trung gian")
+async def technician_mission_swap_battery(
+    mission_id: str,
+    body: Optional[SwapBatteryRequest] = None,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    return await _fleet_swap_battery_at_relay(mission_id=mission_id, body=body, user=user, db=db)
+
+
+@missions_router.post("/{mission_id}/dispatch", summary="Dispatch drone bay tiếp chặng kế tiếp")
+async def technician_mission_dispatch(
+    mission_id: str,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    return await _fleet_dispatch_drone(mission_id=mission_id, user=user, db=db)
 
 
 router.include_router(missions_router)

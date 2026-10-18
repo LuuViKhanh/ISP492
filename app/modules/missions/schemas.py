@@ -29,6 +29,53 @@ class ActiveFlightsResponse(BaseModel):
     missions: list
 
 
+class RouteLegSchema(BaseModel):
+    from_hub_code: str
+    to_hub_code: str
+    distance_km: float
+    sequence_no: Optional[int] = None
+    from_hub_id: Optional[int] = None
+    to_hub_id: Optional[int] = None
+    from_hub_name: Optional[str] = None
+    to_hub_name: Optional[str] = None
+    from_latitude: Optional[float] = None
+    from_longitude: Optional[float] = None
+    to_latitude: Optional[float] = None
+    to_longitude: Optional[float] = None
+    status: Optional[str] = None
+
+
+class HubBatteryStatus(BaseModel):
+    """Trạng thái pin tại một Hub trung gian trong relay route."""
+    hub_id: int
+    hub_code: str
+    hub_name: str
+    ready_count: int            # số pin Ready (sạc 100%, tương thích, chưa gắn drone)
+    compatible_models: list[str]
+    feasible: bool              # True nếu có ít nhất 1 pin Ready tương thích
+
+
+class RouteOptionSchema(BaseModel):
+    routeId: str
+    route_string: str
+    legs_detail: list[RouteLegSchema]
+    distanceKm: float
+    relayHubs: list[str]
+    predictedDurationMin: int
+    predictedEnergyWh: float
+    batteryConsumptionPct: int
+    remainingBatteryPct: int
+    confidencePct: int
+    risk: str
+    recommended: bool
+    reason: Optional[str] = None
+    suggestedDroneId: Optional[int] = None
+    # Battery feasibility — bổ sung mới
+    feasible: bool = True
+    infeasible_reason: Optional[str] = None
+    relay_battery_status: list[HubBatteryStatus] = []
+
+
 class MissionResponse(BaseModel):
     id: str
     order_id: Optional[str] = None
@@ -52,6 +99,23 @@ class MissionResponse(BaseModel):
     route_path_string: Optional[str] = None
     arrival_confirmed_by: Optional[str] = None
     arrival_confirmed_at: Optional[datetime] = None
+    # Thông tin tuyến đường đã lên lịch (đồng bộ với POST /operator/missions/mission-planning/analyze)
+    routeId: Optional[str] = None
+    route_string: Optional[str] = None
+    legs_detail: list[RouteLegSchema] = []
+    distanceKm: Optional[float] = None
+    relayHubs: list[str] = []
+    predictedDurationMin: Optional[int] = None
+    predictedEnergyWh: Optional[float] = None
+    batteryConsumptionPct: Optional[int] = None
+    remainingBatteryPct: Optional[int] = None
+    confidencePct: Optional[int] = None
+    risk: Optional[str] = None
+    recommended: Optional[bool] = True
+    reason: Optional[str] = None
+    suggestedDroneId: Optional[int] = None
+    scheduled_route: Optional[RouteOptionSchema] = None
+    routes: list[RouteOptionSchema] = []
 
     class Config:
         from_attributes = True
@@ -151,42 +215,6 @@ class MissionPlanningAnalyzeRequest(BaseModel):
     orderId: str
     droneId: int
 
-class RouteLegSchema(BaseModel):
-    from_hub_code: str
-    to_hub_code: str
-    distance_km: float
-
-
-class HubBatteryStatus(BaseModel):
-    """Trạng thái pin tại một Hub trung gian trong relay route."""
-    hub_id: int
-    hub_code: str
-    hub_name: str
-    ready_count: int            # số pin Ready (sạc 100%, tương thích, chưa gắn drone)
-    compatible_models: list[str]
-    feasible: bool              # True nếu có ít nhất 1 pin Ready tương thích
-
-
-class RouteOptionSchema(BaseModel):
-    routeId: str
-    route_string: str
-    legs_detail: list[RouteLegSchema]
-    distanceKm: float
-    relayHubs: list[str]
-    predictedDurationMin: int
-    predictedEnergyWh: float
-    batteryConsumptionPct: int
-    remainingBatteryPct: int
-    confidencePct: int
-    risk: str
-    recommended: bool
-    reason: Optional[str] = None
-    suggestedDroneId: Optional[int] = None
-    # Battery feasibility — bổ sung mới
-    feasible: bool = True
-    infeasible_reason: Optional[str] = None
-    relay_battery_status: list[HubBatteryStatus] = []
-
 class MissionPlanningAnalyzeResponse(BaseModel):
     routes: list[RouteOptionSchema]
 
@@ -199,5 +227,6 @@ class MissionCreateRequest(BaseModel):
     distance_km: Optional[float] = None
     predicted_energy_wh: Optional[float] = None
     predicted_duration_min: Optional[int] = None
+
 
 
