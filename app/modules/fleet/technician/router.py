@@ -89,7 +89,8 @@ async def get_incoming_drones(
                 Drone.current_hub_id.label("drone_current_hub_id"),
                 Battery.id.label("battery_id"),
                 Battery.serial_number.label("battery_code"),
-                Battery.charge_level_pct.label("battery_percent")
+                Battery.charge_level_pct.label("battery_percent"),
+                Mission.arrival_confirmed_at,
             )
             .outerjoin(Drone, Mission.drone_id == Drone.id)
             .outerjoin(Battery, Mission.battery_id == Battery.id)
@@ -153,6 +154,7 @@ async def get_incoming_drones(
                 battery_id,
                 battery_code,
                 battery_percent,
+                arrival_confirmed_at,
             ) = row
             if m_id in seen_ids:
                 continue
@@ -177,7 +179,8 @@ async def get_incoming_drones(
                 "battery_id": battery_id,
                 "battery_code": battery_code,
                 "battery_percent": battery_percent,
-                "handling_status": handling_val if m_handling else None
+                "handling_status": handling_val if m_handling else None,
+                "arrival_confirmed_at": arrival_confirmed_at.isoformat() if arrival_confirmed_at else None,
             })
             
         return response
@@ -210,7 +213,8 @@ async def get_transit_history(
                 Drone.model.label("model"),
                 Battery.id.label("battery_id"),
                 Battery.serial_number.label("battery_code"),
-                Battery.charge_level_pct.label("battery_percent")
+                Battery.charge_level_pct.label("battery_percent"),
+                Mission.arrival_confirmed_at,
             )
             .outerjoin(Drone, Mission.drone_id == Drone.id)
             .outerjoin(Battery, Mission.battery_id == Battery.id)
@@ -262,6 +266,7 @@ async def get_transit_history(
                 battery_id,
                 battery_code,
                 battery_percent,
+                arrival_confirmed_at,
             ) = row
             status_val = m_status.value if hasattr(m_status, "value") else m_status
             handling_val = m_handling.value if hasattr(m_handling, "value") else m_handling
@@ -283,6 +288,7 @@ async def get_transit_history(
                 "battery_code": battery_code,
                 "battery_percent": battery_percent,
                 "handling_status": handling_val if m_handling else None,
+                "arrival_confirmed_at": arrival_confirmed_at.isoformat() if arrival_confirmed_at else None,
             })
         return response
     except Exception as e:
@@ -331,6 +337,9 @@ async def confirm_arrival(
     # ── 1. Cập nhật Mission (rời danh sách Transit đang hoạt động sang History) ──
     if not mission.arrived_at:
         mission.arrived_at = now       # trigger pickup reminder countdown (3 ngày chờ KH lấy hàng)
+    if not mission.arrival_confirmed_at:
+        mission.arrival_confirmed_at = now   # ghi nhận thời điểm Technician confirm drone đáp hub
+    mission.arrival_confirmed_by = str(user.id)
     if mission.status != MissionStatus.MISSION_COMPLETED:
         mission.status = MissionStatus.COMPLETED
     mission.end_time = mission.end_time or now
@@ -431,6 +440,7 @@ async def confirm_arrival(
         "mission_status": mission.status.value if hasattr(mission.status, "value") else str(mission.status),
         "handling_status": None,
         "confirmed_by": user.id,
+        "arrival_confirmed_at": mission.arrival_confirmed_at.isoformat() if mission.arrival_confirmed_at else None,
         "drone_id": drone.id if drone else None,
         "drone_status": drone.status.value if drone else None,
         "battery_released": released_battery_id,
