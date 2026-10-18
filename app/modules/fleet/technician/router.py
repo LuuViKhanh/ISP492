@@ -162,16 +162,15 @@ async def get_incoming_drones(
                 continue
             seen_ids.add(m_id)
             
-            status_val = m_status.value if hasattr(m_status, "value") else m_status
             handling_val = m_handling.value if hasattr(m_handling, "value") else m_handling
 
-            # Tính display_state cho FE: 3 trạng thái rõ ràng
+            # Map về 3 trạng thái cố định cho FE
             if m_status == MissionStatus.INCIDENT_RETURN or m_handling == HandlingStatus.CANNOT_CONTINUE:
-                display_state = "Incident"
+                mission_state = "Incident"
             elif m_status in (MissionStatus.COMPLETED, MissionStatus.MISSION_COMPLETED):
-                display_state = "Completed"
+                mission_state = "Completed"
             else:
-                display_state = "Flying"
+                mission_state = "Flying"
 
             response.append({
                 "id": str(m_id),
@@ -184,9 +183,7 @@ async def get_incoming_drones(
                 "drone_code": drone_code,
                 "drone_current_hub_id": drone_curr_hub_id,
                 "model": model,
-                "mission_state": status_val if m_status else None,
-                "status": status_val if m_status else None,
-                "display_state": display_state,
+                "mission_state": mission_state,
                 "battery_id": battery_id,
                 "battery_code": battery_code,
                 "battery_percent": battery_percent,
