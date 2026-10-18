@@ -95,20 +95,22 @@ async def get_incoming_drones(
             .outerjoin(Drone, Mission.drone_id == Drone.id)
             .outerjoin(Battery, Mission.battery_id == Battery.id)
             .where(
-                # Issue #4: Mission đã xử lý hoàn tất (COMPLETED/MISSION_COMPLETED/CANCELLED...)
-                # không còn nằm ở danh sách Transit đang hoạt động mà chuyển sang History
-                Mission.status.notin_([
+                # /incoming chỉ hiển thị drone đang bay về hoặc đã đáp chờ confirm:
+                # - Flying / In Progress / Active mission → đang bay
+                # - Incident return → quay về do sự cố
+                # - Completed + handling_status = At hub → đã đáp, chờ technician confirm
+                Mission.status.in_([
+                    MissionStatus.FLYING,
+                    MissionStatus.IN_PROGRESS,
+                    MissionStatus.ACTIVE_MISSION,
+                    MissionStatus.INCIDENT_RETURN,
                     MissionStatus.COMPLETED,
                     MissionStatus.MISSION_COMPLETED,
-                    MissionStatus.CANCELLED,
-                    MissionStatus.FAILED,
-                    MissionStatus.REJECTED,
                 ]),
                 Mission.handling_status.in_([
                     HandlingStatus.INCOMING,
                     HandlingStatus.AT_HUB,
-                    HandlingStatus.READY,
-                    HandlingStatus.CANNOT_CONTINUE
+                    HandlingStatus.CANNOT_CONTINUE,
                 ])
             )
         )
@@ -162,7 +164,15 @@ async def get_incoming_drones(
             
             status_val = m_status.value if hasattr(m_status, "value") else m_status
             handling_val = m_handling.value if hasattr(m_handling, "value") else m_handling
-            
+
+            # Tính display_state cho FE: 3 trạng thái rõ ràng
+            if m_status == MissionStatus.INCIDENT_RETURN or m_handling == HandlingStatus.CANNOT_CONTINUE:
+                display_state = "Incident"
+            elif m_status in (MissionStatus.COMPLETED, MissionStatus.MISSION_COMPLETED):
+                display_state = "Completed"
+            else:
+                display_state = "Flying"
+
             response.append({
                 "id": str(m_id),
                 "mission_id": str(m_id),
@@ -176,6 +186,7 @@ async def get_incoming_drones(
                 "model": model,
                 "mission_state": status_val if m_status else None,
                 "status": status_val if m_status else None,
+                "display_state": display_state,
                 "battery_id": battery_id,
                 "battery_code": battery_code,
                 "battery_percent": battery_percent,
