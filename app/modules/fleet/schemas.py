@@ -51,6 +51,7 @@ class WorkOrderCreate(BaseModel):
     drone_id: int
     battery_id: Optional[str] = None
     issue_description: str
+    alert_id: Optional[int] = None
 
 class WorkOrderUpdate(BaseModel):
     issue_description: Optional[str] = None
