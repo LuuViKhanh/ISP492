@@ -95,14 +95,8 @@ async def get_incoming_drones(
             .outerjoin(Drone, Mission.drone_id == Drone.id)
             .outerjoin(Battery, Mission.battery_id == Battery.id)
             .where(
-                # /incoming chỉ hiển thị drone đang bay về hoặc đã đáp chờ confirm:
-                # - Flying / In Progress / Active mission → đang bay
-                # - Incident return → quay về do sự cố
-                # - Completed + handling_status = At hub → đã đáp, chờ technician confirm
                 Mission.status.in_([
                     MissionStatus.FLYING,
-                    MissionStatus.IN_PROGRESS,
-                    MissionStatus.ACTIVE_MISSION,
                     MissionStatus.INCIDENT_RETURN,
                     MissionStatus.COMPLETED,
                     MissionStatus.MISSION_COMPLETED,
@@ -169,8 +163,10 @@ async def get_incoming_drones(
                 mission_state = "Incident"
             elif m_status in (MissionStatus.COMPLETED, MissionStatus.MISSION_COMPLETED):
                 mission_state = "Completed"
-            else:
+            elif m_status == MissionStatus.FLYING:
                 mission_state = "Flying"
+            else:
+                mission_state = None
 
             response.append({
                 "id": str(m_id),
