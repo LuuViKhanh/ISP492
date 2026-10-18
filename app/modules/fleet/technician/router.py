@@ -836,7 +836,26 @@ async def list_maintenance_alerts(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    result = await db.execute(select(MaintenanceAlert).order_by(MaintenanceAlert.id.desc()))
+    """Chỉ trả alerts chưa được xử lý (chưa có work order)."""
+    result = await db.execute(
+        select(MaintenanceAlert)
+        .where(MaintenanceAlert.work_order_id == None)
+        .order_by(MaintenanceAlert.id.desc())
+    )
+    return result.scalars().all()
+
+
+@router.get("/maintenance-alerts/history", response_model=list[MaintenanceAlertResponse])
+async def list_maintenance_alerts_history(
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Trả alerts đã được xử lý (đã có work order)."""
+    result = await db.execute(
+        select(MaintenanceAlert)
+        .where(MaintenanceAlert.work_order_id != None)
+        .order_by(MaintenanceAlert.id.desc())
+    )
     return result.scalars().all()
 
 
@@ -931,6 +950,14 @@ async def create_work_order(
         status=WorkOrderStatus.PENDING,
     )
     db.add(wo)
+    await db.flush()  # lấy wo.id trước khi commit
+
+    # Nếu tạo từ một alert → gắn work_order_id vào alert, chuyển alert sang history
+    if body.alert_id:
+        alert = await db.get(MaintenanceAlert, body.alert_id)
+        if alert:
+            alert.work_order_id = wo.id
+
     await db.commit()
     await db.refresh(wo)
     return wo
