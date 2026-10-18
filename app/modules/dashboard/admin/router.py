@@ -114,11 +114,12 @@ async def admin_dashboard(
     )
 
     # ----- AI -----
+    from app.modules.ai_predictions.models import AIPrediction
     ai_count = (await db.execute(
-        select(func.count()).select_from(Mission).where(Mission.estimated_energy_wh.isnot(None))
+        select(func.count(func.distinct(AIPrediction.mission_id))).where(AIPrediction.estimated_energy_wh.isnot(None))
     )).scalar() or 0
-    ai_avg = (await db.execute(select(func.avg(Mission.estimated_energy_wh)))).scalar()
-    risk_breakdown = await group_counts(db, Mission.risk_level)
+    ai_avg = (await db.execute(select(func.avg(AIPrediction.estimated_energy_wh)))).scalar()
+    risk_breakdown = await group_counts(db, AIPrediction.risk_level)
     ai = AdminAI(
         missions_with_prediction=int(ai_count),
         avg_estimated_energy_wh=round(float(ai_avg), 2) if ai_avg is not None else 0.0,

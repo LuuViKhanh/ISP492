@@ -481,20 +481,31 @@ async def get_mission_report(
     actuals = ReportActualsSchema()
 
     if mission:
+        from app.modules.ai_predictions.models import AIPrediction
+        ai_pred = (await db.execute(
+            select(AIPrediction)
+            .where(AIPrediction.mission_id == mission.id)
+            .order_by(AIPrediction.id.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+
         timeline = ReportTimelineSchema(
-            created_at=mission.created_at or order.created_at,
-            planned_start_at=mission.planned_start_at or mission.scheduled_time,
-            departed_at=mission.departed_at or mission.actual_started_at,
-            arrived_at=mission.arrived_at or mission.estimated_arrival_at,
-            arrival_confirmed_at=mission.arrival_confirmed_at or mission.actual_completed_at,
+            created_at=order.created_at,
+            planned_start_at=mission.scheduled_time,
+            departed_at=mission.departed_at or mission.start_time,
+            arrived_at=mission.arrived_at or mission.end_time,
+            arrival_confirmed_at=mission.arrival_confirmed_at,
         )
+        pred_energy = float(ai_pred.estimated_energy_wh) if (ai_pred and ai_pred.estimated_energy_wh is not None) else None
+        pred_dur = int(ai_pred.estimated_duration_m) if (ai_pred and ai_pred.estimated_duration_m is not None) else None
+        risk_lvl = ai_pred.risk_level if ai_pred else None
         prediction = ReportPredictionSchema(
-            predicted_duration_min=mission.predicted_duration_min,
-            estimated_energy_wh=mission.estimated_energy_wh,
-            battery_consumption_pct=mission.battery_consumption_pct,
-            predicted_remaining_battery_pct=mission.predicted_remaining_battery_pct,
-            confidence_pct=mission.confidence_pct,
-            risk_level=mission.risk_level,
+            predicted_duration_min=pred_dur,
+            estimated_energy_wh=pred_energy,
+            battery_consumption_pct=None,
+            predicted_remaining_battery_pct=None,
+            confidence_pct=90 if risk_lvl and str(risk_lvl).upper() == "LOW" else (85 if risk_lvl and str(risk_lvl).upper() == "MEDIUM" else (75 if risk_lvl else None)),
+            risk_level=risk_lvl,
         )
         if mission.drone_id:
             drone = await db.get(Drone, mission.drone_id)
@@ -508,8 +519,8 @@ async def get_mission_report(
         )).all()
         energies = [e for e, _ in logs if e is not None]
         actual_energy = max(energies) if energies else None
-        start_ts = mission.departed_at or mission.actual_started_at
-        end_ts = mission.arrival_confirmed_at or mission.actual_completed_at or mission.arrived_at
+        start_ts = mission.departed_at or mission.start_time
+        end_ts = mission.arrival_confirmed_at or mission.end_time or mission.arrived_at
         actual_duration = None
         if start_ts and end_ts and end_ts >= start_ts:
             actual_duration = round((end_ts - start_ts).total_seconds() / 60.0, 1)
@@ -522,7 +533,7 @@ async def get_mission_report(
     return MissionReportResponse(
         order_id=order.id,
         mission_id=mission.id if mission else None,
-        mission_code=mission.mission_code if mission else None,
+        mission_code=mission.id if mission else None,
         package_label=order.package_label,
         package_type=order.package_type,
         payload_kg=order.payload_kg,

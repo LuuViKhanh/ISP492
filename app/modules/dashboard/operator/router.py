@@ -6,6 +6,7 @@ from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
 from app.modules.missions.models import Mission, MissionStatus, Incident, IncidentStatus
+from app.modules.ai_predictions.models import AIPrediction
 from app.modules.fleet.models import MaintenanceAlert
 from app.modules.dashboard.schemas import (
     OperatorDashboardResponse,
@@ -33,6 +34,11 @@ async def operator_dashboard(
     Energy KPI, Route Efficiency và Alerts (bảo trì / sự cố / duyệt quá hạn).
     """
     missions = (await db.execute(select(Mission))).scalars().all()
+    ai_preds = (await db.execute(select(AIPrediction).order_by(AIPrediction.id.desc()))).scalars().all()
+    pred_by_mission: dict[str, AIPrediction] = {}
+    for p in ai_preds:
+        if p.mission_id and p.mission_id not in pred_by_mission:
+            pred_by_mission[p.mission_id] = p
 
     total = len(missions)
     completed = sum(1 for m in missions if m.status in _COMPLETED)
@@ -45,8 +51,16 @@ async def operator_dashboard(
     distances = [m.distance_m for m in missions if m.distance_m]
     payloads = [m.payload_weight for m in missions if m.payload_weight]
     revenues = [m.delivery_fee for m in missions if m.delivery_fee and m.status in _COMPLETED]
-    energies = [m.estimated_energy_wh for m in missions if m.estimated_energy_wh]
-    durations = [m.predicted_duration_min for m in missions if m.predicted_duration_min]
+    energies = [
+        float(pred_by_mission[m.id].estimated_energy_wh)
+        for m in missions
+        if m.id in pred_by_mission and pred_by_mission[m.id].estimated_energy_wh is not None
+    ]
+    durations = [
+        float(pred_by_mission[m.id].estimated_duration_m)
+        for m in missions
+        if m.id in pred_by_mission and pred_by_mission[m.id].estimated_duration_m is not None
+    ]
 
     total_distance = sum(distances) if distances else 0.0
     total_energy = sum(energies) if energies else 0.0
