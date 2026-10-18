@@ -1445,6 +1445,13 @@ async def dispatch_drone(
             drone.status = DroneStatus.IN_FLIGHT
             drone.current_hub_id = None
 
+    # Pin cất cánh cùng drone → rời Battery Management (current_hub_id = None)
+    if mission.battery_id:
+        battery = await db.get(Battery, mission.battery_id)
+        if battery:
+            battery.current_hub_id = None
+            battery.status = "In Use"
+
     # Thông tin leg đang bay và leg tiếp theo (nếu có)
     remaining_legs_result = await db.execute(
         select(MissionLeg)
