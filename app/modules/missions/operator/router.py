@@ -8,7 +8,7 @@ from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
 from app.core.config import settings
-from app.modules.missions.models import Mission, MissionStatus, Location, LocationType, Incident, IncidentStatus, IncidentSeverity, TelemetryLog, MissionHubCheckpoint
+from app.modules.missions.models import Mission, MissionStatus, HandlingStatus, Location, LocationType, Incident, IncidentStatus, IncidentSeverity, TelemetryLog, MissionHubCheckpoint
 from app.modules.system.models import Hub
 from app.modules.fleet.models import MaintenanceAlert
 import heapq
@@ -1754,7 +1754,7 @@ async def create_mission(
         mission_id=mission_id,
         estimated_energy_wh=round(total_energy_wh, 2),
         estimated_duration_m=float(duration_min),
-        risk_level=selected_schema.risk if selected_schema else "Low",
+        risk_level=selected_schema.risk.capitalize() if (selected_schema and selected_schema.risk) else "Low",
         predicted_at=datetime.now(timezone.utc)
     )
     db.add(ai_pred)
