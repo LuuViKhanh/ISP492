@@ -27,12 +27,14 @@ class DroneProfileResponse(BaseModel):
 
 class IncomingMissionResponse(BaseModel):
     mission_code: str
+    drone_id: Optional[int] = None
     drone_code: Optional[str] = None
     model: Optional[str] = None
     mission_state: Optional[str] = None
     battery_code: Optional[str] = None
     battery_percent: Optional[int] = None
     handling_status: Optional[str] = None
+    arrival_confirmed_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
