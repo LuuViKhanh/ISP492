@@ -95,20 +95,16 @@ async def get_incoming_drones(
             .outerjoin(Drone, Mission.drone_id == Drone.id)
             .outerjoin(Battery, Mission.battery_id == Battery.id)
             .where(
-                # Issue #4: Mission đã xử lý hoàn tất (COMPLETED/MISSION_COMPLETED/CANCELLED...)
-                # không còn nằm ở danh sách Transit đang hoạt động mà chuyển sang History
-                Mission.status.notin_([
+                Mission.status.in_([
+                    MissionStatus.FLYING,
+                    MissionStatus.INCIDENT_RETURN,
                     MissionStatus.COMPLETED,
                     MissionStatus.MISSION_COMPLETED,
-                    MissionStatus.CANCELLED,
-                    MissionStatus.FAILED,
-                    MissionStatus.REJECTED,
                 ]),
                 Mission.handling_status.in_([
                     HandlingStatus.INCOMING,
                     HandlingStatus.AT_HUB,
-                    HandlingStatus.READY,
-                    HandlingStatus.CANNOT_CONTINUE
+                    HandlingStatus.CANNOT_CONTINUE,
                 ])
             )
         )
@@ -160,9 +156,18 @@ async def get_incoming_drones(
                 continue
             seen_ids.add(m_id)
             
-            status_val = m_status.value if hasattr(m_status, "value") else m_status
             handling_val = m_handling.value if hasattr(m_handling, "value") else m_handling
-            
+
+            # Map về 3 trạng thái cố định cho FE
+            if m_status == MissionStatus.INCIDENT_RETURN or m_handling == HandlingStatus.CANNOT_CONTINUE:
+                mission_state = "Incident"
+            elif m_status in (MissionStatus.COMPLETED, MissionStatus.MISSION_COMPLETED):
+                mission_state = "Completed"
+            elif m_status == MissionStatus.FLYING:
+                mission_state = "Flying"
+            else:
+                mission_state = None
+
             response.append({
                 "id": str(m_id),
                 "mission_id": str(m_id),
@@ -174,8 +179,7 @@ async def get_incoming_drones(
                 "drone_code": drone_code,
                 "drone_current_hub_id": drone_curr_hub_id,
                 "model": model,
-                "mission_state": status_val if m_status else None,
-                "status": status_val if m_status else None,
+                "mission_state": mission_state,
                 "battery_id": battery_id,
                 "battery_code": battery_code,
                 "battery_percent": battery_percent,
@@ -832,7 +836,26 @@ async def list_maintenance_alerts(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    result = await db.execute(select(MaintenanceAlert).order_by(MaintenanceAlert.id.desc()))
+    """Chỉ trả alerts chưa được xử lý (chưa có work order)."""
+    result = await db.execute(
+        select(MaintenanceAlert)
+        .where(MaintenanceAlert.work_order_id == None)
+        .order_by(MaintenanceAlert.id.desc())
+    )
+    return result.scalars().all()
+
+
+@router.get("/maintenance-alerts/history", response_model=list[MaintenanceAlertResponse])
+async def list_maintenance_alerts_history(
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Trả alerts đã được xử lý (đã có work order)."""
+    result = await db.execute(
+        select(MaintenanceAlert)
+        .where(MaintenanceAlert.work_order_id != None)
+        .order_by(MaintenanceAlert.id.desc())
+    )
     return result.scalars().all()
 
 
@@ -927,6 +950,14 @@ async def create_work_order(
         status=WorkOrderStatus.PENDING,
     )
     db.add(wo)
+    await db.flush()  # lấy wo.id trước khi commit
+
+    # Nếu tạo từ một alert → gắn work_order_id vào alert, chuyển alert sang history
+    if body.alert_id:
+        alert = await db.get(MaintenanceAlert, body.alert_id)
+        if alert:
+            alert.work_order_id = wo.id
+
     await db.commit()
     await db.refresh(wo)
     return wo
