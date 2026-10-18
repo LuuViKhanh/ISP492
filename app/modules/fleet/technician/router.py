@@ -855,13 +855,9 @@ async def confirm_relay_arrival(
     }
 
 
+from pydantic import BaseModel
+
 class SwapBatteryRequest(BaseModel):
-    new_battery_id: str
-
-
-from pydantic import BaseModel as _BaseModel
-
-class SwapBatteryRequest(_BaseModel):
     new_battery_id: str
 
 
