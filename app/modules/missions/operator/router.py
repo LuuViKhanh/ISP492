@@ -645,6 +645,13 @@ from app.shared.id_generator import generate_sequential_id
 from typing import Optional
 
 
+DEFAULT_DRONE_BATTERY_CAPACITY_WH = {
+    "DJI Matrice 100": 130.0,
+    "Aurelia X6 Pro": 400.0,
+    "DJI FlyCart 15 Heavy": 2000.0,
+}
+
+
 async def check_relay_hub_battery_availability(
     db: AsyncSession,
     relay_hub_ids: list[int],
@@ -656,33 +663,95 @@ async def check_relay_hub_battery_availability(
     legs_detail: list[dict],
 ) -> tuple[bool, Optional[str], list[HubBatteryStatus]]:
     """
-    Kiểm tra battery availability tại từng relay hub của một tuyến.
-
-    Điều kiện pin "sẵn sàng thay" tại relay hub:
-    - status ACTIVE (đã lọc trong all_batteries)
-    - drone_id IS NULL (chưa gắn vào drone khác)
-    - charge_level_pct >= 100
-    - battery_model tương thích với drone
-    - chưa bị giữ bởi Mission đang active khác
+    Kiểm tra tính khả thi của Relay Route:
+    1. Kiểm tra năng lượng từng chặng (legs_detail), bảo đảm mức dự phòng tối thiểu 20%
+       (mỗi chặng tiêu thụ <= 80% dung lượng bộ pin thực tế `drone_capacity_wh`).
+    2. Kiểm tra Battery Inventory tại từng Relay Hub:
+       - status ACTIVE
+       - drone_id IS NULL (chưa gắn vào drone khác)
+       - charge_level_pct >= 100 (sạc đầy 100%, trạng thái Ready)
+       - battery_model tương thích với model của drone
+       - chưa bị giữ chỗ (reserved) bởi Mission đang active khác (bao gồm cả giữ chỗ theo
+         Mission.battery_id/MissionLeg.battery_id VÀ giữ chỗ theo số lượng chặng trung gian PENDING
+         của các Mission active cùng dòng pin).
 
     Returns: (feasible, infeasible_reason, relay_battery_status_list)
     """
-    # Lấy set battery_id đang bị giữ bởi mission active
+    active_statuses = [
+        MissionStatus.SCHEDULED,
+        MissionStatus.IN_PROGRESS,
+        MissionStatus.APPROVED,
+        MissionStatus.FLYING,
+        MissionStatus.ACTIVE_MISSION,
+    ]
+
+    # 1. Lấy set battery_id đang bị giữ trực tiếp bởi mission active hoặc mission_leg active
     reserved_result = await db.execute(
         select(Mission.battery_id).where(
-            Mission.status.in_([
-                MissionStatus.SCHEDULED,
-                MissionStatus.IN_PROGRESS,
-                MissionStatus.APPROVED,
-                MissionStatus.FLYING,
-            ]),
+            Mission.status.in_(active_statuses),
             Mission.battery_id.is_not(None),
         )
     )
-    reserved_battery_ids = {row[0] for row in reserved_result.all()}
+    reserved_battery_ids = {row[0] for row in reserved_result.all() if row[0]}
 
+    leg_reserved_res = await db.execute(
+        select(MissionLeg.battery_id)
+        .join(Mission, MissionLeg.mission_id == Mission.id)
+        .where(
+            Mission.status.in_(active_statuses),
+            MissionLeg.status.in_([MissionLegStatus.PENDING, MissionLegStatus.IN_PROGRESS]),
+            MissionLeg.battery_id.is_not(None),
+        )
+    )
+    for row in leg_reserved_res.all():
+        if row[0]:
+            reserved_battery_ids.add(row[0])
+
+    # 2. Đếm số lượng pin đang được "giữ chỗ ảo" (virtual hold) tại mỗi Relay Hub bởi các Mission active
+    # có chặng bay tiếp theo xuất phát từ Relay Hub đó (sequence_no > 1, status == PENDING, battery_id IS NULL)
+    held_count_by_hub: dict[int, int] = {}
+    if relay_hub_ids:
+        pending_relay_legs_res = await db.execute(
+            select(MissionLeg.from_hub_id, Drone.model)
+            .join(Mission, MissionLeg.mission_id == Mission.id)
+            .outerjoin(Drone, Mission.drone_id == Drone.id)
+            .where(
+                Mission.status.in_(active_statuses),
+                MissionLeg.sequence_no > 1,
+                MissionLeg.status == MissionLegStatus.PENDING,
+                MissionLeg.battery_id.is_(None),
+                MissionLeg.from_hub_id.in_(relay_hub_ids),
+            )
+        )
+        for from_hub_id, other_drone_model in pending_relay_legs_res.all():
+            if from_hub_id is None:
+                continue
+            other_compat = DRONE_BATTERY_COMPATIBILITY.get(other_drone_model or "", [other_drone_model] if other_drone_model else [])
+            # Nếu cùng dùng chung dòng pin tương thích thì tính là đang giữ 1 suất pin tại Relay Hub đó
+            if not compatible_models or not other_compat or bool(set(compatible_models) & set(other_compat)):
+                held_count_by_hub[from_hub_id] = held_count_by_hub.get(from_hub_id, 0) + 1
+
+    infeasible_reasons: list[str] = []
+    max_safe_energy_wh = round(drone_capacity_wh * 0.8, 2)
+    model_str = f" ({', '.join(compatible_models)})" if compatible_models else ""
+
+    # 3. Kiểm tra năng lượng cho từng chặng (bảo đảm dự phòng tối thiểu 20% mỗi chặng)
+    for idx, leg in enumerate(legs_detail):
+        leg_energy = float(leg.get("energy_wh") or 0.0)
+        if leg_energy <= 0 and leg.get("distance_km") is not None:
+            leg_energy = float(predict_flight_energy(float(leg["distance_km"]), float(leg.get("payload_kg") or 0.0))["energy_wh"])
+        if drone_capacity_wh > 0 and leg_energy > max_safe_energy_wh:
+            leg_pct = int(round((leg_energy / drone_capacity_wh) * 100))
+            infeasible_reasons.append(
+                f"Chặng {idx + 1} ({leg.get('from_hub_code', '?')} -> {leg.get('to_hub_code', '?')}) "
+                f"tiêu thụ {leg_energy:.1f} Wh (~{leg_pct}% pin), vượt mức an toàn 80% "
+                f"({max_safe_energy_wh:.1f} Wh / {drone_capacity_wh:.1f} Wh{model_str}, cần dự phòng tối thiểu 20%)"
+            )
+
+    # 4. Kiểm tra Battery Inventory tại từng Hub trung gian
+    # Trường hợp tuyến qua cùng 1 hub nhiều lần (hiếm gặp), vẫn trừ dần số pin cần dùng
+    hub_needed_so_far: dict[int, int] = {}
     relay_statuses: list[HubBatteryStatus] = []
-    infeasible_hubs: list[str] = []
 
     for hub_id in relay_hub_ids:
         hub = hub_dict.get(hub_id)
@@ -701,27 +770,78 @@ async def check_relay_hub_battery_availability(
             )
         ]
 
-        ready_count = len(hub_bats)
-        hub_feasible = ready_count > 0
+        raw_ready_count = len(hub_bats)
+        held_by_others = held_count_by_hub.get(hub_id, 0)
+        already_used_in_route = hub_needed_so_far.get(hub_id, 0)
+        effective_ready_count = max(0, raw_ready_count - held_by_others - already_used_in_route)
+        hub_needed_so_far[hub_id] = already_used_in_route + 1
+
+        hub_feasible = effective_ready_count > 0
 
         relay_statuses.append(HubBatteryStatus(
             hub_id=hub_id,
             hub_code=hub_code,
             hub_name=hub_name,
-            ready_count=ready_count,
+            ready_count=effective_ready_count,
             compatible_models=compatible_models,
             feasible=hub_feasible,
         ))
 
         if not hub_feasible:
-            model_str = f" ({', '.join(compatible_models)})" if compatible_models else ""
-            infeasible_hubs.append(
-                f"Hub {hub_name} không có pin tương thích{model_str} sạc đủ 100%"
-            )
+            if raw_ready_count > 0 and held_by_others > 0:
+                infeasible_reasons.append(
+                    f"Hub {hub_name} có {raw_ready_count} pin{model_str} sạc 100% nhưng đã được giữ chỗ ({held_by_others} pin) cho nhiệm vụ khác"
+                )
+            else:
+                infeasible_reasons.append(
+                    f"Hub {hub_name} không có pin tương thích{model_str} ở trạng thái Ready (sạc 100%, chưa gắn drone và chưa bị giữ chỗ)"
+                )
 
-    if infeasible_hubs:
-        return False, " | ".join(infeasible_hubs), relay_statuses
+    if infeasible_reasons:
+        return False, " | ".join(infeasible_reasons), relay_statuses
     return True, None, relay_statuses
+
+
+async def _resolve_drone_battery_capacity_wh(
+    db: AsyncSession,
+    drone_obj: Optional[Drone],
+    all_active_batteries: list[Battery],
+) -> tuple[list[str], float]:
+    """
+    Xác định danh sách model pin tương thích và dung lượng 1 viên pin thực tế (Wh) của Drone.
+    Tuyệt đối KHÔNG lấy nhầm dung lượng pin của dòng Drone khác tại cùng Hub
+    (ví dụ: Drone #30 DJI Matrice 100 dùng pin TB48D 130 Wh, không lấy pin 1000-2000 Wh của drone tải nặng).
+    """
+    compatible_models: list[str] = []
+    if drone_obj and drone_obj.model:
+        compatible_models = await get_compatible_battery_models(db, drone_obj.model)
+
+    # 1. Ưu tiên lấy từ viên pin đang gắn trực tiếp trên drone_obj (nếu tương thích)
+    if drone_obj:
+        installed_bats = [
+            b for b in all_active_batteries
+            if b.drone_id == drone_obj.id
+            and b.capacity_wh
+            and (not compatible_models or (b.battery_model and b.battery_model in compatible_models))
+        ]
+        if installed_bats:
+            return compatible_models, float(max(b.capacity_wh for b in installed_bats))
+
+    # 2. Lấy từ bất kỳ viên pin nào trong hệ thống có battery_model thuộc compatible_models
+    if compatible_models:
+        model_bats = [
+            b for b in all_active_batteries
+            if b.battery_model in compatible_models and b.capacity_wh
+        ]
+        if model_bats:
+            return compatible_models, float(max(b.capacity_wh for b in model_bats))
+
+    # 3. Tra cứu bảng dung lượng chuẩn theo model của Drone
+    default_cap = DEFAULT_DRONE_BATTERY_CAPACITY_WH.get(
+        drone_obj.model if drone_obj else "",
+        130.0
+    )
+    return compatible_models, float(default_cap)
 
 
 async def compute_mission_routes_internal(
@@ -763,49 +883,34 @@ async def compute_mission_routes_internal(
             if not drone_obj:
                 drone_obj = available_drones[0]
 
-    # 3. Get battery wait times at each hub
+    # 3. Lấy toàn bộ pin ACTIVE (cả pin rời và pin đang gắn trên drone để tính đúng capacity_wh)
     result = await db.execute(
-        select(Battery).where(
-            and_(Battery.status == batteries_status.ACTIVE, Battery.drone_id.is_(None))
-        )
+        select(Battery).where(Battery.status == batteries_status.ACTIVE)
     )
-    all_batteries = result.scalars().all()
+    all_active_batteries = result.scalars().all()
+    all_batteries = [b for b in all_active_batteries if b.drone_id is None]
 
+    # Xác định chính xác dòng pin tương thích và dung lượng 1 viên pin của Drone (ví dụ TB48D = 130 Wh)
+    compatible_models, drone_capacity_wh = await _resolve_drone_battery_capacity_wh(
+        db, drone_obj, all_active_batteries
+    )
+
+    # Tính thời gian chờ pin tại từng Hub dựa trên pin TƯƠNG THÍCH với Drone
     hub_wait_times = {}
     for h in hubs:
-        h_bats = [b for b in all_batteries if b.current_hub_id == h.id]
+        h_bats = [
+            b for b in all_batteries
+            if b.current_hub_id == h.id
+            and (not compatible_models or (b.battery_model and b.battery_model in compatible_models))
+        ]
         if not h_bats:
             hub_wait_times[h.id] = float('inf')
         else:
             best_charge = max([b.charge_level_pct or 0 for b in h_bats])
-            if best_charge >= 90:
+            if best_charge >= 100:
                 hub_wait_times[h.id] = 0
             else:
-                hub_wait_times[h.id] = 90 - best_charge
-
-    origin_bats = [b for b in all_batteries if b.current_hub_id == origin_hub.id]
-
-    # Fix: lấy capacity từ pin tương thích với drone model, không phải max pin bất kỳ ở hub
-    compatible_models: list[str] = []
-    if drone_obj:
-        compatible_models = await get_compatible_battery_models(db, drone_obj.model)
-    compatible_origin_bats = [
-        b for b in origin_bats
-        if not compatible_models or (b.battery_model and b.battery_model in compatible_models)
-    ]
-    if compatible_origin_bats:
-        drone_capacity_wh = max(b.capacity_wh for b in compatible_origin_bats)
-    elif origin_bats:
-        # fallback: dùng pin bất kỳ ở hub nếu không tìm được pin tương thích
-        drone_capacity_wh = max(b.capacity_wh for b in origin_bats)
-    else:
-        # fallback cuối: tra cứu capacity mặc định theo drone model
-        _default_capacity = {
-            "DJI Matrice 100": 130.0,
-            "Aurelia X6 Pro": 400.0,
-            "DJI FlyCart 15 Heavy": 2000.0,
-        }
-        drone_capacity_wh = _default_capacity.get(drone_obj.model if drone_obj else "", 130.0)
+                hub_wait_times[h.id] = max(1, 100 - best_charge)
 
     payload = float(order.payload_kg or 0)
 
@@ -840,7 +945,7 @@ async def compute_mission_routes_internal(
                 pred = predict_flight_energy(dist_km, payload)
                 energy_wh = pred["energy_wh"]
 
-                # Check drone capacity constraint (max 80% usage per leg)
+                # Check drone capacity constraint (max 80% usage per leg -> minimum 20% reserve)
                 if energy_wh > drone_capacity_wh * 0.8:
                     continue
 
@@ -911,7 +1016,9 @@ async def compute_mission_routes_internal(
                 "to_hub_id": h2.id,
                 "from_hub_code": h1.code or h1.name,
                 "to_hub_code": h2.code or h2.name,
-                "distance_km": round(d, 2)
+                "distance_km": round(d, 2),
+                "energy_wh": round(e, 2),
+                "payload_kg": payload,
             })
 
             if path[i + 1] != dest_hub.id:
@@ -1003,7 +1110,9 @@ async def compute_mission_routes_internal(
                     "to_hub_id": dest_hub.id,
                     "from_hub_code": origin_hub.code or origin_hub.name,
                     "to_hub_code": dest_hub.code or dest_hub.name,
-                    "distance_km": round(dist, 2)
+                    "distance_km": round(dist, 2),
+                    "energy_wh": round(e, 2),
+                    "payload_kg": payload,
                 }],
                 "route_string": dir_string
             }
@@ -1039,7 +1148,7 @@ async def compute_mission_routes_internal(
                 tot_energy = e_leg1 + e_leg2
                 cand_data = {
                     "path": cand_path,
-                    "relayHubs": [hub_dict[mid_hub_id].name],
+                    "relayHubs": [f"{hub_dict[mid_hub_id].name} (Tốn {e_leg1:.1f}Wh)"],
                     "distanceKm": round(tot_dist, 2),
                     "predictedEnergyWh": round(tot_energy, 2),
                     "predictedDurationMin": int(tot_dist * 2) + int(w_val),
@@ -1050,14 +1159,18 @@ async def compute_mission_routes_internal(
                             "to_hub_id": mid_hub_id,
                             "from_hub_code": origin_hub.code or origin_hub.name,
                             "to_hub_code": hub_dict[mid_hub_id].code or hub_dict[mid_hub_id].name,
-                            "distance_km": round(d_leg1, 2)
+                            "distance_km": round(d_leg1, 2),
+                            "energy_wh": round(e_leg1, 2),
+                            "payload_kg": payload,
                         },
                         {
                             "from_hub_id": mid_hub_id,
                             "to_hub_id": dest_hub.id,
                             "from_hub_code": hub_dict[mid_hub_id].code or hub_dict[mid_hub_id].name,
                             "to_hub_code": dest_hub.code or dest_hub.name,
-                            "distance_km": round(d_leg2, 2)
+                            "distance_km": round(d_leg2, 2),
+                            "energy_wh": round(e_leg2, 2),
+                            "payload_kg": payload,
                         }
                     ],
                     "route_string": cand_route_string
@@ -1065,16 +1178,23 @@ async def compute_mission_routes_internal(
                 raw_routes.append({"key": f"ALT{len(raw_routes)+1}", "type": "alternative", "data": cand_data})
                 seen_route_strings.add(cand_route_string)
 
-
     # Đóng gói Schema
-    routes_schemas = []
-    raw_data_list = []
+    routes_schemas: list[RouteOptionSchema] = []
+    raw_data_list: list[dict] = []
     for entry in raw_routes:
         k = entry["key"]
         d = entry["data"]
-        batt_pct = int((d["predictedEnergyWh"] / drone_capacity_wh) * 100) if drone_capacity_wh else 50
+        legs_raw = d.get("legs_detail", [])
+        # Tính % tiêu hao pin theo chặng cao nhất so với dung lượng 1 viên pin thực tế (drone_capacity_wh)
+        # vì tại mỗi Relay Hub drone được thay viên pin mới 100%
+        if legs_raw:
+            max_leg_energy_wh = max(float(leg.get("energy_wh") or 0.0) for leg in legs_raw)
+        else:
+            max_leg_energy_wh = float(d["predictedEnergyWh"])
+
+        batt_pct = int(round((max_leg_energy_wh / drone_capacity_wh) * 100)) if drone_capacity_wh else 50
         rem_batt_pct = max(0, 100 - batt_pct)
-        risk = "LOW" if d["predictedEnergyWh"] < drone_capacity_wh * 0.6 else ("MEDIUM" if d["predictedEnergyWh"] < drone_capacity_wh * 0.8 else "HIGH")
+        risk = "LOW" if max_leg_energy_wh < drone_capacity_wh * 0.6 else ("MEDIUM" if max_leg_energy_wh <= drone_capacity_wh * 0.8 else "HIGH")
 
         schema = RouteOptionSchema(
             routeId=f"R-{order.id}-{k}",
@@ -1093,7 +1213,7 @@ async def compute_mission_routes_internal(
                     from_longitude=hub_dict[leg["from_hub_id"]].longitude if leg.get("from_hub_id") in hub_dict else None,
                     to_latitude=hub_dict[leg["to_hub_id"]].latitude if leg.get("to_hub_id") in hub_dict else None,
                     to_longitude=hub_dict[leg["to_hub_id"]].longitude if leg.get("to_hub_id") in hub_dict else None,
-                ) for idx, leg in enumerate(d["legs_detail"])
+                ) for idx, leg in enumerate(legs_raw)
             ],
             distanceKm=d["distanceKm"],
             relayHubs=d["relayHubs"],
@@ -1110,43 +1230,34 @@ async def compute_mission_routes_internal(
         routes_schemas.append(schema)
         raw_data_list.append(d)
 
-    # ĐÁNH DẤU RECOMMEND CHO TUYẾN TỐI ƯU HIỆU SUẤT NĂNG LƯỢNG NHẤT
-    if routes_schemas:
-        best_idx = 0
-        min_energy = float('inf')
-        for idx, s in enumerate(routes_schemas):
-            if s.predictedEnergyWh < min_energy:
-                min_energy = s.predictedEnergyWh
-                best_idx = idx
+    # ── Battery feasibility & 20% reserve check cho từng tuyến ──────────────────
+    max_safe_energy_wh = round(drone_capacity_wh * 0.8, 2)
+    compat_label = f" ({', '.join(compatible_models)})" if compatible_models else ""
 
-        for idx, (s, d) in enumerate(zip(routes_schemas, raw_data_list)):
-            if idx == best_idx:
-                s.recommended = True
-                s.reason = f"Được AI đề xuất: Tuyến đường tối ưu hiệu suất năng lượng nhất (chỉ tiêu thụ {s.predictedEnergyWh:.1f} Wh, ~{s.batteryConsumptionPct}% pin), tiết kiệm pin tối đa."
-            else:
-                s.recommended = False
-                if "FAST" in s.routeId:
-                    s.reason = f"Tuyến bay nhanh nhất: Dự kiến {s.predictedDurationMin} phút, thời gian chờ sạc {d.get('wait_time', 0)} phút."
-                elif "SHORT" in s.routeId:
-                    s.reason = f"Quãng đường ngắn nhất: Cự ly {s.distanceKm} km, tiêu thụ {s.predictedEnergyWh:.1f} Wh."
-                elif "DIR" in s.routeId:
-                    s.reason = f"Tuyến bay thẳng trực tiếp: Cự ly {s.distanceKm} km, không qua trạm sạc trung gian."
-                else:
-                    s.reason = f"Tuyến cân bằng: Cự ly {s.distanceKm} km, thời gian {s.predictedDurationMin} phút."
-
-    # ── Battery feasibility check cho từng tuyến ──────────────────────────────
     for schema, raw in zip(routes_schemas, raw_data_list):
         path = raw.get("path", [])
         relay_hub_ids = [nid for nid in path if nid not in (origin_hub.id, dest_hub.id)]
 
         if not relay_hub_ids:
-            # Direct route — kiểm tra năng lượng chặng duy nhất có vượt capacity không
+            # Direct route — kiểm tra năng lượng chặng duy nhất với mức dự phòng tối thiểu 20% (<= 80% capacity)
             if schema.predictedEnergyWh > drone_capacity_wh:
                 schema.feasible = False
                 schema.infeasible_reason = (
-                    f"Năng lượng cần ({schema.predictedEnergyWh:.1f} Wh) vượt dung lượng pin "
-                    f"({drone_capacity_wh:.1f} Wh). Drone không đủ pin để bay trực tiếp."
+                    f"Năng lượng cần ({schema.predictedEnergyWh:.1f} Wh, ~{schema.batteryConsumptionPct}% pin) "
+                    f"vượt dung lượng 1 viên pin{compat_label} ({drone_capacity_wh:.1f} Wh). "
+                    f"Drone không đủ pin để bay trực tiếp (tối đa {max_safe_energy_wh:.1f} Wh để giữ dự phòng 20%)."
                 )
+            elif schema.predictedEnergyWh > max_safe_energy_wh:
+                schema.feasible = False
+                schema.infeasible_reason = (
+                    f"Năng lượng cần ({schema.predictedEnergyWh:.1f} Wh, ~{schema.batteryConsumptionPct}% pin) "
+                    f"vượt ngưỡng an toàn 80% của pin{compat_label} ({max_safe_energy_wh:.1f} Wh / {drone_capacity_wh:.1f} Wh). "
+                    f"Không bảo đảm mức dự phòng tối thiểu 20%."
+                )
+            else:
+                schema.feasible = True
+                schema.infeasible_reason = None
+            schema.relay_battery_status = []
             continue
 
         feasible, reason, hub_statuses = await check_relay_hub_battery_availability(
@@ -1163,10 +1274,36 @@ async def compute_mission_routes_internal(
         schema.infeasible_reason = reason
         schema.relay_battery_status = hub_statuses
 
-        # Nếu tuyến không khả thi, bỏ khỏi recommended
-        if not feasible and schema.recommended:
-            schema.recommended = False
-            schema.reason = f"Tuyến không khả thi: {reason}"
+    # ĐÁNH DẤU RECOMMEND CHO TUYẾN KHẢ THI TỐI ƯU HIỆU SUẤT NĂNG LƯỢNG NHẤT
+    if routes_schemas:
+        best_idx = None
+        min_energy = float('inf')
+        for idx, s in enumerate(routes_schemas):
+            if s.feasible and s.predictedEnergyWh < min_energy:
+                min_energy = s.predictedEnergyWh
+                best_idx = idx
+
+        for idx, (s, d) in enumerate(zip(routes_schemas, raw_data_list)):
+            if not s.feasible:
+                s.recommended = False
+                s.reason = f"Tuyến không khả thi: {s.infeasible_reason}"
+            elif idx == best_idx:
+                s.recommended = True
+                s.reason = (
+                    f"Được AI đề xuất: Tuyến đường khả thi tối ưu hiệu suất năng lượng nhất "
+                    f"(tổng {s.predictedEnergyWh:.1f} Wh, tiêu thụ tối đa ~{s.batteryConsumptionPct}% pin/chặng, "
+                    f"dự phòng {s.remainingBatteryPct}%)."
+                )
+            else:
+                s.recommended = False
+                if "FAST" in s.routeId:
+                    s.reason = f"Tuyến bay nhanh nhất: Dự kiến {s.predictedDurationMin} phút, thời gian chờ sạc {d.get('wait_time', 0)} phút."
+                elif "SHORT" in s.routeId:
+                    s.reason = f"Quãng đường ngắn nhất: Cự ly {s.distanceKm} km, tiêu thụ {s.predictedEnergyWh:.1f} Wh."
+                elif "DIR" in s.routeId:
+                    s.reason = f"Tuyến bay thẳng trực tiếp: Cự ly {s.distanceKm} km, không qua trạm sạc trung gian."
+                else:
+                    s.reason = f"Tuyến cân bằng: Cự ly {s.distanceKm} km, thời gian {s.predictedDurationMin} phút."
 
     return routes_schemas, raw_data_list
 
@@ -1221,31 +1358,39 @@ async def build_missions_response_list(
         if r.mission_id not in rec_by_mission:
             rec_by_mission[r.mission_id] = r
 
-    # 4. Lấy danh sách Pin để tính % tiêu hao pin giống mission-planning/analyze
+    # 4. Lấy danh sách Pin & Drone để tính chính xác % tiêu hao pin theo model Drone
     bats_res = await db.execute(select(Battery))
     all_batteries = bats_res.scalars().all()
     battery_by_id = {b.id: b for b in all_batteries}
+
+    drone_ids = {m.drone_id for m in missions if m.drone_id is not None}
+    drone_by_id: dict[int, Drone] = {}
+    if drone_ids:
+        drones_res = await db.execute(select(Drone).where(Drone.id.in_(drone_ids)))
+        drone_by_id = {d.id: d for d in drones_res.scalars().all()}
 
     responses: list[MissionResponse] = []
     for m in missions:
         m_dict = {c.name: getattr(m, c.name) for c in m.__table__.columns}
         payload = float(m.payload_weight or 0.0)
+        drone_obj = drone_by_id.get(m.drone_id) if m.drone_id else None
 
-        # Xác định capacity_wh của pin để tính % tiêu thụ
-        drone_capacity_wh = 100.0
+        # Xác định capacity_wh của 1 viên pin tương thích với Drone (không lấy nhầm pin của dòng drone khác)
+        drone_capacity_wh = DEFAULT_DRONE_BATTERY_CAPACITY_WH.get(
+            drone_obj.model if drone_obj else "",
+            130.0
+        )
         if m.battery_id and str(m.battery_id) in battery_by_id:
-            drone_capacity_wh = float(battery_by_id[str(m.battery_id)].capacity_wh or 100.0)
-        else:
-            origin_bats = [
-                b for b in all_batteries
-                if b.status == batteries_status.ACTIVE and b.current_hub_id == m.origin_hub_id
-            ]
-            if origin_bats:
-                drone_capacity_wh = float(max(b.capacity_wh or 100.0 for b in origin_bats))
+            b_obj = battery_by_id[str(m.battery_id)]
+            if b_obj.capacity_wh:
+                drone_capacity_wh = float(b_obj.capacity_wh)
+        elif drone_obj:
+            _, drone_capacity_wh = await _resolve_drone_battery_capacity_wh(db, drone_obj, all_batteries)
 
         m_legs = legs_by_mission.get(m.id, [])
         legs_detail: list[RouteLegSchema] = []
         relay_hubs: list[str] = []
+        leg_energies: list[float] = []
 
         if m_legs:
             for idx, leg in enumerate(m_legs):
@@ -1258,7 +1403,8 @@ async def build_missions_response_list(
                     h1.latitude or 0, h1.longitude or 0,
                     h2.latitude or 0, h2.longitude or 0
                 ) if (h1 and h2) else 0.0
-                e = predict_flight_energy(d, payload)["energy_wh"]
+                e = float(predict_flight_energy(d, payload)["energy_wh"])
+                leg_energies.append(e)
 
                 legs_detail.append(
                     RouteLegSchema(
@@ -1298,6 +1444,8 @@ async def build_missions_response_list(
                         h2.latitude or 0, h2.longitude or 0
                     ) if (h1 and h2) else 0.0
                 )
+                e = float(predict_flight_energy(d, payload)["energy_wh"])
+                leg_energies.append(e)
                 legs_detail.append(
                     RouteLegSchema(
                         from_hub_code=from_code,
@@ -1323,23 +1471,21 @@ async def build_missions_response_list(
         if ai_pred and ai_pred.estimated_energy_wh is not None:
             pred_energy = round(float(ai_pred.estimated_energy_wh), 2)
         else:
-            pred_energy = round(
-                sum(predict_flight_energy(l.distance_km, payload)["energy_wh"] for l in legs_detail),
-                2
-            )
+            pred_energy = round(sum(leg_energies), 2)
 
         if ai_pred and ai_pred.estimated_duration_m is not None:
             pred_duration = int(ai_pred.estimated_duration_m)
         else:
             pred_duration = int(dist_km * 2)
 
-        batt_pct = int((pred_energy / drone_capacity_wh) * 100) if drone_capacity_wh else 50
+        max_leg_energy_wh = max(leg_energies) if len(leg_energies) > 1 else pred_energy
+        batt_pct = int(round((max_leg_energy_wh / drone_capacity_wh) * 100)) if drone_capacity_wh else 50
         rem_batt_pct = max(0, 100 - batt_pct)
 
         if ai_pred and ai_pred.risk_level:
             risk = str(ai_pred.risk_level).upper()
         else:
-            risk = "LOW" if pred_energy < drone_capacity_wh * 0.6 else ("MEDIUM" if pred_energy < drone_capacity_wh * 0.8 else "HIGH")
+            risk = "LOW" if max_leg_energy_wh < drone_capacity_wh * 0.6 else ("MEDIUM" if max_leg_energy_wh <= drone_capacity_wh * 0.8 else "HIGH")
 
         conf_pct = 90 if risk == "LOW" else (85 if risk == "MEDIUM" else 75)
         reason = (
@@ -1403,7 +1549,7 @@ async def analyze_mission_planning(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db)
 ):
-    order = await db.get(Order, request.orderId)
+    order = await db.get(Order, request.orderId.strip() if request.orderId else request.orderId)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
@@ -1422,14 +1568,16 @@ async def create_mission(
     
     - **Mục đích**: Chính thức xác nhận tạo chuyến bay để giao một Order cụ thể.
     - **Hoạt động**:
-        1. Validate `Order` bắt buộc phải đang ở trạng thái `PENDING`.
-        2. Chặn tạo trùng lặp nếu Order đã có Mission đang chờ hoặc đang bay.
-        3. Khớp thông tin tuyến đường Operator đã chọn (`routeId`).
-        4. Tạo bản ghi `Mission` trong Database với trạng thái `SCHEDULED` và cự ly `distance_m`.
-        5. Tạo chi tiết các chặng bay `MissionLeg` (`sequence_no`, `from_hub_id`, `to_hub_id`, `status='PENDING'`).
-        6. Lưu snapshot dự đoán AI vào `AIPrediction` và `AIRecommendation`.
+        1. Validate `Order` bắt buộc phải đang ở trạng thái `AT_HUB` (Technician đã nhận hàng).
+        2. Chặn tạo trùng lặp nếu Order hoặc Drone đã có Mission đang chờ hoặc đang bay.
+        3. Khớp thông tin tuyến đường Operator đã chọn (`routeId`) và kiểm tra lại tính khả thi
+           (năng lượng từng chặng <= 80% dung lượng pin thực tế + pin sẵn sàng tại Relay Hub).
+        4. Giữ chỗ nguồn pin tại Origin Hub (qua `Mission.battery_id` & `MissionLeg[0].battery_id`)
+           và giữ chỗ công suất pin tại các Relay Hub (qua các `MissionLeg` trung gian `PENDING`).
+        5. Tạo bản ghi `Mission`, `MissionLeg`, `AIPrediction`, `AIRecommendation`.
     """
-    order = await db.get(Order, request.orderId)
+    clean_order_id = request.orderId.strip() if request.orderId else request.orderId
+    order = await db.get(Order, clean_order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
@@ -1439,14 +1587,22 @@ async def create_mission(
     if order.status != OrderStatus.AT_HUB:
         raise HTTPException(
             status_code=400,
-            detail=f"Order đang ở trạng thái '{order.status.value}'. Chỉ tạo mission khi hàng đã có mặt tại hub (AT_HUB)."
+            detail=f"Order đang ở trạng thái '{order.status.value}'. Chỉ tạo mission khi Technician đã xác nhận nhận hàng tại hub (AT_HUB)."
         )
+
+    active_statuses = [
+        MissionStatus.SCHEDULED,
+        MissionStatus.IN_PROGRESS,
+        MissionStatus.APPROVED,
+        MissionStatus.FLYING,
+        MissionStatus.ACTIVE_MISSION,
+    ]
 
     # Kiểm tra xem đơn hàng đã có Mission active chưa
     existing_mission_res = await db.execute(
         select(Mission).where(
-            Mission.order_id == request.orderId,
-            Mission.status.in_([MissionStatus.SCHEDULED, MissionStatus.IN_PROGRESS])
+            Mission.order_id == order.id,
+            Mission.status.in_(active_statuses)
         )
     )
     if existing_mission_res.scalars().first():
@@ -1459,21 +1615,36 @@ async def create_mission(
     if not drone:
         raise HTTPException(status_code=404, detail="Drone not found")
 
-    # Tái hiện các tùy chọn tuyến đường để khớp với routeId mà Operator đã chọn
+    # Kiểm tra Drone chưa bị gán cho một Mission active khác
+    busy_drone_res = await db.execute(
+        select(Mission).where(
+            Mission.drone_id == drone.id,
+            Mission.status.in_(active_statuses)
+        )
+    )
+    busy_mission = busy_drone_res.scalars().first()
+    if busy_mission:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Drone #{drone.id} ({drone.name}) hiện đã được phân công cho nhiệm vụ {busy_mission.id}."
+        )
+
+    # Tái hiện các tùy chọn tuyến đường và chạy lại bước kiểm tra battery feasibility + 20% reserve
     routes_schemas, raw_data_list = await compute_mission_routes_internal(db, order, request.droneId)
 
     selected_schema = None
     selected_data = None
-    for s, d in zip(routes_schemas, raw_data_list):
-        if s.routeId == request.routeId:
-            selected_schema = s
-            selected_data = d
-            break
+    if request.routeId:
+        for s, d in zip(routes_schemas, raw_data_list):
+            if s.routeId == request.routeId:
+                selected_schema = s
+                selected_data = d
+                break
 
-    # Nếu không khớp chính xác routeId, chọn tuyến recommended hoặc tuyến đầu tiên
+    # Nếu không truyền routeId hoặc routeId không nằm trong danh sách, ưu tiên tuyến recommended khả thi
     if not selected_data and routes_schemas:
         for s, d in zip(routes_schemas, raw_data_list):
-            if s.recommended:
+            if s.recommended and s.feasible:
                 selected_schema = s
                 selected_data = d
                 break
@@ -1481,34 +1652,59 @@ async def create_mission(
             selected_schema = routes_schemas[0]
             selected_data = raw_data_list[0]
 
-    # ── Guard: chặn tạo mission nếu tuyến không khả thi về pin ──────────────
+    # ── Guard: chặn tạo mission nếu tuyến không khả thi về năng lượng hoặc pin Relay Hub ──
     if selected_schema and not selected_schema.feasible:
         raise HTTPException(
             status_code=400,
             detail=(
                 f"Không thể tạo mission: Tuyến '{selected_schema.route_string}' không khả thi. "
-                f"{selected_schema.infeasible_reason or 'Thiếu pin tương thích tại Hub trung gian.'} "
-                f"Vui lòng chọn tuyến khác hoặc đảm bảo Hub có pin sẵn sàng trước khi Assign."
+                f"{selected_schema.infeasible_reason or 'Thiếu pin tương thích tại Hub trung gian hoặc vượt mức dự phòng 20%.'} "
+                f"Vui lòng chọn tuyến khả thi khác hoặc đảm bảo Hub có pin sẵn sàng trước khi Assign."
             )
         )
 
-    # Tìm pin khả dụng của Drone hoặc pin tại Origin Hub
+    # Tìm và giữ chỗ pin tương thích khả dụng của Drone hoặc pin tại Origin Hub
+    compatible_models = await get_compatible_battery_models(db, drone.model)
+    reserved_bat_res = await db.execute(
+        select(Mission.battery_id).where(
+            Mission.status.in_(active_statuses),
+            Mission.battery_id.is_not(None),
+        )
+    )
+    reserved_bat_ids = {row[0] for row in reserved_bat_res.all() if row[0]}
+
+    # 1. Ưu tiên pin đang lắp sẵn trên Drone (nếu tương thích, sạc >= 100% và chưa bị giữ bởi mission khác)
     result = await db.execute(
         select(Battery).where(
             Battery.drone_id == drone.id,
-            Battery.status == batteries_status.ACTIVE
+            Battery.status == batteries_status.ACTIVE,
         )
     )
-    assigned_battery = result.scalars().first()
+    drone_batteries = [
+        b for b in result.scalars().all()
+        if b.id not in reserved_bat_ids
+        and (not compatible_models or (b.battery_model and b.battery_model in compatible_models))
+        and (b.charge_level_pct or 0) >= 100
+    ]
+    assigned_battery = drone_batteries[0] if drone_batteries else None
+
+    # 2. Nếu Drone chưa gắn sẵn pin 100% tương thích, tìm pin 100% tương thích rảnh tại Origin Hub
     if not assigned_battery:
         result = await db.execute(
             select(Battery).where(
                 Battery.current_hub_id == order.origin_hub_id,
                 Battery.status == batteries_status.ACTIVE,
-                Battery.drone_id.is_(None)
-            )
+                Battery.drone_id.is_(None),
+            ).order_by(Battery.id)
         )
-        assigned_battery = result.scalars().first()
+        hub_batteries = [
+            b for b in result.scalars().all()
+            if b.id not in reserved_bat_ids
+            and (not compatible_models or (b.battery_model and b.battery_model in compatible_models))
+            and (b.charge_level_pct or 0) >= 100
+        ]
+        assigned_battery = hub_batteries[0] if hub_batteries else None
+
     battery_id = assigned_battery.id if assigned_battery else None
 
     mission_id = await generate_sequential_id(db, Mission, "MSN")
@@ -1521,7 +1717,7 @@ async def create_mission(
     # 1. Tạo bản ghi Mission
     mission = Mission(
         id=mission_id,
-        order_id=request.orderId,
+        order_id=order.id,
         customer_id=order.customer_id,
         drone_id=request.droneId,
         battery_id=battery_id,
@@ -1532,6 +1728,7 @@ async def create_mission(
         delivery_fee=order.delivery_fee,
         scheduled_time=order.requested_delivery_at or datetime.now(),
         status=MissionStatus.SCHEDULED,
+        handling_status=HandlingStatus.AT_HUB,
         operator_id=user.id
     )
     db.add(mission)
