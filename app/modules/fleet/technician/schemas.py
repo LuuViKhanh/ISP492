@@ -146,6 +146,8 @@ class MaintenanceAlertResponse(BaseModel):
     handled_by: Optional[str]
     created_at: Optional[datetime]
     handled_at: Optional[datetime]
+    acknowledged_by: Optional[str] = None
+    acknowledged_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

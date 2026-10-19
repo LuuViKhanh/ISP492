@@ -157,6 +157,9 @@ class MaintenanceAlert(Base):
     handled_by: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     handled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # ── Acknowledge fields ────────────────────────────────────────────────────
+    acknowledged_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class MaintenanceSchedule(Base):

@@ -871,6 +871,51 @@ async def get_maintenance_alert(
     return alert
 
 
+@router.patch("/maintenance-alerts/{alert_id}/acknowledge", response_model=MaintenanceAlertResponse)
+async def acknowledge_alert(
+    alert_id: int,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    **Acknowledge một MaintenanceAlert.**
+
+    Technician xác nhận đã nhận và đang xử lý alert này.
+    - Chuyển status từ `Pending` → `Acknowledged`.
+    - Lưu `acknowledged_by` (user.id) và `acknowledged_at` (now).
+    - Không thể acknowledge alert đã `Handled` hoặc đã được người khác acknowledge.
+    - Idempotent: nếu cùng user acknowledge lại thì trả về alert hiện tại (không lỗi).
+    """
+    from datetime import datetime, timezone
+
+    alert = await db.get(MaintenanceAlert, alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    if alert.status == "Handled":
+        raise HTTPException(status_code=400, detail="Alert đã được xử lý (Handled), không thể acknowledge.")
+
+    # Idempotent: nếu cùng user acknowledge lại thì trả về luôn
+    if alert.status == "Acknowledged" and alert.acknowledged_by == user.id:
+        return alert
+
+    # Người khác đã acknowledge rồi
+    if alert.status == "Acknowledged" and alert.acknowledged_by and alert.acknowledged_by != user.id:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Alert này đã được acknowledge bởi technician khác (ID: {alert.acknowledged_by})."
+        )
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    alert.status = "Acknowledged"
+    alert.acknowledged_by = user.id
+    alert.acknowledged_at = now
+
+    await db.commit()
+    await db.refresh(alert)
+    return alert
+
+
 # ── Work Order CRUD ───────────────────────────────────────────────────────────
 
 @router.get("/work-orders", response_model=list[WorkOrderResponse])
