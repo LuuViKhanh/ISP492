@@ -331,6 +331,183 @@ async def get_mission(
     return await build_mission_detail_response(db, mission)
 
 
+# ── Battery Swap (Operator) ───────────────────────────────────────────────────
+
+class BatterySwapOperatorRequest(BaseModel):
+    new_battery_id: str
+
+
+class BatterySwapOperatorResponse(BaseModel):
+    mission_id: str
+    drone_id: int
+    old_battery_id: str
+    new_battery_id: str
+    hub_id: int
+    hub_name: str
+    swap_history_id: int
+    mission_battery_id: str
+    message: str
+
+
+@router.post("/{mission_id}/battery-swap", response_model=BatterySwapOperatorResponse)
+async def operator_battery_swap(
+    mission_id: str,
+    body: BatterySwapOperatorRequest,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    **[Operator] Yêu cầu thay pin cho drone tại hub hiện tại.**
+
+    Endpoint này cho phép Operator chủ động override pin cho mission đang dừng tại hub
+    (trạng thái AT_HUB hoặc READY), bao gồm cả origin hub lẫn relay hub trung gian.
+    Khác với endpoint của Technician (chỉ relay hub + auto-select), endpoint này:
+    - Operator **chọn thẳng** battery_id cần dùng.
+    - Hoạt động ở **mọi hub** (origin hoặc relay).
+    - Không bắt buộc pin phải 100% nhưng phải ≥ 80% (đủ để bay an toàn).
+    - Ghi `MissionBatterySwapHistory` để audit.
+
+    **Điều kiện:**
+    - Mission phải đang dừng tại hub: `handling_status ∈ {AT_HUB, READY, INCOMING}`.
+    - Pin mới phải: ACTIVE, tại đúng hub của drone, chưa gắn drone khác, charge ≥ 80%.
+    """
+    from app.modules.missions.models import MissionBatterySwapHistory
+    from app.modules.fleet.models import Battery, batteries_status
+    from app.modules.system.models import Notification, NotificationType
+
+    # ── 1. Lấy mission và validate ────────────────────────────────────────────
+    mission = await db.get(Mission, mission_id)
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission not found")
+
+    swappable_handling = {
+        HandlingStatus.AT_HUB,
+        HandlingStatus.READY,
+        HandlingStatus.INCOMING,
+    }
+    if mission.handling_status not in swappable_handling:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Mission phải đang dừng tại hub (AT_HUB / READY / INCOMING). "
+                f"Hiện tại: {mission.handling_status.value if mission.handling_status else 'None'}."
+            ),
+        )
+
+    if not mission.drone_id:
+        raise HTTPException(status_code=400, detail="Mission chưa được gán drone.")
+
+    drone = await db.get(Drone, mission.drone_id)
+    if not drone:
+        raise HTTPException(status_code=404, detail="Drone không tìm thấy.")
+
+    # Hub hiện tại của drone
+    hub_id = drone.current_hub_id
+    if not hub_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Drone không đang ở hub nào (current_hub_id is None). Không thể swap pin.",
+        )
+
+    # ── 2. Validate pin mới ───────────────────────────────────────────────────
+    new_battery = await db.get(Battery, body.new_battery_id)
+    if not new_battery:
+        raise HTTPException(status_code=404, detail=f"Pin '{body.new_battery_id}' không tìm thấy.")
+
+    if new_battery.status != batteries_status.ACTIVE:
+        raise HTTPException(status_code=400, detail=f"Pin {new_battery.id} không ở trạng thái Active.")
+
+    if new_battery.current_hub_id != hub_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Pin {new_battery.id} không thuộc hub hiện tại của drone "
+                f"(Hub #{hub_id}). Pin đang ở Hub #{new_battery.current_hub_id}."
+            ),
+        )
+
+    if new_battery.drone_id is not None and new_battery.drone_id != mission.drone_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Pin {new_battery.id} đang gắn trên drone khác ({new_battery.drone_id}).",
+        )
+
+    charge = new_battery.charge_level_pct or 0
+    if charge < 80:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Pin {new_battery.id} chỉ còn {charge}% — không đủ để bay an toàn (yêu cầu ≥ 80%).",
+        )
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    old_battery_id = mission.battery_id or ""
+
+    # ── 3. Tháo pin cũ ────────────────────────────────────────────────────────
+    if old_battery_id and old_battery_id != new_battery.id:
+        old_battery = await db.get(Battery, old_battery_id)
+        if old_battery:
+            old_battery.drone_id = None
+            old_battery.current_hub_id = hub_id  # pin cũ ở lại hub để sạc
+
+    # ── 4. Gán pin mới ────────────────────────────────────────────────────────
+    new_battery.drone_id = mission.drone_id
+    new_battery.current_hub_id = hub_id
+    mission.battery_id = new_battery.id
+
+    # ── 5. Ghi lịch sử swap ──────────────────────────────────────────────────
+    swap_record = MissionBatterySwapHistory(
+        mission_id=mission.id,
+        hub_id=hub_id,
+        old_battery_id=old_battery_id or None,
+        new_battery_id=new_battery.id,
+        swapped_at=now,
+    )
+    db.add(swap_record)
+    await db.flush()
+
+    # ── 6. Notify ─────────────────────────────────────────────────────────────
+    hub = await db.get(Hub, hub_id)
+    hub_name = hub.name if hub else str(hub_id)
+
+    from app.modules.auth.models import User as _User, ROLE_NAME_TO_ID as _ROLE_MAP
+    from app.shared.roles import UserRole as _Role
+    tech_role_id = _ROLE_MAP.get(_Role.TECHNICIAN)
+    tech_result = await db.execute(
+        select(_User.id).where(_User.role_id == tech_role_id)
+    )
+    technician_ids = tech_result.scalars().all()
+
+    for tech_id in technician_ids:
+        db.add(Notification(
+            user_id=tech_id,
+            title=f"🔋 Operator yêu cầu thay pin — Mission #{mission_id}",
+            message=(
+                f"Operator {user.id} đã swap pin cho Mission #{mission_id} tại {hub_name}. "
+                f"Pin cũ: {old_battery_id or 'N/A'} → Pin mới: {new_battery.id} ({charge}%)."
+            ),
+            notifications_type=NotificationType.MISSION_STATUS,
+            mission_id=str(mission.id),
+            created_at=now,
+        ))
+
+    await db.commit()
+
+    return BatterySwapOperatorResponse(
+        mission_id=str(mission.id),
+        drone_id=mission.drone_id,
+        old_battery_id=old_battery_id or "N/A",
+        new_battery_id=new_battery.id,
+        hub_id=hub_id,
+        hub_name=hub_name,
+        swap_history_id=swap_record.id,
+        mission_battery_id=mission.battery_id,
+        message=(
+            f"Swap pin thành công. Mission #{mission_id} tại {hub_name}: "
+            f"pin {old_battery_id or 'cũ'} → {new_battery.id} ({charge}%)."
+        ),
+    )
+
+
 # ── Transit Confirm ───────────────────────────────────────────────────────────
 
 class TransitConfirmRequest(BaseModel):
