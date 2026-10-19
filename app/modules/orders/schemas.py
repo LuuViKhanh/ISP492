@@ -27,6 +27,9 @@ class OrderResponse(BaseModel):
     estimated_window_start: Optional[datetime] = None
     estimated_window_end: Optional[datetime] = None
     planning_at: Optional[datetime] = None
+    # Aging Priority fields
+    is_aging_priority: bool = False
+    aging_deadline: Optional[datetime] = None
 
     class Config:
         from_attributes = True

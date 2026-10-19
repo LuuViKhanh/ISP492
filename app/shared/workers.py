@@ -323,3 +323,87 @@ async def run_pickup_reminder_watcher(db: AsyncSession):
             ))
 
     await db.commit()
+
+
+# ── Hằng số cho Aging Priority ──────────────────────────────────────
+from app.modules.missions.models import DeliveryMode as _DeliveryMode
+
+
+async def run_aging_priority_watcher(db: AsyncSession):
+    """
+    Worker: Tự động đánh dấu Aging Priority cho đơn NORMAL khi sắp hết deadline.
+
+    Logic:
+    - Quét các đơn NORMAL + PENDING + chưa có mission + is_aging_priority=False.
+    - Nếu now >= aging_deadline → set is_aging_priority=True + notify tất cả Operators.
+    - KHÔNG thay đổi bất cứ thứ gì của SCHEDULED orders (đúng với yêu cầu
+      "không ảnh hưởng tới schedule").
+
+    Mỗi đơn chỉ được nâng cấp 1 lần (dedup bằng is_aging_priority flag).
+    """
+    from app.modules.missions.models import Order, OrderStatus, Mission
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    # Lấy đơn NORMAL đủ điều kiện nâng cấp
+    result = await db.execute(
+        select(Order).where(
+            and_(
+                Order.delivery_mode == _DeliveryMode.NORMAL,
+                Order.status == OrderStatus.PENDING,
+                Order.is_aging_priority == False,     # noqa: E712
+                Order.aging_deadline.isnot(None),
+                Order.aging_deadline <= now,
+            )
+        )
+    )
+    normal_orders = result.scalars().all()
+
+    if not normal_orders:
+        return
+
+    operator_ids = await get_operator_ids(db)
+
+    for order in normal_orders:
+        # Kiểm tra đơn này đã có mission chưa (nếu đã có thì không cần notify)
+        mission_check = await db.execute(
+            select(Mission).where(Mission.order_id == order.id).limit(1)
+        )
+        if mission_check.scalar_one_or_none():
+            # Đã có mission → bỏ qua, không cần Aging Priority
+            continue
+
+        # Nâng cấp lên Aging Priority
+        order.is_aging_priority = True
+        order.updated_at = now
+
+        # Notify Customer
+        if order.customer_id:
+            db.add(Notification(
+                user_id=order.customer_id,
+                title="Đơn hàng của bạn đang được ưu tiên xử lý",
+                message=(
+                    f"Đơn hàng #{order.id} đã được nâng lên Aging Priority để đảm bảo "
+                    f"giao hàng đúng thời gian cam kết của bạn."
+                ),
+                notifications_type=NotificationType.MISSION_STATUS,
+                reference_id=str(order.id),
+                created_at=now,
+            ))
+
+        # Notify Operators — cần lên lịch bay gấp
+        for op_id in operator_ids:
+            db.add(Notification(
+                user_id=op_id,
+                title="⚡ Aging Priority: Cần lên lịch bay gấp",
+                message=(
+                    f"Đơn #{order.id} (NORMAL mode) đã đạt Aging Priority. "
+                    f"Deadline giao hàng: {order.estimated_window_end.strftime('%H:%M %d/%m') if order.estimated_window_end else 'N/A'}. "
+                    f"Vui lòng lên lịch mission ngay để không vi phạm cam kết."
+                ),
+                notifications_type=NotificationType.MISSION_STATUS,
+                reference_id=str(order.id),
+                created_at=now,
+            ))
+
+    await db.commit()
