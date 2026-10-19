@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Union
 from datetime import datetime
 from app.modules.missions.models import OrderStatus, DeliveryMode
 
@@ -21,6 +21,8 @@ class OrderResponse(BaseModel):
     destination_hub: Optional[HubSchema] = None
     delivery_mode: Optional[DeliveryMode]
     status: OrderStatus
+    payment_status: Optional[str] = None
+    mission_id: Optional[str] = None
     planningState: Optional[str] = None
     originPackage: Optional[OriginPackageSchema] = None
     requested_delivery_at: Optional[datetime] = None
@@ -34,10 +36,28 @@ class OrderResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class BatteryEligibleSchema(BaseModel):
+    id: str
+    serial_number: str
+    battery_model: Optional[str] = None
+    capacity_wh: float
+    charge_level_pct: Optional[int] = None
+    available_energy_wh: float
+    current_hub_id: Optional[int] = None
+    drone_id: Optional[int] = None
+    is_installed_on_drone: bool = False
+    available_status: Optional[str] = "Ready"
+
 class DroneEligibleSchema(BaseModel):
     id: int
+    name: Optional[str] = None
     model: str
     maxPayloadKg: float
+    battery_level_pct: Optional[int] = None
+    installed_battery_id: Optional[str] = None
+    default_battery_id: Optional[str] = None
+    compatible_battery_models: List[str] = []
+    eligible_batteries: List[BatteryEligibleSchema] = []
 
 class HubEligibleSchema(BaseModel):
     id: int
@@ -48,6 +68,18 @@ class HubEligibleSchema(BaseModel):
 class EligibleDronesResponse(BaseModel):
     hub: HubEligibleSchema
     drones: List[DroneEligibleSchema]
+    batteries: List[BatteryEligibleSchema] = []
+
+class EligibleBatteriesResponse(BaseModel):
+    order_id: Optional[str] = None
+    hub_id: int
+    hub_name: Optional[str] = None
+    drone_id: Union[str, int]
+    drone_name: Optional[str] = None
+    drone_model: str
+    compatible_battery_models: List[str] = []
+    default_battery_id: Optional[str] = None
+    batteries: List[BatteryEligibleSchema] = []
 
 
 # ======================================================================

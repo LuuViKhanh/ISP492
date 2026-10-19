@@ -23,6 +23,7 @@ from sqlalchemy import select
 from datetime import datetime, timezone
 from pydantic import BaseModel
 from typing import Optional
+from app.core.timezone import get_vn_naive_datetime
 
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
@@ -149,7 +150,7 @@ async def create_checkout(
         raise HTTPException(status_code=400, detail=f"PayOS lỗi: {str(e)}")
 
     # Lưu vào DB — bao gồm VietQR fields để reuse sau
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
     res_data = response.to_json()
     order.payment_status        = PaymentStatus.PENDING
     order.payment_order_code    = order_code
@@ -204,7 +205,7 @@ async def get_payment_status(
             info_data = payment_info.to_json() if hasattr(payment_info, "to_json") else {}
             remote_status = str(info_data.get("status", "")).upper()
             if remote_status == "PAID":
-                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                now = get_vn_naive_datetime()
                 order.payment_status = PaymentStatus.PAID
                 order.paid_at = now
                 order.updated_at = now
@@ -217,7 +218,7 @@ async def get_payment_status(
                 await db.refresh(order)
             elif remote_status in ("CANCELLED", "EXPIRED"):
                 order.payment_status = PaymentStatus.FAILED
-                order.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                order.updated_at = get_vn_naive_datetime()
                 await db.commit()
                 await db.refresh(order)
         except Exception:
@@ -296,7 +297,7 @@ async def payos_webhook(
     if not order:
         return JSONResponse(status_code=200, content={"message": "Order not found, ignored"})
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
 
     if status_code == "00":
         order.payment_status         = PaymentStatus.PAID
@@ -375,7 +376,7 @@ async def cancel_payment(
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"PayOS lỗi: {str(e)}")
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
     order.payment_status = PaymentStatus.CANCELLED
     order.updated_at     = now
     await db.commit()

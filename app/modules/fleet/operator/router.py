@@ -7,7 +7,7 @@ from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
 from app.modules.fleet.models import Drone, Battery, DroneStatus, batteries_status, BatteryAvailableStatus, compute_battery_available_status
 from app.modules.system.models import Hub
-from typing import Optional
+from typing import Optional, Union
 from pydantic import BaseModel
 from datetime import datetime
 
@@ -19,7 +19,7 @@ allow_operator = RoleChecker([UserRole.OPERATOR, UserRole.ADMIN])
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
 class DroneOverviewResponse(BaseModel):
-    id: int
+    id: Union[str, int]
     name: str
     model: str
     payload_capacity_kg: float
@@ -84,7 +84,7 @@ async def list_all_drones(
 
 @router.get("/drones/{drone_id}", response_model=DroneOverviewResponse, summary="Chi tiết một drone")
 async def get_drone(
-    drone_id: int,
+    drone_id: str,
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):

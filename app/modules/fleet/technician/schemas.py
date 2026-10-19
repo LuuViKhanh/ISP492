@@ -5,7 +5,7 @@ from app.modules.fleet.models import DroneStatus, WorkOrderStatus
 
 
 class DroneProfileResponse(BaseModel):
-    id: int
+    id: Union[str, int]
     name: str
     model: str
     payload_capacity_kg: float
@@ -64,7 +64,7 @@ class DroneStatusUpdate(BaseModel):
 
 class MaintenanceHistoryItem(BaseModel):
     id: int
-    drone_id: int
+    drone_id: Optional[Union[str, int]] = None
     battery_id: Optional[str] = None
     technician_id: str
     issue_description: str
@@ -98,7 +98,7 @@ class InspectionItemCreate(BaseModel):
 
 class MaintenanceRecordCreate(BaseModel):
     work_order_id: int
-    drone_id: int
+    drone_id: Union[str, int]
     title: Optional[str] = None
     diagnosis: Optional[str] = None
     corrective_action: Optional[str] = None
@@ -109,7 +109,7 @@ class MaintenanceRecordCreate(BaseModel):
 class MaintenanceRecordResponse(BaseModel):
     id: int
     work_order_id: Optional[int]
-    drone_id: Optional[int]
+    drone_id: Optional[Union[str, int]] = None
     performed_by: Optional[str]
     title: Optional[str]
     diagnosis: Optional[str]
@@ -138,7 +138,7 @@ class WorkOrderLogResponse(BaseModel):
 
 class MaintenanceAlertResponse(BaseModel):
     id: int
-    drone_id: Optional[int]
+    drone_id: Optional[Union[str, int]] = None
     source: Optional[str]
     title: Optional[str]
     status: Optional[str]
@@ -155,7 +155,7 @@ class MaintenanceAlertResponse(BaseModel):
 
 class MaintenanceScheduleResponse(BaseModel):
     id: int
-    drone_id: Optional[int]
+    drone_id: Optional[Union[str, int]] = None
     maintenance_type: Optional[str]
     interval_days: Optional[int]
     interval_flight_hours: Optional[float]
@@ -170,7 +170,7 @@ class MaintenanceScheduleResponse(BaseModel):
 
 
 class MaintenanceScheduleCreate(BaseModel):
-    drone_id: int
+    drone_id: Union[str, int]
     maintenance_type: str
     interval_days: Optional[int] = None
     interval_flight_hours: Optional[float] = None
