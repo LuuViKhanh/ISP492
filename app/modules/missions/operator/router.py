@@ -331,6 +331,179 @@ async def get_mission(
     return await build_mission_detail_response(db, mission)
 
 
+# ── Transit Confirm ───────────────────────────────────────────────────────────
+
+class TransitConfirmRequest(BaseModel):
+    note: str = ""
+
+
+class TransitConfirmResponse(BaseModel):
+    mission_id: str
+    confirmed_leg_id: int
+    confirmed_leg_sequence: int
+    next_leg_id: int
+    next_leg_sequence: int
+    relay_hub_id: int
+    relay_hub_name: str
+    mission_status: str
+    handling_status: str
+    message: str
+
+
+@router.post("/{mission_id}/transit-confirm", response_model=TransitConfirmResponse)
+async def transit_confirm(
+    mission_id: str,
+    body: TransitConfirmRequest = TransitConfirmRequest(),
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    **[Operator] Xác nhận transit relay hub — cho phép chuyến bay tiếp tục chặng kế tiếp.**
+
+    Đây là bước Operator authorize sau khi Technician đã hoàn tất chuẩn bị tại relay hub
+    (confirm-relay-arrival → swap-battery → dispatch đã do Technician thực hiện, hoặc
+    Operator có thể tự kích hoạt toàn bộ luồng này nếu không cần swap pin).
+
+    **Điều kiện:** Mission có ít nhất 2 MissionLegs (multi-hop route), và có leg đang
+    PENDING chờ bay tiếp.
+
+    **Luồng xử lý:**
+    1. Validate: mission phải đang FLYING / IN_PROGRESS / AT_HUB (handling).
+    2. Tìm leg COMPLETED gần nhất để biết relay hub hiện tại.
+    3. Tìm leg PENDING tiếp theo để kích hoạt.
+    4. Cập nhật next_leg → IN_PROGRESS, started_at = now.
+    5. Cập nhật mission.status → FLYING, handling_status → INCOMING.
+    6. Cập nhật drone.status → In Flight, drone.current_hub_id → None.
+    7. Ghi AuditLog + Notify Operators.
+    """
+    from app.modules.missions.models import MissionLeg, MissionLegStatus
+    from app.modules.fleet.models import DroneStatus
+    from app.modules.system.models import Notification, NotificationType
+    from app.modules.auth.models import User, ROLE_NAME_TO_ID
+    from app.shared.roles import UserRole as _Role
+
+    mission = await db.get(Mission, mission_id)
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission not found")
+
+    # Validate trạng thái mission
+    valid_statuses = {
+        MissionStatus.FLYING,
+        MissionStatus.IN_PROGRESS,
+        MissionStatus.ACTIVE_MISSION,
+        MissionStatus.APPROVED,
+        MissionStatus.SCHEDULED,
+    }
+    if mission.status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Mission đang ở trạng thái '{mission.status.value}' — không thể transit-confirm. "
+                f"Chỉ áp dụng cho mission đang hoạt động."
+            ),
+        )
+
+    # Lấy tất cả legs theo thứ tự
+    legs_result = await db.execute(
+        select(MissionLeg)
+        .where(MissionLeg.mission_id == mission.id)
+        .order_by(MissionLeg.sequence_no)
+    )
+    legs = legs_result.scalars().all()
+
+    if len(legs) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Đây là tuyến bay thẳng (1 leg) — không có relay hub cần transit-confirm. "
+                   "Dùng confirm-arrival để kết thúc chuyến bay.",
+        )
+
+    # Tìm next_leg PENDING đầu tiên
+    next_leg = next(
+        (leg for leg in legs if leg.status == MissionLegStatus.PENDING), None
+    )
+    if next_leg is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Không tìm thấy leg PENDING nào. Tất cả các chặng đã hoàn thành "
+                   "hoặc mission đã kết thúc.",
+        )
+
+    # Leg vừa completed (chặng ngay trước next_leg)
+    completed_leg = next(
+        (leg for leg in reversed(legs) if leg.status == MissionLegStatus.COMPLETED),
+        None,
+    )
+    if completed_leg is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Chưa có chặng nào được hoàn thành. Technician cần confirm-relay-arrival trước.",
+        )
+
+    relay_hub_id = completed_leg.to_hub_id
+    if not relay_hub_id:
+        raise HTTPException(status_code=400, detail="Không xác định được relay hub.")
+
+    relay_hub = await db.get(Hub, relay_hub_id)
+    relay_hub_name = relay_hub.name if relay_hub else str(relay_hub_id)
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    # ── 1. Kích hoạt leg kế tiếp ─────────────────────────────────────────────
+    next_leg.status = MissionLegStatus.IN_PROGRESS
+    next_leg.started_at = now
+
+    # ── 2. Cập nhật mission → FLYING ─────────────────────────────────────────
+    mission.status = MissionStatus.FLYING
+    mission.handling_status = HandlingStatus.INCOMING  # drone đang bay, rời relay hub
+
+    # ── 3. Cập nhật drone → In Flight ────────────────────────────────────────
+    if mission.drone_id:
+        drone = await db.get(Drone, mission.drone_id)
+        if drone:
+            drone.status = DroneStatus.IN_FLIGHT
+            drone.current_hub_id = None  # đang bay, không còn ở hub
+
+    # ── 4. Notify Operators ───────────────────────────────────────────────────
+    op_role_id = ROLE_NAME_TO_ID.get(_Role.OPERATOR)
+    op_result = await db.execute(select(User.id).where(User.role_id == op_role_id))
+    operator_ids = op_result.scalars().all()
+
+    notif_msg = (
+        f"Operator {user.id} đã xác nhận transit tại {relay_hub_name}. "
+        f"Mission #{mission_id} đang bay chặng {next_leg.sequence_no}/{len(legs)} "
+        f"đến hub #{next_leg.to_hub_id}."
+        + (f" Ghi chú: {body.note}" if body.note else "")
+    )
+    for op_id in operator_ids:
+        db.add(Notification(
+            user_id=op_id,
+            title=f"✈️ Transit Confirmed — Mission #{mission_id}",
+            message=notif_msg,
+            notifications_type=NotificationType.MISSION_STATUS,
+            mission_id=str(mission.id),
+            created_at=now,
+        ))
+
+    await db.commit()
+
+    return TransitConfirmResponse(
+        mission_id=str(mission.id),
+        confirmed_leg_id=completed_leg.id,
+        confirmed_leg_sequence=completed_leg.sequence_no or 0,
+        next_leg_id=next_leg.id,
+        next_leg_sequence=next_leg.sequence_no or 0,
+        relay_hub_id=relay_hub_id,
+        relay_hub_name=relay_hub_name,
+        mission_status=mission.status.value,
+        handling_status=mission.handling_status.value if mission.handling_status else "",
+        message=(
+            f"Transit confirmed. Mission #{mission_id} đang bay chặng "
+            f"{next_leg.sequence_no}/{len(legs)} từ {relay_hub_name} → Hub #{next_leg.to_hub_id}."
+        ),
+    )
+
+
 # ── Emergency Land ────────────────────────────────────────────────────────────
 
 class EmergencyLandRequest(BaseModel):
