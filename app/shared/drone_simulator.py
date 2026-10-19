@@ -74,7 +74,12 @@ async def simulate_mission_flight(mission_id: str) -> None:
                 print(f"[SIMULATOR] Mission {mission_id} not found, aborting.")
                 return
 
-            # Lấy leg đang IN_PROGRESS
+            # Mission phải đang FLYING mới chạy simulator
+            if mission.status != MissionStatus.FLYING:
+                print(f"[SIMULATOR] Mission {mission_id} không ở trạng thái FLYING ({mission.status}), aborting.")
+                return
+
+            # Lấy leg đang IN_PROGRESS (leg vừa được dispatch)
             leg_result = await db.execute(
                 select(MissionLeg)
                 .where(
