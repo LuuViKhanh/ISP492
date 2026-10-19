@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1493,6 +1494,14 @@ async def dispatch_drone(
         print(f"[NOTIFICATION] Lỗi gửi thông báo dispatch cho Operator: {e}")
 
     await db.commit()
+
+    # Spawn background task giả lập drone bay theo leg vừa dispatch
+    try:
+        from app.shared.drone_simulator import simulate_mission_flight
+        asyncio.create_task(simulate_mission_flight(str(mission.id)))
+        print(f"[DISPATCH] Spawned simulator task cho mission {mission.id}")
+    except Exception as e:
+        print(f"[DISPATCH] Lỗi spawn simulator: {e}")
 
     return {
         "message": f"Drone đã được dispatch. Bay tiếp chặng {next_leg.sequence_no} → {to_hub_label}.",
