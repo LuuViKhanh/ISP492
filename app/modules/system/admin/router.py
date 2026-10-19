@@ -4,6 +4,7 @@ from sqlalchemy import select, func, cast, Date, and_
 from typing import Optional
 from datetime import datetime, timezone
 
+from app.core.timezone import get_vn_naive_datetime
 from app.database.db import get_async_db
 from app.modules.system.schemas import AuditLogListResponse, HubCreate, HubUpdate, HubResponse, KPIDashboardResponse, KPIChartData
 from app.modules.system.models import Hub
@@ -32,7 +33,7 @@ async def get_audit_logs(
 
 @router.post("/admin/system/hubs", response_model=HubResponse, dependencies=[Depends(require_admin)], status_code=201)
 async def create_hub(body: HubCreate, db: AsyncSession = Depends(get_async_db)):
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
     hub = Hub(
         code=body.code,
         name=body.name,
@@ -62,7 +63,7 @@ async def update_hub(hub_id: int, body: HubUpdate, db: AsyncSession = Depends(ge
     if body.longitude is not None: hub.longitude = body.longitude
     if body.status is not None: hub.status = body.status
     
-    hub.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    hub.updated_at = get_vn_naive_datetime()
     
     await db.commit()
     await db.refresh(hub)

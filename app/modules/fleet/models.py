@@ -51,7 +51,7 @@ class WorkOrderStatus(str, enum.Enum):
 class Drone(Base):
     __tablename__ = "drones"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     model: Mapped[str] = mapped_column(String(100), nullable=False)
     payload_capacity_kg: Mapped[float] = mapped_column(Float, nullable=False)
@@ -68,7 +68,7 @@ class Battery(Base):
     __tablename__ = "batteries"
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True)
-    drone_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("drones.id"), nullable=True)
+    drone_id: Mapped[str | None] = mapped_column(String(50), ForeignKey("drones.id"), nullable=True)
     serial_number: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     capacity_wh: Mapped[float] = mapped_column(Float, nullable=False)
     status: Mapped[batteries_status] = mapped_column(SAEnum(batteries_status, name="batteries_status", create_type=False, values_callable=lambda x: [e.value for e in x]), nullable=False)
