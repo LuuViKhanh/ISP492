@@ -331,6 +331,158 @@ async def get_mission(
     return await build_mission_detail_response(db, mission)
 
 
+# ── Emergency Land ────────────────────────────────────────────────────────────
+
+class EmergencyLandRequest(BaseModel):
+    reason: str = "Operator yêu cầu hạ cánh khẩn cấp"
+
+
+class EmergencyLandResponse(BaseModel):
+    mission_id: str
+    previous_status: str
+    current_status: str
+    incident_id: int
+    alert_id: int
+    message: str
+
+
+@router.post("/{mission_id}/emergency-land", response_model=EmergencyLandResponse)
+async def emergency_land(
+    mission_id: str,
+    body: EmergencyLandRequest = EmergencyLandRequest(),
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    **[Operator] Kích hoạt hạ cánh khẩn cấp cho một chuyến bay đang hoạt động.**
+
+    Luồng xử lý:
+    1. Validate: mission phải đang ở trạng thái FLYING / IN_PROGRESS / ACTIVE_MISSION.
+    2. Chuyển mission status → `INCIDENT_RETURN`.
+    3. Tạo Incident (severity=HIGH, status=OPEN) gắn với mission và drone.
+    4. Tạo MaintenanceAlert yêu cầu kiểm tra kỹ thuật drone.
+    5. Đặt drone về trạng thái MAINTENANCE.
+    6. Gửi thông báo cho tất cả Operators và Customer của đơn hàng.
+    """
+    from pydantic import BaseModel as _BM
+    from app.modules.system.models import Notification, NotificationType
+    from app.modules.auth.models import User, ROLE_NAME_TO_ID
+    from app.shared.roles import UserRole as _Role
+
+    # ── 1. Lấy và validate mission ──────────────────────────────────────────
+    mission = await db.get(Mission, mission_id)
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission not found")
+
+    active_statuses = {
+        MissionStatus.FLYING,
+        MissionStatus.IN_PROGRESS,
+        MissionStatus.ACTIVE_MISSION,
+        MissionStatus.APPROVED,
+    }
+    if mission.status not in active_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Không thể emergency-land mission đang ở trạng thái '{mission.status.value}'. "
+                   f"Chỉ áp dụng cho mission đang hoạt động (Flying/In Progress/Approved)."
+        )
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    previous_status = mission.status.value
+
+    # ── 2. Chuyển mission → INCIDENT_RETURN ─────────────────────────────────
+    mission.status = MissionStatus.INCIDENT_RETURN
+    mission.end_time = now
+
+    # ── 3. Tạo Incident HIGH severity ───────────────────────────────────────
+    incident = Incident(
+        mission_id=mission.id,
+        drone_id=mission.drone_id,
+        reporter_id=user.id,
+        severity=IncidentSeverity.HIGH,
+        description=f"[EMERGENCY LAND] Mission #{mission_id} — {body.reason}",
+        status=IncidentStatus.OPEN,
+        reported_at=now,
+        requires_technical_inspection=True,
+    )
+    db.add(incident)
+    await db.flush()  # lấy incident.id
+
+    # ── 4. Tạo MaintenanceAlert yêu cầu kiểm tra drone ──────────────────────
+    alert = MaintenanceAlert(
+        drone_id=mission.drone_id,
+        source="EmergencyLand",
+        incident_id=incident.id,
+        mission_id=str(mission.id),
+        title=f"Hạ cánh khẩn cấp — Drone #{mission.drone_id} cần kiểm tra ngay",
+        status="Pending",
+        created_at=now,
+    )
+    db.add(alert)
+    await db.flush()  # lấy alert.id
+
+    # ── 5. Đặt drone MAINTENANCE ─────────────────────────────────────────────
+    if mission.drone_id:
+        drone = await db.get(Drone, mission.drone_id)
+        if drone:
+            drone.status = DroneStatus.MAINTENANCE
+
+    # ── 6. Notifications ─────────────────────────────────────────────────────
+    # Lấy danh sách Operator IDs
+    op_role_id = ROLE_NAME_TO_ID.get(_Role.OPERATOR)
+    op_result = await db.execute(
+        select(User.id).where(User.role_id == op_role_id)
+    )
+    operator_ids = op_result.scalars().all()
+
+    notif_title = f"🚨 HẠ CÁNH KHẨN CẤP — Mission #{mission_id}"
+    notif_msg = (
+        f"Operator {user.id} đã kích hoạt emergency-land cho Mission #{mission_id} "
+        f"(Drone #{mission.drone_id}). Lý do: {body.reason}. "
+        f"Drone đã được chuyển sang chế độ MAINTENANCE."
+    )
+
+    for op_id in operator_ids:
+        db.add(Notification(
+            user_id=op_id,
+            title=notif_title,
+            message=notif_msg,
+            notifications_type=NotificationType.SYSTEM_ALERT,
+            mission_id=str(mission.id),
+            reference_id=str(incident.id),
+            created_at=now,
+        ))
+
+    # Notify Customer nếu có
+    if mission.customer_id:
+        db.add(Notification(
+            user_id=mission.customer_id,
+            title="Chuyến bay của bạn gặp sự cố",
+            message=(
+                f"Chuyến bay #{mission_id} đang xử lý sự cố khẩn cấp. "
+                f"Đội ngũ của chúng tôi đang xử lý và sẽ cập nhật sớm nhất có thể."
+            ),
+            notifications_type=NotificationType.MISSION_STATUS,
+            mission_id=str(mission.id),
+            created_at=now,
+        ))
+
+    await db.commit()
+
+    return EmergencyLandResponse(
+        mission_id=str(mission.id),
+        previous_status=previous_status,
+        current_status=MissionStatus.INCIDENT_RETURN.value,
+        incident_id=incident.id,
+        alert_id=alert.id,
+        message=(
+            f"Emergency landing kích hoạt thành công. "
+            f"Incident #{incident.id} và MaintenanceAlert #{alert.id} đã được tạo. "
+            f"Drone #{mission.drone_id} chuyển sang MAINTENANCE."
+        ),
+    )
+
+
 
 '''
 @router.post("/{mission_id}/approve", response_model=MissionResponse)
