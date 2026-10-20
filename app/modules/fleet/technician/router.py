@@ -1515,9 +1515,8 @@ async def dispatch_drone(
         MissionLegStatus,
         Order as OrderModel,
         OrderStatus,
-        Notification,
-        NotificationType,
     )
+    from app.modules.system.models import Notification, NotificationType
     from app.modules.fleet.models import DroneStatus
     from app.shared.workers import get_operator_ids
 
