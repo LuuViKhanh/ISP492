@@ -111,6 +111,8 @@
 | handled_by | VARCHAR | Nullable |
 | created_at | DATETIME | Nullable |
 | handled_at | DATETIME | Nullable |
+| acknowledged_by | VARCHAR(50) | Nullable |
+| acknowledged_at | DATETIME | Nullable |
 
 ### Bảng maintenance_inspection_items
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
@@ -203,6 +205,8 @@
 | :--- | :--- | :--- |
 | id | VARCHAR(50) | **PK**, Non-nullable |
 | order_id | VARCHAR(50) | Nullable |
+| order_code | VARCHAR(50) | Nullable |
+| mission_code | VARCHAR(50) | Nullable |
 | customer_id | VARCHAR | Nullable |
 | operator_id | VARCHAR | Nullable |
 | drone_id | BIGINT | Nullable |
@@ -223,6 +227,23 @@
 | arrived_at | DATETIME | Nullable |
 | arrival_confirmed_by | VARCHAR | Nullable |
 | arrival_confirmed_at | DATETIME | Nullable |
+| route_id | VARCHAR(50) | Nullable |
+| planned_start_at | DATETIME | Nullable |
+| package_receive_deadline_at | DATETIME | Nullable |
+| estimated_arrival_at | DATETIME | Nullable |
+| actual_started_at | DATETIME | Nullable |
+| actual_completed_at | DATETIME | Nullable |
+| predicted_duration_min | INTEGER | Nullable |
+| estimated_energy_wh | DECIMAL(6,2) | Nullable |
+| battery_consumption_pct | INTEGER | Nullable |
+| predicted_remaining_battery_pct | INTEGER | Nullable |
+| confidence_pct | INTEGER | Nullable |
+| risk_level | VARCHAR(50) | Nullable |
+| created_by | VARCHAR(50) | Nullable |
+| created_at | DATETIME | Nullable |
+| updated_at | DATETIME | Nullable |
+| cancel_reason | TEXT | Nullable |
+| failure_reason | TEXT | Nullable |
 
 ### Bảng notifications
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
@@ -246,12 +267,13 @@
 | customer_id | VARCHAR(50) | Nullable |
 | sender_phone | VARCHAR(20) | Nullable |
 | receiver_phone | VARCHAR(20) | Nullable |
+| receiver_email | VARCHAR(255) | Nullable |
 | package_label | VARCHAR(255) | Nullable |
 | package_type | VARCHAR(100) | Nullable |
 | payload_kg | FLOAT | Nullable |
 | origin_hub_id | BIGINT | Nullable |
 | destination_hub_id | BIGINT | Nullable |
-| delivery_mode | VARCHAR(9) | Nullable |
+| delivery_mode | VARCHAR(9) | Nullable — giá trị: `EXPRESS`, `SCHEDULED`, `NORMAL` |
 | requested_delivery_at | DATETIME | Nullable |
 | estimated_window_start | DATETIME | Nullable |
 | estimated_window_end | DATETIME | Nullable |
@@ -271,6 +293,8 @@
 | payment_transaction_id | VARCHAR(100) | Nullable |
 | payment_checkout_url | VARCHAR(500) | Nullable |
 | paid_at | DATETIME | Nullable |
+| is_aging_priority | BOOLEAN | Non-nullable, Default: `false` |
+| aging_deadline | DATETIME | Nullable — `= requested_delivery_at - 2h` khi mode=NORMAL |
 
 ### Bảng password_reset_tokens
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
@@ -330,6 +354,7 @@
 | :--- | :--- | :--- |
 | id | VARCHAR | **PK**, Non-nullable |
 | role_id | VARCHAR | Nullable |
+| username | VARCHAR | Nullable |
 | password_hash | VARCHAR | Nullable |
 | full_name | VARCHAR | Non-nullable |
 | email | VARCHAR | Unique, Non-nullable |
@@ -368,3 +393,54 @@
 | scheduled_at | DATETIME | Nullable |
 | started_at | DATETIME | Nullable |
 | completed_at | DATETIME | Nullable |
+
+### Bảng knowledge_chunks *(RAG Chatbot — Mới)*
+> Lưu trữ các đoạn kiến thức (chunks) được embed bằng Gemini `text-embedding-004` phục vụ RAG Chatbot.
+> Yêu cầu extension `pgvector` được bật trên Supabase.
+
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGSERIAL | **PK**, Non-nullable |
+| role | VARCHAR(50) | Non-nullable, Default: `all` — giá trị: `customer`, `operator`, `technician`, `admin`, `all` |
+| title | VARCHAR(500) | Nullable |
+| content | TEXT | Non-nullable |
+| category | VARCHAR(100) | Nullable |
+| embedding | vector(768) | Nullable — Gemini text-embedding-004 |
+| created_at | DATETIME | Nullable, Default: NOW() |
+
+---
+
+## II. Hướng dẫn Migration khi pull code mới
+
+> **Quy tắc:** Mỗi khi pull code mới về, chạy lệnh sau để đồng bộ database với phiên bản mới nhất:
+
+```bash
+python app/shared/database/migrate_readme_sync.py
+```
+
+Script này idempotent (an toàn khi chạy nhiều lần — dùng `IF NOT EXISTS`).
+
+### Danh sách migration theo thứ tự lịch sử
+
+| Script | Nội dung |
+| :--- | :--- |
+| `migrate_technician_schema.py` | Thêm `arrived_at`, `departed_at`, `arrival_confirmed_*` vào `missions` |
+| `migrate_operator_schema.py` | Tạo bảng `orders`, `mission_legs`, `mission_drone_assignment_history`; thêm Spec VI columns vào `missions` |
+| `migrate_battery_routing_schema.py` | Thêm `battery_id` vào `mission_legs` |
+| `migrate_rag_schema.py` | Tạo bảng `knowledge_chunks` (pgvector) |
+| `migrate_aging_priority_schema.py` | Thêm `is_aging_priority`, `aging_deadline` vào `orders`; thêm giá trị `NORMAL` vào enum `delivery_mode_enum` |
+| `migrate_alert_acknowledge.py` | Thêm `acknowledged_by`, `acknowledged_at` vào `maintenance_alerts` |
+| **`migrate_readme_sync.py`** ← **Chạy cái này** | Gộp TẤT CẢ thay đổi trên vào 1 script duy nhất |
+
+### Yêu cầu bổ sung
+
+- **pgvector extension** phải được bật trên Supabase trước khi chạy `migrate_readme_sync.py`:
+  > Supabase Dashboard → Database → Extensions → `vector` → **Enable**
+- Sau khi migrate RAG xong, seed knowledge base:
+  ```bash
+  # Qua API (cần token Admin):
+  POST /api/v1/admin/chatbot/rag/seed?clear_first=true
+
+  # Hoặc chạy trực tiếp:
+  python app/modules/chatbot/rag/seeder.py
+  ```
