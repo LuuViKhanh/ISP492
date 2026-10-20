@@ -4,6 +4,7 @@ from sqlalchemy import select, delete
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import uuid
+import math
 
 from app.database.db import get_async_db
 from app.shared.dependencies import get_current_user, CurrentUser
@@ -161,10 +162,14 @@ async def estimate_order(
     delivery_fee = core_fee
     now = datetime.now(timezone.utc)
 
+    # Tính thời gian bay từ AI model (vận tốc chuẩn 10 m/s = 36 km/h)
+    flight_duration_sec = dist_km * 1000 / 10.0
+    flight_mins = max(math.ceil(flight_duration_sec / 60.0), 10)
+
     if body.delivery_mode == DeliveryMode.EXPRESS:
         handover_deadline = now + timedelta(hours=3)
         estimated_departure = handover_deadline + timedelta(minutes=30)
-        estimated_arrival = estimated_departure + timedelta(hours=1)
+        estimated_arrival = estimated_departure + timedelta(minutes=flight_mins)
     elif body.delivery_mode == DeliveryMode.NORMAL:
         # NORMAL: cần cam kết thời gian giao, window linh hoạt ±4h
         if not body.requested_delivery_at:
@@ -174,7 +179,7 @@ async def estimate_order(
             req_time = req_time.replace(tzinfo=timezone.utc)
         handover_deadline = req_time - timedelta(hours=4)   # cần giao hàng trước 4h
         estimated_departure = req_time - timedelta(hours=2)
-        estimated_arrival = req_time
+        estimated_arrival = req_time + timedelta(minutes=flight_mins)
     else:
         if not body.requested_delivery_at:
             raise HTTPException(status_code=400, detail="requested_delivery_at is required for SCHEDULED mode")
@@ -183,7 +188,7 @@ async def estimate_order(
             req_time = req_time.replace(tzinfo=timezone.utc)
         handover_deadline = req_time - timedelta(hours=3)
         estimated_departure = req_time
-        estimated_arrival = estimated_departure + timedelta(hours=1)
+        estimated_arrival = estimated_departure + timedelta(minutes=flight_mins)
 
     return OrderEstimateResponse(
         delivery_fee=round(delivery_fee, 2),
@@ -232,25 +237,29 @@ async def create_order(
         has_insurance=getattr(body, "has_insurance", False)
     )
 
+    # Tính thời gian bay từ AI model (vận tốc chuẩn 10 m/s = 36 km/h)
+    flight_duration_sec = dist_km * 1000 / 10.0
+    flight_mins = max(math.ceil(flight_duration_sec / 60.0), 10)
+
     # Tính toán thời gian cam kết theo delivery mode
     req_at_naive = body.requested_delivery_at.replace(tzinfo=None) if body.requested_delivery_at else None
 
     if body.delivery_mode == DeliveryMode.EXPRESS:
         window_start = now + timedelta(hours=3)
-        window_end   = now + timedelta(hours=4, minutes=30)
+        window_end   = window_start + timedelta(minutes=flight_mins + 30)
         order_aging_deadline = None
     elif body.delivery_mode == DeliveryMode.NORMAL:
         if not req_at_naive:
             raise HTTPException(status_code=400, detail="requested_delivery_at là bắt buộc cho chế độ NORMAL.")
         window_start = req_at_naive - timedelta(hours=4)
-        window_end   = req_at_naive
+        window_end   = req_at_naive + timedelta(minutes=flight_mins)
         # Aging deadline = cần lên lịch bay trước 2h so với committed deadline
         order_aging_deadline = req_at_naive - timedelta(hours=2)
     else:  # SCHEDULED
         if not req_at_naive:
             raise HTTPException(status_code=400, detail="requested_delivery_at là bắt buộc cho chế độ SCHEDULED.")
-        window_start = req_at_naive - timedelta(minutes=30)
-        window_end   = req_at_naive + timedelta(minutes=30)
+        window_start = req_at_naive
+        window_end   = req_at_naive + timedelta(minutes=flight_mins + 15)
         order_aging_deadline = None
 
     new_order = Order(

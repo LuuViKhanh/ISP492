@@ -24,6 +24,8 @@ class OrderResponse(BaseModel):
     payment_status: Optional[str] = None
     mission_id: Optional[str] = None
     planningState: Optional[str] = None
+    planning_state_label: Optional[str] = None
+    can_create_mission: bool = False
     originPackage: Optional[OriginPackageSchema] = None
     requested_delivery_at: Optional[datetime] = None
     estimated_window_start: Optional[datetime] = None

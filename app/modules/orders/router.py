@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from app.modules.ai_predictions.service import haversine_distance
 from typing import Union, Optional, List
 import math
 
@@ -51,6 +52,56 @@ FAILED_MISSION_STATUS_STRINGS = {
 }
 
 
+PLANNING_STATE_LABELS = {
+    "WAITING_PACKAGE": "Chờ nhận hàng tại Hub",
+    "READY_FOR_PLANNING": "Sẵn sàng lập lịch",
+    "PLANNED": "Đã lập lịch bay",
+    "FUTURE": "Chưa đến giờ lập lịch",
+    "NEEDS_REPLANNING": "Cần lập lịch lại",
+}
+
+def compute_order_estimated_window(
+    order: Order, 
+    origin_hub: Optional[Hub] = None, 
+    dest_hub: Optional[Hub] = None
+) -> tuple[Optional[datetime], Optional[datetime]]:
+    """
+    Tính toán khung giờ giao hàng dự kiến (estimated_window_start, estimated_window_end).
+    Đảm bảo luôn cộng thời gian bay thực tế từ AI Model (vận tốc chuẩn 10 m/s = 36 km/h)
+    để không bao giờ bị trùng mốc giờ (start == end).
+    """
+    start = order.estimated_window_start
+    end = order.estimated_window_end
+
+    # Nếu DB đã có đủ 2 mốc và không bị trùng nhau -> giữ nguyên
+    if start and end and start != end:
+        return start, end
+
+    # Tính khoảng cách giữa 2 hub
+    if origin_hub and dest_hub and origin_hub.latitude and origin_hub.longitude and dest_hub.latitude and dest_hub.longitude:
+        dist_km = haversine_distance(origin_hub.latitude, origin_hub.longitude, dest_hub.latitude, dest_hub.longitude)
+    else:
+        dist_km = 8.0  # default 8 km
+
+    # AI Model: Vận tốc drone 10 m/s -> flight_mins = (dist_km * 1000 / 10) / 60
+    flight_mins = max(math.ceil((dist_km * 1000 / 10.0) / 60.0), 10)
+
+    base_time = order.requested_delivery_at or order.created_at or get_vn_naive_datetime()
+
+    # Xử lý theo từng delivery_mode
+    d_mode = order.delivery_mode.value if hasattr(order.delivery_mode, "value") else str(order.delivery_mode or "")
+    if d_mode == "EXPRESS":
+        start = base_time + timedelta(hours=1)
+        end = start + timedelta(minutes=flight_mins + 20)
+    elif d_mode == "NORMAL":
+        start = base_time - timedelta(hours=4)
+        end = base_time + timedelta(minutes=flight_mins)
+    else:  # SCHEDULED
+        start = base_time
+        end = base_time + timedelta(minutes=flight_mins + 15)
+
+    return start, end
+
 def calculate_planning_state(order: Order, mission: Mission = None) -> str | None:
     now = get_vn_naive_datetime()
 
@@ -62,9 +113,9 @@ def calculate_planning_state(order: Order, mission: Mission = None) -> str | Non
     ):
         return None
 
-    # 2. Nếu đơn hàng chưa thanh toán hoặc chưa mang tới Hub -> Không ở bước lập lịch
+    # 2. Nếu đơn hàng chưa mang tới Hub hoặc chưa được Technician xác nhận -> Đang ở trạng thái Đợi (WAITING_PACKAGE)
     if order.status != OrderStatus.AT_HUB:
-        return None
+        return "WAITING_PACKAGE"
 
     # 3. Nếu đơn hàng đã có Mission liên kết
     if mission:
@@ -131,6 +182,7 @@ async def list_orders(
                 mission_by_order[m.order_id] = m
 
     response_list = []
+    hub_map_full = {h.id: h for h in hubs}
     for o in orders:
         latest_mission = mission_by_order.get(o.id)
         planning_state = calculate_planning_state(o, latest_mission)
@@ -142,7 +194,23 @@ async def list_orders(
         order_resp.mission_id = latest_mission.id if latest_mission else None
         order_resp.payment_status = o.payment_status.value if hasattr(o.payment_status, "value") else str(o.payment_status or "")
         order_resp.planningState = planning_state
+        order_resp.planning_state_label = PLANNING_STATE_LABELS.get(planning_state)
         order_resp.originPackage = origin_pkg
+
+        # Chỉ cho phép tạo mission khi đơn đã AT_HUB và chưa có mission active
+        ms_val = (latest_mission.status.value if hasattr(latest_mission.status, "value") else str(latest_mission.status or "")).upper() if latest_mission else ""
+        order_resp.can_create_mission = (
+            o.status == OrderStatus.AT_HUB 
+            and (latest_mission is None or ms_val in FAILED_MISSION_STATUS_STRINGS)
+        )
+
+        # Mốc thời gian giao hàng dự kiến có cộng thời gian bay của AI Model
+        ohub = hub_map_full.get(o.origin_hub_id)
+        dhub = hub_map_full.get(o.destination_hub_id)
+        w_start, w_end = compute_order_estimated_window(o, ohub, dhub)
+        order_resp.estimated_window_start = w_start
+        order_resp.estimated_window_end = w_end
+
         if o.origin_hub_id in hub_dict:
             order_resp.origin_hub = HubSchema(id=o.origin_hub_id, name=hub_dict[o.origin_hub_id])
         if o.destination_hub_id in hub_dict:
@@ -190,14 +258,27 @@ async def get_order(
     order_resp.mission_id = latest_mission.id if latest_mission else None
     order_resp.payment_status = order.payment_status.value if hasattr(order.payment_status, "value") else str(order.payment_status or "")
     order_resp.planningState = planning_state
+    order_resp.planning_state_label = PLANNING_STATE_LABELS.get(planning_state)
     order_resp.originPackage = origin_pkg
-    
+
+    ms_val = (latest_mission.status.value if hasattr(latest_mission.status, "value") else str(latest_mission.status or "")).upper() if latest_mission else ""
+    order_resp.can_create_mission = (
+        order.status == OrderStatus.AT_HUB 
+        and (latest_mission is None or ms_val in FAILED_MISSION_STATUS_STRINGS)
+    )
+
+    ohub = None
+    dhub = None
     if order.origin_hub_id:
         ohub = await db.get(Hub, order.origin_hub_id)
         if ohub: order_resp.origin_hub = HubSchema(id=ohub.id, name=ohub.name)
     if order.destination_hub_id:
         dhub = await db.get(Hub, order.destination_hub_id)
         if dhub: order_resp.destination_hub = HubSchema(id=dhub.id, name=dhub.name)
+
+    w_start, w_end = compute_order_estimated_window(order, ohub, dhub)
+    order_resp.estimated_window_start = w_start
+    order_resp.estimated_window_end = w_end
         
     return order_resp
 
