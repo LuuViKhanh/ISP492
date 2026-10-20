@@ -138,14 +138,14 @@ class WorkOrderLogResponse(BaseModel):
 
 class MaintenanceAlertResponse(BaseModel):
     id: int
-    drone_id: Optional[Union[str, int]] = None
-    source: Optional[str]
-    title: Optional[str]
-    status: Optional[str]
-    work_order_id: Optional[int]
-    handled_by: Optional[str]
-    created_at: Optional[datetime]
-    handled_at: Optional[datetime]
+    drone_id: Optional[str] = None
+    source: Optional[str] = None
+    title: Optional[str] = None
+    status: Optional[str] = None
+    work_order_id: Optional[int] = None
+    handled_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    handled_at: Optional[datetime] = None
     acknowledged_by: Optional[str] = None
     acknowledged_at: Optional[datetime] = None
 
