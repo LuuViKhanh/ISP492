@@ -10,7 +10,7 @@ from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
 from app.core.config import settings
-from app.modules.missions.models import Mission, MissionStatus, HandlingStatus, Location, LocationType, Incident, IncidentStatus, IncidentSeverity, TelemetryLog, MissionHubCheckpoint
+from app.modules.missions.models import Mission, MissionStatus, HandlingStatus, Location, LocationType, Incident, IncidentStatus, IncidentSeverity, TelemetryLog, MissionHubCheckpoint, MissionLeg, MissionLegStatus
 from app.modules.system.models import Hub
 from app.modules.fleet.models import MaintenanceAlert
 import heapq
@@ -184,9 +184,128 @@ async def get_live_tracking(
     )
     cp_counts = {row.mission_id: row.cnt for row in cp_counts_result.all()}
 
+    # Lấy thông tin Legs cho các mission đang bay
+    legs_result = await db.execute(
+        select(MissionLeg)
+        .where(MissionLeg.mission_id.in_(mission_ids))
+        .order_by(MissionLeg.sequence_no.asc())
+    )
+    all_legs = legs_result.scalars().all()
+    legs_by_mid = {}
+    hub_ids_to_fetch = set()
+    for l in all_legs:
+        legs_by_mid.setdefault(l.mission_id, []).append(l)
+        if l.from_hub_id:
+            hub_ids_to_fetch.add(l.from_hub_id)
+        if l.to_hub_id:
+            hub_ids_to_fetch.add(l.to_hub_id)
+
+    hubs_map = {}
+    if hub_ids_to_fetch:
+        hubs_res = await db.execute(select(Hub).where(Hub.id.in_(list(hub_ids_to_fetch))))
+        hubs_map = {h.id: h for h in hubs_res.scalars().all()}
+
+    # Lấy drone & battery để lấy % pin
+    drone_ids = [m.drone_id for m in flying_missions if m.drone_id]
+    battery_ids = [m.battery_id for m in flying_missions if m.battery_id]
+    drones_map = {}
+    if drone_ids:
+        d_res = await db.execute(select(Drone).where(Drone.id.in_(drone_ids)))
+        drones_map = {d.id: d for d in d_res.scalars().all()}
+    batteries_map = {}
+    if battery_ids:
+        b_res = await db.execute(select(Battery).where(Battery.id.in_(battery_ids)))
+        batteries_map = {b.id: b for b in b_res.scalars().all()}
+
+    # Lấy trail (50 điểm gần nhất theo thứ tự thời gian tăng dần)
+    trails_by_mid = {}
+    for mid in mission_ids:
+        t_res = await db.execute(
+            select(TelemetryLog)
+            .where(TelemetryLog.mission_id == mid)
+            .order_by(TelemetryLog.timestamp.desc())
+            .limit(50)
+        )
+        recent_logs = list(reversed(t_res.scalars().all()))
+        trails_by_mid[mid] = [
+            {
+                "latitude": t.latitude,
+                "longitude": t.longitude,
+                "altitude": t.altitude,
+                "speed": t.speed,
+                "timestamp": t.timestamp.isoformat() if t.timestamp else None,
+            }
+            for t in recent_logs
+        ]
+
     drones = []
     for mission in flying_missions:
         log = latest_logs.get(mission.id)
+        m_legs = legs_by_mid.get(mission.id, [])
+        legs_data = []
+        curr_leg = None
+        for leg in m_legs:
+            f_hub = hubs_map.get(leg.from_hub_id)
+            t_hub = hubs_map.get(leg.to_hub_id)
+            leg_stat = leg.status.value if hasattr(leg.status, "value") else str(leg.status or "")
+            item = {
+                "id": leg.id,
+                "sequence_no": leg.sequence_no or 1,
+                "status": leg_stat,
+                "from_hub": {
+                    "id": f_hub.id,
+                    "name": f_hub.name,
+                    "latitude": f_hub.latitude,
+                    "longitude": f_hub.longitude,
+                } if f_hub else None,
+                "to_hub": {
+                    "id": t_hub.id,
+                    "name": t_hub.name,
+                    "latitude": t_hub.latitude,
+                    "longitude": t_hub.longitude,
+                } if t_hub else None,
+                "battery_id": leg.battery_id,
+            }
+            legs_data.append(item)
+            if leg.status == MissionLegStatus.IN_PROGRESS:
+                curr_leg = {
+                    "id": item["id"],
+                    "sequence_no": item["sequence_no"],
+                    "status": item["status"],
+                    "from_hub": item["from_hub"],
+                    "to_hub": item["to_hub"],
+                    "assigned_battery_id": item["battery_id"],
+                }
+
+        if not curr_leg and legs_data:
+            pending = [l for l in legs_data if str(l.get("status", "")).upper() == "PENDING"]
+            if pending:
+                p = pending[0]
+                curr_leg = {
+                    "id": p["id"],
+                    "sequence_no": p["sequence_no"],
+                    "status": p["status"],
+                    "from_hub": p["from_hub"],
+                    "to_hub": p["to_hub"],
+                    "assigned_battery_id": p.get("battery_id"),
+                }
+            else:
+                p = legs_data[-1]
+                curr_leg = {
+                    "id": p["id"],
+                    "sequence_no": p["sequence_no"],
+                    "status": p["status"],
+                    "from_hub": p["from_hub"],
+                    "to_hub": p["to_hub"],
+                    "assigned_battery_id": p.get("battery_id"),
+                }
+
+        drone_obj = drones_map.get(mission.drone_id)
+        bat_obj = batteries_map.get(mission.battery_id)
+        bat_pct = drone_obj.battery_level_pct if drone_obj and drone_obj.battery_level_pct is not None else (
+            bat_obj.charge_level_pct if bat_obj and bat_obj.charge_level_pct is not None else None
+        )
+
         drones.append(
             LiveTrackingDrone(
                 mission_id=mission.id,
@@ -197,8 +316,12 @@ async def get_live_tracking(
                 latest_altitude=log.altitude if log else None,
                 latest_speed=log.speed if log else None,
                 latest_battery_voltage=log.battery_voltage if log else None,
+                latest_battery_pct=bat_pct,
                 last_updated=log.timestamp if log else None,
                 checkpoints_passed=cp_counts.get(mission.id, 0),
+                current_leg=curr_leg,
+                legs=legs_data,
+                trail=trails_by_mid.get(mission.id, []),
                 # Weather từ telemetry log mới nhất
                 weather_temperature=log.weather_temperature if log else None,
                 weather_apparent_temp=log.weather_apparent_temp if log else None,

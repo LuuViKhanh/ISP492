@@ -143,6 +143,7 @@ class DroneLocationSchema(BaseModel):
     altitude: Optional[float] = None
     speed: Optional[float] = None
     battery_voltage: Optional[float] = None
+    battery_pct: Optional[int] = None
     last_updated: Optional[datetime] = None
 
 
@@ -150,6 +151,39 @@ class RoutePointSchema(BaseModel):
     latitude: float
     longitude: float
     name: Optional[str] = None
+
+
+class TrackingHubSchema(BaseModel):
+    id: Optional[int] = None
+    name: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+
+class TrackingLegSchema(BaseModel):
+    id: Optional[int] = None
+    sequence_no: int
+    status: Optional[str] = None
+    from_hub: Optional[TrackingHubSchema] = None
+    to_hub: Optional[TrackingHubSchema] = None
+    battery_id: Optional[str] = None
+
+
+class TrackingCurrentLegSchema(BaseModel):
+    id: Optional[int] = None
+    sequence_no: int
+    status: Optional[str] = None
+    from_hub: Optional[TrackingHubSchema] = None
+    to_hub: Optional[TrackingHubSchema] = None
+    assigned_battery_id: Optional[str] = None
+
+
+class TrailPointSchema(BaseModel):
+    latitude: float
+    longitude: float
+    altitude: Optional[float] = None
+    speed: Optional[float] = None
+    timestamp: Optional[datetime] = None
 
 
 class TrackingResponse(BaseModel):
@@ -166,6 +200,9 @@ class TrackingResponse(BaseModel):
     destination: Optional[RoutePointSchema] = None
     travelled_path: List[RoutePointSchema] = []
     checkpoints_passed: int = 0
+    current_leg: Optional[TrackingCurrentLegSchema] = None
+    legs: List[TrackingLegSchema] = []
+    trail: List[TrailPointSchema] = []
 
 
 # ── Mission Report ────────────────────────────────────────────────────
