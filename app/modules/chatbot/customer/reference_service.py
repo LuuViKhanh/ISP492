@@ -185,6 +185,7 @@ class CustomerHelpService:
         "mode": "delivery_modes",
         "express": "delivery_modes",
         "scheduled": "delivery_modes",
+        "normal": "delivery_modes",
         "handover": "handover_deadline",
         "deadline": "handover_deadline",
         "dropoff": "handover_deadline",
@@ -403,6 +404,9 @@ class CustomerStatusService:
         if order.delivery_mode == DeliveryMode.EXPRESS:
             if order.created_at:
                 handover_deadline = order.created_at + timedelta(hours=3)
+        elif order.delivery_mode == DeliveryMode.NORMAL:
+            if order.created_at:
+                handover_deadline = order.created_at + timedelta(hours=2)
         elif order.delivery_mode == DeliveryMode.SCHEDULED:
             if order.requested_delivery_at:
                 handover_deadline = order.requested_delivery_at - timedelta(hours=3)
