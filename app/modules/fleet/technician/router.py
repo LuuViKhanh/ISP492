@@ -1439,6 +1439,48 @@ async def swap_battery_at_relay(
     }
 
 
+@router.post("/missions/{mission_id}/ready", summary="Technician xác nhận drone đã sẵn sàng bay")
+async def mark_mission_ready(
+    mission_id: str,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Technician xác nhận đã kiểm tra drone và lắp pin xong — sẵn sàng bay.
+
+    Yêu cầu:
+    - handling_status = AT_HUB (drone đang ở hub, chờ chuẩn bị).
+    - Mission phải có drone_id và battery_id.
+
+    Actions:
+    - mission.handling_status → READY.
+    """
+    mission = await _resolve_mission(db, mission_id)
+
+    if mission.handling_status != HandlingStatus.AT_HUB:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Mission phải ở trạng thái AT_HUB mới có thể mark READY. Hiện tại: {mission.handling_status}."
+        )
+
+    if not mission.drone_id:
+        raise HTTPException(status_code=400, detail="Mission chưa có drone. Operator cần phân công drone trước.")
+
+    if not mission.battery_id:
+        raise HTTPException(status_code=400, detail="Mission chưa có pin. Vui lòng lắp pin trước khi mark READY.")
+
+    mission.handling_status = HandlingStatus.READY
+    await db.commit()
+
+    return {
+        "message": "Mission đã sẵn sàng bay. Technician có thể bấm Dispatch.",
+        "mission_id": mission.id,
+        "handling_status": mission.handling_status.value,
+        "drone_id": mission.drone_id,
+        "battery_id": mission.battery_id,
+    }
+
+
 @router.post("/missions/{mission_id}/dispatch", summary="Dispatch drone bay tiếp chặng kế tiếp")
 async def dispatch_drone(
     mission_id: str,
