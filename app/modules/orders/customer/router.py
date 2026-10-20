@@ -4,6 +4,7 @@ from sqlalchemy import select, delete
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import uuid
+import math
 
 from app.database.db import get_async_db
 from app.shared.dependencies import get_current_user, CurrentUser
@@ -48,19 +49,24 @@ def compute_delivery_status(order: Order, mission: Optional[Mission]) -> tuple[s
     if order.status == OrderStatus.CANCELLED:
         return "CANCELLED", "Đã hủy"
     if mission is None:
+        if order.status == OrderStatus.AWAITING_DROP_OFF:
+            return "AWAITING_DROP_OFF", "Chờ mang hàng đến Hub"
+        if order.status == OrderStatus.AT_HUB:
+            return "AT_HUB", "Đã nhận tại Hub, chờ lên lịch bay"
+        if order.payment_status == PaymentStatus.PAID:
+            return "PAID", "Đã thanh toán, chờ gửi hàng"
         return "PENDING", "Chờ xử lý"
-    ms = mission.status
-    if mission.arrival_confirmed_at is not None or ms in (
-        MissionStatus.MISSION_COMPLETED, MissionStatus.COMPLETED
-    ):
+    
+    ms_str = (mission.status.value if hasattr(mission.status, "value") else str(mission.status or "")).upper()
+    if mission.arrival_confirmed_at is not None or ms_str in ("MISSION_COMPLETED", "COMPLETED"):
         return "DELIVERED", "Đã giao"
     if mission.arrived_at is not None:
         return "ARRIVED_AT_HUB", "Đã tới hub đích, chờ nhận"
-    if ms in (MissionStatus.FLYING, MissionStatus.IN_PROGRESS, MissionStatus.ACTIVE_MISSION):
+    if ms_str in ("FLYING", "IN_PROGRESS", "ACTIVE_MISSION"):
         return "IN_DELIVERY", "Đang giao"
-    if ms in (MissionStatus.SCHEDULED, MissionStatus.APPROVED, MissionStatus.PENDING_APPROVAL):
+    if ms_str in ("SCHEDULED", "APPROVED", "PENDING_APPROVAL"):
         return "SCHEDULED", "Đã lên lịch"
-    if ms in (MissionStatus.CANCELLED, MissionStatus.REJECTED, MissionStatus.FAILED):
+    if ms_str in ("CANCELLED", "REJECTED", "FAILED"):
         return "CANCELLED", "Đã hủy"
     return "PROCESSING", "Đang xử lý"
 
@@ -86,6 +92,7 @@ def calculate_delivery_cost(
     fragile_surcharge = core_fee * 0.15 if is_fragile else 0
     is_express = (delivery_mode == DeliveryMode.EXPRESS)
     express_surcharge = core_fee * 0.25 if is_express else 0
+    # NORMAL: không phụ phí Express (flexible scheduling)
     insurance_fee = core_fee * 0.10 if has_insurance else 0
 
     total_fee = core_fee + fragile_surcharge + express_surcharge + insurance_fee
@@ -155,10 +162,24 @@ async def estimate_order(
     delivery_fee = core_fee
     now = datetime.now(timezone.utc)
 
+    # Tính thời gian bay từ AI model (vận tốc chuẩn 10 m/s = 36 km/h)
+    flight_duration_sec = dist_km * 1000 / 10.0
+    flight_mins = max(math.ceil(flight_duration_sec / 60.0), 10)
+
     if body.delivery_mode == DeliveryMode.EXPRESS:
         handover_deadline = now + timedelta(hours=3)
         estimated_departure = handover_deadline + timedelta(minutes=30)
-        estimated_arrival = estimated_departure + timedelta(hours=1)
+        estimated_arrival = estimated_departure + timedelta(minutes=flight_mins)
+    elif body.delivery_mode == DeliveryMode.NORMAL:
+        # NORMAL: cần cam kết thời gian giao, window linh hoạt ±4h
+        if not body.requested_delivery_at:
+            raise HTTPException(status_code=400, detail="requested_delivery_at là bắt buộc cho chế độ NORMAL. Vui lòng cam kết thời gian giao hàng.")
+        req_time = body.requested_delivery_at
+        if req_time.tzinfo is None:
+            req_time = req_time.replace(tzinfo=timezone.utc)
+        handover_deadline = req_time - timedelta(hours=4)   # cần giao hàng trước 4h
+        estimated_departure = req_time - timedelta(hours=2)
+        estimated_arrival = req_time + timedelta(minutes=flight_mins)
     else:
         if not body.requested_delivery_at:
             raise HTTPException(status_code=400, detail="requested_delivery_at is required for SCHEDULED mode")
@@ -167,7 +188,7 @@ async def estimate_order(
             req_time = req_time.replace(tzinfo=timezone.utc)
         handover_deadline = req_time - timedelta(hours=3)
         estimated_departure = req_time
-        estimated_arrival = estimated_departure + timedelta(hours=1)
+        estimated_arrival = estimated_departure + timedelta(minutes=flight_mins)
 
     return OrderEstimateResponse(
         delivery_fee=round(delivery_fee, 2),
@@ -195,8 +216,9 @@ async def create_order(
         raise HTTPException(status_code=400, detail="Package weight must be between 0.1 kg and 10.0 kg (Size XL limit).")
 
     from app.shared.id_generator import generate_sequential_id
+    from app.core.timezone import get_vn_naive_datetime
     order_id = await generate_sequential_id(db, Order, "ORD")
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
 
     origin_hub = await db.get(Hub, body.origin_hub_id)
     dest_hub = await db.get(Hub, body.destination_hub_id)
@@ -215,6 +237,31 @@ async def create_order(
         has_insurance=getattr(body, "has_insurance", False)
     )
 
+    # Tính thời gian bay từ AI model (vận tốc chuẩn 10 m/s = 36 km/h)
+    flight_duration_sec = dist_km * 1000 / 10.0
+    flight_mins = max(math.ceil(flight_duration_sec / 60.0), 10)
+
+    # Tính toán thời gian cam kết theo delivery mode
+    req_at_naive = body.requested_delivery_at.replace(tzinfo=None) if body.requested_delivery_at else None
+
+    if body.delivery_mode == DeliveryMode.EXPRESS:
+        window_start = now + timedelta(hours=3)
+        window_end   = window_start + timedelta(minutes=flight_mins + 30)
+        order_aging_deadline = None
+    elif body.delivery_mode == DeliveryMode.NORMAL:
+        if not req_at_naive:
+            raise HTTPException(status_code=400, detail="requested_delivery_at là bắt buộc cho chế độ NORMAL.")
+        window_start = req_at_naive - timedelta(hours=4)
+        window_end   = req_at_naive + timedelta(minutes=flight_mins)
+        # Aging deadline = cần lên lịch bay trước 2h so với committed deadline
+        order_aging_deadline = req_at_naive - timedelta(hours=2)
+    else:  # SCHEDULED
+        if not req_at_naive:
+            raise HTTPException(status_code=400, detail="requested_delivery_at là bắt buộc cho chế độ SCHEDULED.")
+        window_start = req_at_naive
+        window_end   = req_at_naive + timedelta(minutes=flight_mins + 15)
+        order_aging_deadline = None
+
     new_order = Order(
         id=order_id,
         customer_id=current_user.id,
@@ -224,7 +271,11 @@ async def create_order(
         origin_hub_id=body.origin_hub_id,
         destination_hub_id=body.destination_hub_id,
         delivery_mode=body.delivery_mode,
-        requested_delivery_at=body.requested_delivery_at.replace(tzinfo=None) if body.requested_delivery_at else None,
+        requested_delivery_at=req_at_naive,
+        estimated_window_start=window_start,
+        estimated_window_end=window_end,
+        # aging_deadline=order_aging_deadline,
+        # is_aging_priority=False,
         status=OrderStatus.PENDING,
         delivery_fee=total_fee,
         sender_phone=body.sender_phone,

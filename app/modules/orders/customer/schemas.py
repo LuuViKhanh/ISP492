@@ -58,8 +58,14 @@ class CreateOrderRequest(BaseModel):
 class OrderCreateResponse(BaseModel):
     id: str
     status: OrderStatus
+    delivery_mode: Optional[DeliveryMode] = None
     origin_hub_id: int
     destination_hub_id: int
+    requested_delivery_at: Optional[datetime] = None
+    estimated_window_start: Optional[datetime] = None
+    estimated_window_end: Optional[datetime] = None
+    aging_deadline: Optional[datetime] = None
+    is_aging_priority: bool = False
     created_at: datetime
     
     class Config:

@@ -27,7 +27,7 @@ class Notification(Base):
     reference_id: Mapped[str | None] = mapped_column(String, nullable=True)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    drone_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    drone_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     work_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     mission_id: Mapped[str | None] = mapped_column(String, nullable=True)
 

@@ -1,14 +1,30 @@
 # Live Tracking API — Hướng dẫn tích hợp Frontend
 
-Base URL: `https://isp492.onrender.com/api/v1`  
-Auth: `Authorization: Bearer <operator_token>`
+> Base URL: `https://isp492.onrender.com/api/v1`  
+> Auth: `Authorization: Bearer <operator_token>` (Operator role)
 
 ---
 
-## 1. Các endpoint cần dùng
+## Tổng quan flow
 
-### `GET /operator/missions/live-tracking`
-> Poll mỗi **3 giây** để cập nhật vị trí tất cả drone đang bay.
+```
+Technician bấm Dispatch
+    └─ Backend tự động giả lập drone bay theo MissionLeg đã có trong DB
+         └─ Mỗi vài giây insert 1 điểm TelemetryLog (lat/lng nội suy giữa 2 hub)
+
+FE polling GET /operator/missions/live-tracking mỗi 3–5s
+    └─ Cập nhật vị trí marker drone trên map
+
+FE click vào drone
+    └─ GET /{mission_id}/telemetry  → vẽ trail (đường đã bay)
+    └─ GET /{mission_id}/hub-checkpoints → hub đã qua
+```
+
+---
+
+## 1. GET `/operator/missions/live-tracking`
+
+**Mô tả:** Trả snapshot tất cả drone đang bay (`status = Flying`). Poll mỗi **3–5 giây**.
 
 **Response:**
 ```json
@@ -16,87 +32,133 @@ Auth: `Authorization: Bearer <operator_token>`
   "active_count": 2,
   "drones": [
     {
-      "mission_id": 4,
-      "drone_id": 15,
+      "mission_id": "MSN-20261007-0003",
+      "drone_id": 28,
       "status": "Flying",
-      "latest_lat": 10.77231,
-      "latest_lng": 106.69827,
+      "latest_lat": 10.776900,
+      "latest_lng": 106.700900,
       "latest_altitude": 52.3,
-      "latest_speed": 13.1,
+      "latest_speed": 13.2,
       "latest_battery_voltage": 22.4,
-      "last_updated": "2026-09-25T10:00:03",
-      "checkpoints_passed": 2
+      "last_updated": "2026-10-18T10:23:45",
+      "checkpoints_passed": 1,
+      "weather_temperature": 31.2,
+      "weather_apparent_temp": 35.1,
+      "weather_dew_point": 23.1,
+      "weather_humidity": 78.0,
+      "weather_wind_speed": 3.2,
+      "weather_wind_gust": 5.1,
+      "weather_wind_direction": 180.0,
+      "weather_precipitation": 0.0,
+      "weather_pressure": 1009.0,
+      "weather_cloud_cover": 40.0
     }
   ]
 }
 ```
 
-**Dùng để:** Di chuyển marker drone trên map mỗi 3s.
+**Ghi chú:**
+- `active_count = 0` và `drones = []` khi không có drone bay — không cần xử lý lỗi
+- `last_updated` là thời điểm nhận điểm telemetry gần nhất — dùng để phát hiện mất tín hiệu phía FE (nếu > 10s chưa cập nhật thì hiện cảnh báo)
+- Tất cả `weather_*` fields có thể `null` nếu Open-Meteo API không phản hồi
+
+**Polling example:**
+```js
+const interval = setInterval(async () => {
+  const res = await fetch('/api/v1/operator/missions/live-tracking', { headers })
+  const { drones } = await res.json()
+  drones.forEach(drone => updateMarker(drone))
+}, 4000)
+```
 
 ---
 
-### `GET /operator/missions/{mission_id}/telemetry?limit=2000`
-> Lấy toàn bộ lịch sử tọa độ của một chuyến bay.
+## 2. GET `/operator/missions/{mission_id}/telemetry`
 
-**Response:** Array các điểm tọa độ theo thứ tự thời gian.
+**Mô tả:** Lịch sử tọa độ của 1 chuyến bay để vẽ trail.
+
+**Query params:**
+| Param | Type | Default | Mô tả |
+|---|---|---|---|
+| `limit` | int | 1000 | Số điểm tối đa (1–5000) |
+| `offset` | int | 0 | Bỏ qua N điểm đầu |
+
+**Response:** Array điểm tọa độ, sorted `timestamp ASC`
 ```json
 [
   {
-    "id": 1,
-    "mission_id": 4,
-    "timestamp": "2026-09-25T10:00:01",
-    "latitude": 10.77231,
-    "longitude": 106.69827,
+    "id": 1012,
+    "mission_id": "MSN-20261007-0003",
+    "timestamp": "2026-10-18T10:20:01",
+    "latitude": 10.776500,
+    "longitude": 106.700200,
     "altitude": 50.0,
-    "speed": 12.0,
-    "battery_voltage": 24.0,
-    "energy_consumed_wh": 0.0,
-    "wind_speed": 2.1
+    "speed": 12.5,
+    "battery_voltage": 23.1,
+    "energy_consumed_wh": 12.4,
+    "wind_speed": 2.1,
+    "weather_temperature": 31.0,
+    "weather_humidity": 78.0,
+    "weather_wind_speed": 3.1,
+    "weather_wind_gust": 5.0,
+    "weather_wind_direction": 175.0,
+    "weather_precipitation": 0.0,
+    "weather_pressure": 1009.0,
+    "weather_cloud_cover": 35.0,
+    "weather_apparent_temp": 34.8,
+    "weather_dew_point": 23.0
   }
 ]
 ```
 
-**Dùng để:** Vẽ polyline đường bay đã qua.
+**Ghi chú:**
+- Dùng trực tiếp để vẽ Polyline: `coords = data.map(p => [p.latitude, p.longitude])`
+- Lấy 50 điểm gần nhất để vẽ trail ngắn: `?limit=50` rồi sort desc ở FE, hoặc lấy full rồi `.slice(-50)`
 
 ---
 
-### `GET /operator/missions/{mission_id}/hub-checkpoints`
-> Danh sách các hub trung gian drone đã đi qua.
+## 3. GET `/operator/missions/{mission_id}/hub-checkpoints`
+
+**Mô tả:** Danh sách hub drone đã bay qua, sorted theo `checkpoint_order ASC`.
 
 **Response:**
 ```json
 [
   {
-    "id": 1,
-    "mission_id": 4,
-    "hub_id": 3,
-    "hub_name": "Hub Quận 1 - Bến Thành",
-    "hub_latitude": 10.77231,
-    "hub_longitude": 106.69827,
-    "drone_latitude": 10.77229,
-    "drone_longitude": 106.69831,
-    "distance_to_hub_m": 4.2,
-    "passed_at": "2026-09-25T10:00:05",
+    "id": 5,
+    "mission_id": "MSN-20261007-0003",
+    "hub_id": 2,
+    "hub_name": "Hub Quận 7",
+    "hub_latitude": 10.732500,
+    "hub_longitude": 106.721800,
+    "drone_latitude": 10.732300,
+    "drone_longitude": 106.721600,
+    "distance_to_hub_m": 24.5,
+    "passed_at": "2026-10-18T10:21:30",
     "checkpoint_order": 1
   }
 ]
 ```
 
-**Dùng để:** Hiện marker hub + log hành trình.
+**Ghi chú:**
+- Checkpoint được tự động tạo khi drone vào vùng **200m** quanh hub
+- `drone_latitude/longitude` là vị trí thực tế khi trigger, không phải tọa độ hub
+- Dùng để render icon "đã qua" trên hub marker
 
 ---
 
-### `GET /operator/missions/hubs`
-> Danh sách tất cả hub (hiện marker trên map lúc load).
+## 4. GET `/operator/missions/hubs`
+
+**Mô tả:** Danh sách tất cả hub — load 1 lần khi vào trang để hiện hub marker trên map.
 
 ```json
 [
   {
-    "id": 3,
-    "code": "HUB-Q1",
-    "name": "Hub Quận 1 - Bến Thành",
-    "latitude": 10.77231,
-    "longitude": 106.69827,
+    "id": 1,
+    "code": "HUB-01",
+    "name": "Hub Quận 1",
+    "latitude": 10.776900,
+    "longitude": 106.700900,
     "status": "Active"
   }
 ]
@@ -104,47 +166,58 @@ Auth: `Authorization: Bearer <operator_token>`
 
 ---
 
-## 2. Flow tích hợp map
+## 5. Recommended flow khi mở Live Map
 
 ```
-1. Khi vào trang:
+1. Load trang:
    GET /hubs → hiện tất cả hub marker (🏠)
 
-2. setInterval mỗi 3s:
-   GET /live-tracking → cập nhật vị trí marker drone (🚁)
-   → animate marker di chuyển mượt (interpolation)
+2. setInterval mỗi 4s:
+   GET /live-tracking → cập nhật vị trí drone marker (🚁)
 
-3. Khi drone mới xuất hiện hoặc mỗi 10s:
-   GET /{mission_id}/telemetry → vẽ polyline đường đã bay
+3. Khi drone mới xuất hiện trong response:
+   GET /{mission_id}/telemetry?limit=200 → vẽ polyline trail
 
-4. Khi click vào drone:
+4. Khi click vào drone marker:
    GET /{mission_id}/hub-checkpoints → hiện checkpoint log
-   → zoom fit bounds của polyline
+   → zoom/fit bounds của polyline
 ```
 
 ---
 
-## 3. Cách vẽ đường như Grab
+## 6. Trạng thái drone trên map
+
+| `status` | Xử lý |
+|---|---|
+| `Flying` | Hiện marker, cập nhật vị trí mỗi poll |
+| Không có trong response | Drone đã landing — xóa marker khỏi map |
+
+---
+
+## 7. Vẽ trail kiểu Grab
 
 ```javascript
+// Lấy lịch sử
+const points = await fetchTelemetry(missionId, 200)
+const coords = points.map(p => [p.latitude, p.longitude])
+
 // Đường lịch sử (mờ)
-const historyLine = L.polyline(coords, {
+L.polyline(coords, {
   color: 'rgba(129,140,248,0.35)',
   weight: 3,
-});
+}).addTo(map)
 
-// Đường trail sáng (15 điểm cuối, animated dash)
-const tail = coords.slice(-15);
-const trailLine = L.polyline(tail, {
+// Trail sáng — 20 điểm cuối
+const tail = coords.slice(-20)
+L.polyline(tail, {
   color: '#818cf8',
   weight: 5,
-  className: 'trail-line', // CSS animation
-});
+  className: 'trail-animated',
+}).addTo(map)
 ```
 
-CSS animation cho dash chạy:
 ```css
-.trail-line {
+.trail-animated {
   stroke-dasharray: 8 6;
   animation: dash 1s linear infinite;
 }
@@ -155,23 +228,22 @@ CSS animation cho dash chạy:
 
 ---
 
-## 4. Thư viện gợi ý
+## 8. Thư viện gợi ý
 
-| Thư viện | Use case |
+| Thư viện | Ghi chú |
 |---|---|
-| **Leaflet.js** | Map nhẹ, dễ tích hợp, miễn phí |
-| **Mapbox GL JS** | Đẹp hơn, có 3D, cần token (free tier 50k/tháng) |
-| **React Leaflet** | Wrapper cho React |
-
-Tile provider: dùng **Mapbox** với token `pk.eyJ1IjoibWF4Y2FyMjAxOSIs...`
+| **React Leaflet** | Nhẹ, miễn phí, dễ tích hợp |
+| **Mapbox GL JS** | Đẹp hơn, cần token (free tier 50k map loads/tháng) |
 
 ---
 
-## 5. File demo có sẵn trong repo
+## 9. Sắp có (chưa implement)
 
-| File | Mô tả |
-|---|---|
-| `drone_live_map.html` | Standalone HTML demo, mở bằng browser, implement đầy đủ tất cả tính năng |
-| `simulate_drone.py` | Script Python giả lập drone để test khi không có hardware |
+> Các endpoint dưới đây sẽ bổ sung sau khi backend hoàn thiện Task 2 & 3.
 
-FE đọc `drone_live_map.html` để tham khảo logic JS animate marker, vẽ polyline, poll API.
+- **`/live-tracking` bổ sung thêm:**
+  - `legs` — tuyến bay dự kiến (lat/lng từng chặng) để vẽ planned route
+  - `current_leg` — đang bay chặng số mấy
+  - `trail` — 50 điểm gần nhất inline
+
+- **`GET /live-tracking/{mission_id}`** — chi tiết 1 drone khi FE click vào marker

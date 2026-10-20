@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.timezone import get_vn_naive_datetime
 from app.modules.missions.models import MissionStatus
 
 # Các trạng thái coi là "đã hoàn tất" (dùng cho doanh thu & tỉ lệ thành công)
@@ -10,8 +11,8 @@ COMPLETED_STATUSES = [MissionStatus.COMPLETED, MissionStatus.MISSION_COMPLETED]
 
 
 def now_naive() -> datetime:
-    """Thời điểm hiện tại dạng naive UTC (nhất quán với toàn bộ codebase)."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    """Thời điểm hiện tại dạng naive theo múi giờ Việt Nam (+7)."""
+    return get_vn_naive_datetime()
 
 
 async def group_counts(db: AsyncSession, column) -> dict[str, int]:
