@@ -145,7 +145,7 @@ class WorkOrderLog(Base):
 class MaintenanceAlert(Base):
     __tablename__ = "maintenance_alerts"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     drone_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     source: Mapped[str | None] = mapped_column(String, nullable=True)
     maintenance_schedule_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
