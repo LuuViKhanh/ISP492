@@ -1109,7 +1109,7 @@ async def confirm_relay_arrival(
     - Cập nhật drone.current_hub_id → hub trung gian vừa đáp.
     """
     from app.modules.missions.models import MissionLeg, MissionLegStatus
-    from app.modules.fleet.models import DroneStatus
+    from app.modules.fleet.models import DroneStatus, batteries_status
 
     mission = await _resolve_mission(db, mission_id)
     if mission.status not in [
@@ -1180,6 +1180,15 @@ async def confirm_relay_arrival(
         if drone:
             drone.current_hub_id = relay_hub_id
             drone.status = DroneStatus.AVAILABLE
+
+    # Tháo pin cũ khỏi drone → về Battery Management tại relay hub để sạc
+    # (swap-battery sẽ lắp pin mới sau)
+    if mission.battery_id and relay_hub_id:
+        old_battery = await db.get(Battery, mission.battery_id)
+        if old_battery:
+            old_battery.drone_id = None
+            old_battery.current_hub_id = relay_hub_id
+            old_battery.status = batteries_status.ACTIVE
 
     # Cập nhật mission handling_status → AT_HUB (chờ Technician swap pin)
     mission.handling_status = HandlingStatus.AT_HUB
