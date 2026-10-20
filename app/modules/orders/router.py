@@ -111,6 +111,33 @@ def compute_order_estimated_window(
 
     return start, end
 
+def compute_origin_package_status(order: Order, latest_mission: Optional[Mission] = None) -> OriginPackageSchema:
+    """
+    Xác định trạng thái nhận kiện hàng tại Origin Hub (originPackage).
+    - Hàng được tính là đã nhận (received = True) khi:
+        1. order.origin_received_at is not None (có mốc thời gian nhận thực tế)
+        2. Hoặc order.status == OrderStatus.AT_HUB
+        3. Hoặc đơn hàng đã được tạo nhiệm vụ bay (latest_mission is not None)
+    - Thời gian nhận hàng (received_at) ưu tiên order.origin_received_at, 
+      fallback sang order.updated_at hoặc order.created_at nếu đơn đã AT_HUB hoặc đã có mission.
+    """
+    has_received = bool(
+        order.origin_received_at is not None
+        or order.status == OrderStatus.AT_HUB
+        or latest_mission is not None
+    )
+    if has_received:
+        received_time = order.origin_received_at or order.updated_at or order.created_at
+        return OriginPackageSchema(
+            received=True,
+            received_at=received_time
+        )
+    return OriginPackageSchema(
+        received=False,
+        received_at=None
+    )
+
+
 def calculate_planning_state(order: Order, mission: Mission = None) -> str | None:
     now = get_vn_naive_datetime()
 
@@ -122,11 +149,7 @@ def calculate_planning_state(order: Order, mission: Mission = None) -> str | Non
     ):
         return None
 
-    # 2. Nếu đơn hàng chưa mang tới Hub hoặc chưa được Technician xác nhận -> Đang ở trạng thái Đợi (WAITING_PACKAGE)
-    if order.status != OrderStatus.AT_HUB:
-        return "WAITING_PACKAGE"
-
-    # 3. Nếu đơn hàng đã có Mission liên kết
+    # 2. Nếu đơn hàng đã có Mission liên kết
     if mission:
         ms_str = (mission.status.value if hasattr(mission.status, "value") else str(mission.status or "")).upper()
         # Đã bay xong -> Không hiện Ready for planning hay Planned nữa
@@ -139,11 +162,15 @@ def calculate_planning_state(order: Order, mission: Mission = None) -> str | Non
         if ms_str in FAILED_MISSION_STATUS_STRINGS:
             return "NEEDS_REPLANNING"
 
+    # 3. Nếu đơn hàng chưa mang tới Hub hoặc chưa được Technician xác nhận -> Đang ở trạng thái Đợi (WAITING_PACKAGE)
+    if order.status != OrderStatus.AT_HUB:
+        return "WAITING_PACKAGE"
+
     if order.replan_required_at:
         return "NEEDS_REPLANNING"
     if order.planning_at and now < order.planning_at:
         return "FUTURE"
-    return "READY_FOR_PLANNING"
+    return "READY_FOR_PLANNING" 
 
 
 @router.get("", response_model=list[OrderResponse])
@@ -195,10 +222,7 @@ async def list_orders(
     for o in orders:
         latest_mission = mission_by_order.get(o.id)
         planning_state = calculate_planning_state(o, latest_mission)
-        origin_pkg = OriginPackageSchema(
-            received=True if (o.status == OrderStatus.AT_HUB and o.origin_received_at is not None) else False,
-            received_at=o.origin_received_at if o.status == OrderStatus.AT_HUB else None
-        )
+        origin_pkg = compute_origin_package_status(o, latest_mission)
         order_resp = OrderResponse.model_validate(o)
         order_resp.mission_id = latest_mission.id if latest_mission else None
         order_resp.payment_status = o.payment_status.value if hasattr(o.payment_status, "value") else str(o.payment_status or "")
@@ -206,10 +230,11 @@ async def list_orders(
         order_resp.planning_state_label = PLANNING_STATE_LABELS.get(planning_state)
         order_resp.originPackage = origin_pkg
 
-        # Chỉ cho phép tạo mission khi đơn đã AT_HUB và chưa có mission active
+        # Chỉ cho phép tạo mission khi hàng thực sự đã nhận tại Hub, đơn đã AT_HUB và chưa có mission active
         ms_val = (latest_mission.status.value if hasattr(latest_mission.status, "value") else str(latest_mission.status or "")).upper() if latest_mission else ""
-        order_resp.can_create_mission = (
-            o.status == OrderStatus.AT_HUB 
+        order_resp.can_create_mission = bool(
+            origin_pkg.received
+            and o.status == OrderStatus.AT_HUB 
             and (latest_mission is None or ms_val in FAILED_MISSION_STATUS_STRINGS)
         )
 
@@ -258,10 +283,7 @@ async def get_order(
     latest_mission = mission_result.scalars().first()
     
     planning_state = calculate_planning_state(order, latest_mission)
-    origin_pkg = OriginPackageSchema(
-        received=True if (order.status == OrderStatus.AT_HUB and order.origin_received_at is not None) else False,
-        received_at=order.origin_received_at if order.status == OrderStatus.AT_HUB else None
-    )
+    origin_pkg = compute_origin_package_status(order, latest_mission)
     
     order_resp = OrderResponse.model_validate(order)
     order_resp.mission_id = latest_mission.id if latest_mission else None
@@ -271,8 +293,9 @@ async def get_order(
     order_resp.originPackage = origin_pkg
 
     ms_val = (latest_mission.status.value if hasattr(latest_mission.status, "value") else str(latest_mission.status or "")).upper() if latest_mission else ""
-    order_resp.can_create_mission = (
-        order.status == OrderStatus.AT_HUB 
+    order_resp.can_create_mission = bool(
+        origin_pkg.received
+        and order.status == OrderStatus.AT_HUB 
         and (latest_mission is None or ms_val in FAILED_MISSION_STATUS_STRINGS)
     )
 
@@ -619,8 +642,5 @@ async def update_order(
     resp.mission_id = latest_mission.id if latest_mission else None
     resp.payment_status = order.payment_status.value if hasattr(order.payment_status, "value") else str(order.payment_status or "")
     resp.planningState = calculate_planning_state(order, latest_mission)
-    resp.originPackage = OriginPackageSchema(
-        received=bool(order.status == OrderStatus.AT_HUB and order.origin_received_at is not None),
-        received_at=order.origin_received_at if order.status == OrderStatus.AT_HUB else None,
-    )
+    resp.originPackage = compute_origin_package_status(order, latest_mission)
     return resp
