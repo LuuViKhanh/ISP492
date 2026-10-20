@@ -176,15 +176,11 @@ async def estimate_order(
         estimated_departure = handover_deadline + timedelta(minutes=30)
         estimated_arrival = estimated_departure + timedelta(minutes=flight_mins)
     elif body.delivery_mode == DeliveryMode.NORMAL:
-        # NORMAL: cần cam kết thời gian giao, window linh hoạt ±4h
-        if not body.requested_delivery_at:
-            raise HTTPException(status_code=400, detail="requested_delivery_at là bắt buộc cho chế độ NORMAL. Vui lòng cam kết thời gian giao hàng.")
-        req_time = body.requested_delivery_at
-        if req_time.tzinfo is None:
-            req_time = req_time.replace(tzinfo=timezone.utc)
-        handover_deadline = req_time - timedelta(hours=4)   # cần giao hàng trước 4h
-        estimated_departure = req_time - timedelta(hours=2)
-        estimated_arrival = req_time + timedelta(minutes=flight_mins)
+        # NORMAL: hệ thống tự lập lịch — FE không cần gửi requested_delivery_at.
+        # SLA 48h từ thời điểm đặt hàng; handover trong 2h kể từ khi book.
+        handover_deadline = now + timedelta(hours=2)
+        estimated_departure = handover_deadline + timedelta(minutes=30)
+        estimated_arrival = estimated_departure + timedelta(minutes=flight_mins)
     else:
         if not body.requested_delivery_at:
             raise HTTPException(status_code=400, detail="requested_delivery_at is required for SCHEDULED mode")
