@@ -176,9 +176,9 @@ async def estimate_order(
         estimated_departure = handover_deadline + timedelta(minutes=30)
         estimated_arrival = estimated_departure + timedelta(minutes=flight_mins)
     elif body.delivery_mode == DeliveryMode.NORMAL:
-        # NORMAL: hệ thống tự lập lịch — FE không cần gửi requested_delivery_at.
-        # SLA 48h từ thời điểm đặt hàng; handover trong 2h kể từ khi book.
-        handover_deadline = now + timedelta(hours=2)
+        # NORMAL: SLA 4h — hệ thống tự lập lịch, FE không cần gửi requested_delivery_at.
+        NORMAL_SLA_HOURS = 4
+        handover_deadline = now + timedelta(hours=2)          # khách phải bàn giao hàng trong 2h
         estimated_departure = handover_deadline + timedelta(minutes=30)
         estimated_arrival = estimated_departure + timedelta(minutes=flight_mins)
     else:
@@ -250,12 +250,12 @@ async def create_order(
         window_end   = window_start + timedelta(minutes=flight_mins + 30)
         order_aging_deadline = None
     elif body.delivery_mode == DeliveryMode.NORMAL:
-        # NORMAL: hệ thống tự lập lịch — FE không cần gửi requested_delivery_at.
-        # SLA 48h từ thời điểm tạo đơn. aging_deadline = 2h trước khi SLA kết thúc.
-        SLA_HOURS = 48
+        # NORMAL: SLA 4h — phù hợp với cam kết khách, hệ thống tự lập lịch.
+        # FE không cần truyền requested_delivery_at.
+        NORMAL_SLA_HOURS = 4
         window_start = now
-        window_end   = now + timedelta(hours=SLA_HOURS)
-        order_aging_deadline = window_end - timedelta(hours=2)
+        window_end   = now + timedelta(hours=NORMAL_SLA_HOURS)
+        order_aging_deadline = window_end - timedelta(hours=1)   # Operator phải assign 1h trước deadline
     else:  # SCHEDULED
         if not req_at_naive:
             raise HTTPException(status_code=400, detail="requested_delivery_at là bắt buộc cho chế độ SCHEDULED.")

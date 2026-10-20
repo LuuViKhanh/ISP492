@@ -29,11 +29,21 @@ class OrderResponse(BaseModel):
     originPackage: Optional[OriginPackageSchema] = None
     requested_delivery_at: Optional[datetime] = None
     estimated_window_start: Optional[datetime] = None
+    # estimated_window_end = ETA (giờ giao dự kiến, dynamic)
     estimated_window_end: Optional[datetime] = None
     planning_at: Optional[datetime] = None
+    # ── Deadline & Urgency fields (computed, không lưu DB) ────────────
+    # customer_deadline: deadline cam kết với khách (= estimated_window_end khi tạo đơn)
+    customer_deadline: Optional[datetime] = None
+    # coordination_deadline: thời điểm Operator phải assign xong drone để kịp deadline
+    coordination_deadline: Optional[datetime] = None
+    # overdue_minutes > 0 = số phút đã trễ so với customer_deadline
+    overdue_minutes: Optional[float] = None
+    is_overdue: bool = False
     # Aging Priority fields
     is_aging_priority: bool = False
     aging_deadline: Optional[datetime] = None
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

@@ -152,25 +152,62 @@ def calculate_planning_state(order: Order, mission: Mission = None) -> str | Non
     # 2. Nếu đơn hàng đã có Mission liên kết
     if mission:
         ms_str = (mission.status.value if hasattr(mission.status, "value") else str(mission.status or "")).upper()
-        # Đã bay xong -> Không hiện Ready for planning hay Planned nữa
         if ms_str in COMPLETED_MISSION_STATUS_STRINGS or mission.arrived_at is not None:
             return None
-        # Đang có Mission hiệu lực (Scheduled, Approved, In Progress, Flying...) -> Đã lập lịch (PLANNED)
         if ms_str in ACTIVE_MISSION_STATUS_STRINGS:
             return "PLANNED"
-        # Mission trước đó bị hủy/lỗi -> Cần lập lịch lại
         if ms_str in FAILED_MISSION_STATUS_STRINGS:
             return "NEEDS_REPLANNING"
 
-    # 3. Nếu đơn hàng chưa mang tới Hub hoặc chưa được Technician xác nhận -> Đang ở trạng thái Đợi (WAITING_PACKAGE)
+    # 3. Chưa tới Hub -> Đang chờ nhận hàng
     if order.status != OrderStatus.AT_HUB:
         return "WAITING_PACKAGE"
 
     if order.replan_required_at:
         return "NEEDS_REPLANNING"
+
+    # 4. Kiểm tra Overdue / Urgent dựa trên customer_deadline (= estimated_window_end)
+    deadline = order.estimated_window_end
+    if deadline:
+        overdue_mins = (now - deadline).total_seconds() / 60.0
+        if overdue_mins > 0:
+            return "OVERDUE"
+        if overdue_mins > -120:  # còn < 2h trước deadline
+            return "URGENT"
+
     if order.planning_at and now < order.planning_at:
         return "FUTURE"
-    return "READY_FOR_PLANNING" 
+    return "READY_FOR_PLANNING"
+
+
+# Cập nhật PLANNING_STATE_LABELS
+PLANNING_STATE_LABELS["OVERDUE"] = "Quá hạn giao — cần lập lịch ngay"
+PLANNING_STATE_LABELS["URGENT"] = "Sắp đến hạn — ưu tiên cao"
+
+
+def compute_urgency_fields(
+    order: Order,
+    w_end: Optional[datetime],
+    flight_mins: int = 20,
+) -> tuple[Optional[datetime], Optional[datetime], Optional[float], bool]:
+    """
+    Tính coordination_deadline, overdue_minutes, is_overdue từ customer deadline.
+
+    coordination_deadline = customer_deadline - flight_mins - 30'
+    (thời điểm Operator phải assign drone để drone kịp cất cánh và đến đúng giờ)
+
+    Returns: (customer_deadline, coordination_deadline, overdue_minutes, is_overdue)
+    """
+    from app.core.timezone import get_vn_naive_datetime as _now
+    if not w_end:
+        return None, None, None, False
+
+    now = _now()
+    coord_deadline = w_end - timedelta(minutes=flight_mins + 30)
+    overdue_raw = (now - w_end).total_seconds() / 60.0
+    overdue_mins = round(overdue_raw, 1) if overdue_raw > 0 else None
+    is_overdue = overdue_raw > 0
+    return w_end, coord_deadline, overdue_mins, is_overdue
 
 
 @router.get("", response_model=list[OrderResponse])
@@ -245,6 +282,19 @@ async def list_orders(
         order_resp.estimated_window_start = w_start
         order_resp.estimated_window_end = w_end
 
+        # ── Urgency / Deadline fields ──────────────────────────────────
+        # Tính flight_mins từ khoảng cách thực tế
+        _dist = 8.0
+        if ohub and dhub and ohub.latitude and dhub.latitude:
+            _dist = haversine_distance(ohub.latitude, ohub.longitude, dhub.latitude, dhub.longitude)
+        _fmins = max(math.ceil((_dist * 1000 / 10.0) / 60.0), 10)
+        cust_dl, coord_dl, overdue_mins, is_overdue = compute_urgency_fields(o, w_end, _fmins)
+        order_resp.customer_deadline = cust_dl
+        order_resp.coordination_deadline = coord_dl
+        order_resp.overdue_minutes = overdue_mins
+        order_resp.is_overdue = is_overdue
+        order_resp.created_at = o.created_at
+
         if o.origin_hub_id in hub_dict:
             order_resp.origin_hub = HubSchema(id=o.origin_hub_id, name=hub_dict[o.origin_hub_id])
         if o.destination_hub_id in hub_dict:
@@ -311,6 +361,18 @@ async def get_order(
     w_start, w_end = compute_order_estimated_window(order, ohub, dhub)
     order_resp.estimated_window_start = w_start
     order_resp.estimated_window_end = w_end
+
+    # Urgency fields
+    _dist = 8.0
+    if ohub and dhub and ohub.latitude and dhub.latitude:
+        _dist = haversine_distance(ohub.latitude, ohub.longitude, dhub.latitude, dhub.longitude)
+    _fmins = max(math.ceil((_dist * 1000 / 10.0) / 60.0), 10)
+    cust_dl, coord_dl, overdue_mins, is_overdue = compute_urgency_fields(order, w_end, _fmins)
+    order_resp.customer_deadline = cust_dl
+    order_resp.coordination_deadline = coord_dl
+    order_resp.overdue_minutes = overdue_mins
+    order_resp.is_overdue = is_overdue
+    order_resp.created_at = order.created_at
         
     return order_resp
 
