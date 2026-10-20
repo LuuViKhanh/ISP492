@@ -189,25 +189,57 @@ def compute_urgency_fields(
     order: Order,
     w_end: Optional[datetime],
     flight_mins: int = 20,
-) -> tuple[Optional[datetime], Optional[datetime], Optional[float], bool]:
+) -> tuple[Optional[datetime], Optional[datetime], Optional[float], bool, Optional[float], Optional[float], Optional[str]]:
     """
-    Tính coordination_deadline, overdue_minutes, is_overdue từ customer deadline.
+    Tính coordination_deadline, overdue_minutes, is_overdue, slack_minutes, priority_score, priority_level.
 
-    coordination_deadline = customer_deadline - flight_mins - 30'
-    (thời điểm Operator phải assign drone để drone kịp cất cánh và đến đúng giờ)
+    PriorityScore = BasePriority + UrgencyScore
+      - BasePriority: EXPRESS=60, SCHEDULED=35, NORMAL=10
+      - Slack = coordination_deadline - now (phút)
+      - UrgencyScore = min(100, max(0, 100 × (60 - Slack) / 60))
 
-    Returns: (customer_deadline, coordination_deadline, overdue_minutes, is_overdue)
+    priority_level:
+      - CRITICAL: Slack <= 0  (Overdue hoặc sắp trễ ngay)
+      - HIGH:     Slack <= 30
+      - MEDIUM:   Slack <= 60
+      - LOW:      Slack > 60
+
+    Returns: (customer_deadline, coordination_deadline, overdue_minutes, is_overdue,
+              slack_minutes, priority_score, priority_level)
     """
     from app.core.timezone import get_vn_naive_datetime as _now
     if not w_end:
-        return None, None, None, False
+        return None, None, None, False, None, None, None
 
     now = _now()
     coord_deadline = w_end - timedelta(minutes=flight_mins + 30)
     overdue_raw = (now - w_end).total_seconds() / 60.0
     overdue_mins = round(overdue_raw, 1) if overdue_raw > 0 else None
     is_overdue = overdue_raw > 0
-    return w_end, coord_deadline, overdue_mins, is_overdue
+
+    # Slack tính từ coordination_deadline (không phải customer_deadline)
+    slack_raw = (coord_deadline - now).total_seconds() / 60.0
+    slack_mins = round(slack_raw, 1)
+
+    # BasePriority theo mode
+    d_mode = order.delivery_mode.value if hasattr(order.delivery_mode, "value") else str(order.delivery_mode or "")
+    base = {"EXPRESS": 60.0, "SCHEDULED": 35.0, "NORMAL": 10.0}.get(d_mode, 10.0)
+
+    # UrgencyScore
+    urgency = min(100.0, max(0.0, 100.0 * (60.0 - slack_mins) / 60.0))
+    score = round(base + urgency, 1)
+
+    # Priority level
+    if slack_mins <= 0:
+        level = "CRITICAL"
+    elif slack_mins <= 30:
+        level = "HIGH"
+    elif slack_mins <= 60:
+        level = "MEDIUM"
+    else:
+        level = "LOW"
+
+    return w_end, coord_deadline, overdue_mins, is_overdue, slack_mins, score, level
 
 
 @router.get("", response_model=list[OrderResponse])
@@ -288,11 +320,14 @@ async def list_orders(
         if ohub and dhub and ohub.latitude and dhub.latitude:
             _dist = haversine_distance(ohub.latitude, ohub.longitude, dhub.latitude, dhub.longitude)
         _fmins = max(math.ceil((_dist * 1000 / 10.0) / 60.0), 10)
-        cust_dl, coord_dl, overdue_mins, is_overdue = compute_urgency_fields(o, w_end, _fmins)
+        cust_dl, coord_dl, overdue_mins, is_overdue, slack_mins, prio_score, prio_level = compute_urgency_fields(o, w_end, _fmins)
         order_resp.customer_deadline = cust_dl
         order_resp.coordination_deadline = coord_dl
         order_resp.overdue_minutes = overdue_mins
         order_resp.is_overdue = is_overdue
+        order_resp.slack_minutes = slack_mins
+        order_resp.priority_score = prio_score
+        order_resp.priority_level = prio_level
         order_resp.created_at = o.created_at
 
         if o.origin_hub_id in hub_dict:
@@ -367,11 +402,14 @@ async def get_order(
     if ohub and dhub and ohub.latitude and dhub.latitude:
         _dist = haversine_distance(ohub.latitude, ohub.longitude, dhub.latitude, dhub.longitude)
     _fmins = max(math.ceil((_dist * 1000 / 10.0) / 60.0), 10)
-    cust_dl, coord_dl, overdue_mins, is_overdue = compute_urgency_fields(order, w_end, _fmins)
+    cust_dl, coord_dl, overdue_mins, is_overdue, slack_mins, prio_score, prio_level = compute_urgency_fields(order, w_end, _fmins)
     order_resp.customer_deadline = cust_dl
     order_resp.coordination_deadline = coord_dl
     order_resp.overdue_minutes = overdue_mins
     order_resp.is_overdue = is_overdue
+    order_resp.slack_minutes = slack_mins
+    order_resp.priority_score = prio_score
+    order_resp.priority_level = prio_level
     order_resp.created_at = order.created_at
         
     return order_resp

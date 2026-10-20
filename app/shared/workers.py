@@ -414,3 +414,114 @@ async def run_aging_priority_watcher(db: AsyncSession):
 
     await db.commit()
 
+
+
+# ── Critical Order Notification ──────────────────────────────────────
+
+CRITICAL_NOTIF_INTERVAL_HOURS = 1   # gửi lại mỗi 1h nếu vẫn Critical
+
+async def run_critical_order_notifier(db: AsyncSession):
+    """
+    Worker: Quét các đơn CRITICAL (Slack <= 0, chưa có Mission) và thông báo cho Operator + Customer.
+
+    Chạy mỗi 15 phút trong realtime cron.
+    Dedup: chỉ gửi lại nếu đã qua CRITICAL_NOTIF_INTERVAL_HOURS kể từ lần thông báo gần nhất.
+    Không ảnh hưởng đơn đã có Mission đang hoạt động.
+    """
+    from app.modules.missions.models import Order, OrderStatus, Mission
+    from app.modules.auth.models import User, ROLE_NAME_TO_ID
+    from app.shared.roles import UserRole as _Role
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    # Lấy đơn AT_HUB, PENDING hoặc trạng thái chờ, chưa bị hủy
+    actionable_statuses = [OrderStatus.AT_HUB, OrderStatus.PENDING, OrderStatus.AWAITING_DROP_OFF]
+    result = await db.execute(
+        select(Order).where(
+            and_(
+                Order.status.in_(actionable_statuses),
+                Order.estimated_window_end.isnot(None),
+                Order.estimated_window_end <= now,  # đã quá customer_deadline
+            )
+        )
+    )
+    overdue_orders = result.scalars().all()
+
+    if not overdue_orders:
+        return
+
+    # Lọc đơn đã có Mission active → bỏ qua
+    overdue_ids = [o.id for o in overdue_orders]
+    active_mission_result = await db.execute(
+        select(Mission.order_id).where(
+            and_(
+                Mission.order_id.in_(overdue_ids),
+                Mission.status.in_([
+                    MissionStatus.SCHEDULED,
+                    MissionStatus.APPROVED,
+                    MissionStatus.FLYING,
+                    MissionStatus.IN_PROGRESS,
+                    MissionStatus.ACTIVE_MISSION,
+                ])
+            )
+        )
+    )
+    has_mission_ids = {row[0] for row in active_mission_result.all() if row[0]}
+
+    critical_orders = [o for o in overdue_orders if o.id not in has_mission_ids]
+    if not critical_orders:
+        return
+
+    # Lấy Operator IDs
+    operator_ids = await get_operator_ids(db)
+    cutoff = now - timedelta(hours=CRITICAL_NOTIF_INTERVAL_HOURS)
+
+    for order in critical_orders:
+        # Dedup: kiểm tra đã gửi thông báo Critical trong khoảng time gần nhất chưa
+        existing = await db.execute(
+            select(Notification)
+            .where(
+                and_(
+                    Notification.reference_id == f"CRITICAL_{order.id}",
+                    Notification.created_at >= cutoff,
+                )
+            )
+            .limit(1)
+        )
+        if existing.scalar_one_or_none():
+            continue  # đã gửi gần đây → bỏ qua
+
+        overdue_mins = round((now - order.estimated_window_end).total_seconds() / 60.0, 0)
+        d_mode = order.delivery_mode.value if hasattr(order.delivery_mode, "value") else str(order.delivery_mode or "UNKNOWN")
+
+        # Notify Operators
+        for op_id in operator_ids:
+            db.add(Notification(
+                user_id=op_id,
+                title=f"🚨 CRITICAL — Đơn #{order.id} quá hạn {int(overdue_mins)} phút",
+                message=(
+                    f"Đơn #{order.id} ({d_mode}) đã quá hạn giao {int(overdue_mins)} phút "
+                    f"mà chưa có Mission. Cần lập lịch bay ngay!"
+                ),
+                notifications_type=NotificationType.MISSION_STATUS,
+                mission_id=str(order.id),
+                reference_id=f"CRITICAL_{order.id}",
+                created_at=now,
+            ))
+
+        # Notify Customer
+        if order.customer_id:
+            db.add(Notification(
+                user_id=order.customer_id,
+                title="Đơn hàng của bạn đang bị trì hoãn",
+                message=(
+                    f"Đơn hàng #{order.id} của bạn đang bị trì hoãn hơn dự kiến. "
+                    f"Đội ngũ của chúng tôi đang xử lý khẩn cấp và sẽ cập nhật sớm nhất."
+                ),
+                notifications_type=NotificationType.MISSION_STATUS,
+                mission_id=str(order.id),
+                reference_id=f"CRITICAL_{order.id}",
+                created_at=now,
+            ))
+
+    await db.commit()

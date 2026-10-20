@@ -47,7 +47,7 @@ import asyncio
 from app.database.db import async_engine, Base
 from app.database.cron_db import run_with_retry
 from app.modules.fleet.technician.service import run_maintenance_alerts_logic, run_battery_overdue_alerts_logic
-from app.shared.workers import run_approval_deadline_watcher, run_telemetry_signal_loss_watcher, run_battery_charging_simulation, run_pickup_reminder_watcher, run_aging_priority_watcher
+from app.shared.workers import run_approval_deadline_watcher, run_telemetry_signal_loss_watcher, run_battery_charging_simulation, run_pickup_reminder_watcher, run_aging_priority_watcher, run_critical_order_notifier
 
 async def run_hourly_cronjobs():
     """Vòng lặp chạy ngầm mỗi tiếng (3600s).
@@ -60,6 +60,7 @@ async def run_hourly_cronjobs():
         await run_with_retry(run_battery_charging_simulation,  "battery_charging_sim")
         await run_with_retry(run_pickup_reminder_watcher,      "pickup_reminder")
         await run_with_retry(run_aging_priority_watcher,       "aging_priority")
+        await run_with_retry(run_critical_order_notifier,      "critical_order_notifier")
         await asyncio.sleep(3600)
 
 async def run_realtime_cronjobs():
