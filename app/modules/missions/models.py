@@ -226,8 +226,12 @@ class Order(Base):
     payment_account_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # ── Aging Priority fields (NORMAL mode) ──────────────────────────────────
-    is_aging_priority: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
-    aging_deadline: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    @property
+    def is_aging_priority(self) -> bool:
+        return False
+    @property
+    def aging_deadline(self) -> datetime | None:
+        return None
 
 class MissionLeg(Base):
     __tablename__ = "mission_legs"

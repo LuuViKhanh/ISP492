@@ -55,7 +55,7 @@ class BatteryCreate(BaseModel):
     capacity_wh: float
     status: batteries_status = batteries_status.ACTIVE
     current_hub_id: Optional[int] = None
-    drone_id: Optional[int] = None
+    drone_id: Optional[Union[str, int]] = None
     charge_level_pct: Optional[int] = 100
 
 
@@ -64,7 +64,7 @@ class BatteryUpdate(BaseModel):
     capacity_wh: Optional[float] = None
     status: Optional[batteries_status] = None
     current_hub_id: Optional[int] = None
-    drone_id: Optional[int] = None
+    drone_id: Optional[Union[str, int]] = None
     charge_level_pct: Optional[int] = None
 
 
@@ -73,7 +73,7 @@ class BatteryResponse(BaseModel):
     serial_number: str
     capacity_wh: float
     status: batteries_status
-    drone_id: Optional[int] = None
+    drone_id: Optional[Union[str, int]] = None
     current_hub_id: Optional[int] = None
     charge_level_pct: Optional[int] = None
     battery_model: Optional[str] = None

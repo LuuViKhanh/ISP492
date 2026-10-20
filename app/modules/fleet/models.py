@@ -85,7 +85,7 @@ class WorkOrder(Base):
     __tablename__ = "work_orders"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    drone_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    drone_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     battery_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     technician_id: Mapped[str] = mapped_column(String, nullable=False)
     issue_description: Mapped[str] = mapped_column(Text, nullable=False)
@@ -110,7 +110,7 @@ class MaintenanceRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     work_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    drone_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    drone_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     performed_by: Mapped[str | None] = mapped_column(String, nullable=True)
     title: Mapped[str | None] = mapped_column(String, nullable=True)
     diagnosis: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -146,7 +146,7 @@ class MaintenanceAlert(Base):
     __tablename__ = "maintenance_alerts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    drone_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    drone_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     source: Mapped[str | None] = mapped_column(String, nullable=True)
     maintenance_schedule_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     mission_id: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -158,15 +158,19 @@ class MaintenanceAlert(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     handled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # ── Acknowledge fields ────────────────────────────────────────────────────
-    acknowledged_by: Mapped[str | None] = mapped_column(String, nullable=True)
-    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    @property
+    def acknowledged_by(self) -> str | None:
+        return None
+    @property
+    def acknowledged_at(self) -> datetime | None:
+        return None
 
 
 class MaintenanceSchedule(Base):
     __tablename__ = "maintenance_schedules"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    drone_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    drone_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     maintenance_type: Mapped[str | None] = mapped_column(String, nullable=True)
     interval_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     interval_flight_hours: Mapped[float | None] = mapped_column(Float, nullable=True)

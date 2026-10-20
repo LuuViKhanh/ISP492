@@ -333,6 +333,8 @@ from app.modules.missions.models import DeliveryMode as _DeliveryMode
 
 
 async def run_aging_priority_watcher(db: AsyncSession):
+    # T?m th?i v� hi?u h�a worker v� DB server chua migrate c?t is_aging_priority
+    return
     """
     Worker: Tự động đánh dấu Aging Priority cho đơn NORMAL khi sắp hết deadline.
 
@@ -344,6 +346,7 @@ async def run_aging_priority_watcher(db: AsyncSession):
 
     Mỗi đơn chỉ được nâng cấp 1 lần (dedup bằng is_aging_priority flag).
     """
+    return  # Tạm thời vô hiệu hóa cho tới khi DB migration cột is_aging_priority
     from app.modules.missions.models import Order, OrderStatus, Mission
 
     now = get_vn_naive_datetime()

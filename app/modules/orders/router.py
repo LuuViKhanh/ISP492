@@ -14,6 +14,7 @@ from app.modules.system.models import Hub
 from app.modules.fleet.models import Drone, DroneStatus, Battery, batteries_status, compute_battery_available_status
 from app.modules.missions.technician.router import get_compatible_battery_models
 from app.modules.orders.schemas import (
+    HubSchema,
     OrderResponse,
     OriginPackageSchema,
     EligibleDronesResponse,
@@ -143,9 +144,9 @@ async def list_orders(
         order_resp.planningState = planning_state
         order_resp.originPackage = origin_pkg
         if o.origin_hub_id in hub_dict:
-            order_resp.origin_hub = {"id": o.origin_hub_id, "name": hub_dict[o.origin_hub_id]}
+            order_resp.origin_hub = HubSchema(id=o.origin_hub_id, name=hub_dict[o.origin_hub_id])
         if o.destination_hub_id in hub_dict:
-            order_resp.destination_hub = {"id": o.destination_hub_id, "name": hub_dict[o.destination_hub_id]}
+            order_resp.destination_hub = HubSchema(id=o.destination_hub_id, name=hub_dict[o.destination_hub_id])
         response_list.append(order_resp)
         
     return response_list
@@ -193,10 +194,10 @@ async def get_order(
     
     if order.origin_hub_id:
         ohub = await db.get(Hub, order.origin_hub_id)
-        if ohub: order_resp.origin_hub = {"id": ohub.id, "name": ohub.name}
+        if ohub: order_resp.origin_hub = HubSchema(id=ohub.id, name=ohub.name)
     if order.destination_hub_id:
         dhub = await db.get(Hub, order.destination_hub_id)
-        if dhub: order_resp.destination_hub = {"id": dhub.id, "name": dhub.name}
+        if dhub: order_resp.destination_hub = HubSchema(id=dhub.id, name=dhub.name)
         
     return order_resp
 
