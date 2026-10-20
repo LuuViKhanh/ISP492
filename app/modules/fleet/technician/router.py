@@ -11,7 +11,7 @@ from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
 from app.modules.auth.models import User
 from app.modules.fleet.models import (
-    Drone, Battery, WorkOrder, WorkOrderStatus,
+    Drone, Battery, WorkOrder, WorkOrderStatus, batteries_status,
     MaintenanceRecord, MaintenanceInspectionItem, WorkOrderLog, MaintenanceAlert, MaintenanceSchedule
 )
 from app.modules.system.models import Hub
@@ -633,7 +633,7 @@ async def use_battery_for_mission(
         raise HTTPException(status_code=404, detail="Mission not found")
         
     mission.battery_id = battery.id
-    battery.status = "In Use"
+    battery.status = batteries_status.ACTIVE
     await db.commit()
     
     return {"message": "Battery assigned successfully"}
@@ -1612,7 +1612,7 @@ async def dispatch_drone(
         battery = await db.get(Battery, mission.battery_id)
         if battery:
             battery.current_hub_id = None
-            battery.status = "In Use"
+            battery.status = batteries_status.ACTIVE
 
     # Thông tin leg đang bay và leg tiếp theo (nếu có)
     remaining_legs_result = await db.execute(
