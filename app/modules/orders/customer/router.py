@@ -250,12 +250,12 @@ async def create_order(
         window_end   = window_start + timedelta(minutes=flight_mins + 30)
         order_aging_deadline = None
     elif body.delivery_mode == DeliveryMode.NORMAL:
-        if not req_at_naive:
-            raise HTTPException(status_code=400, detail="requested_delivery_at là bắt buộc cho chế độ NORMAL.")
-        window_start = req_at_naive - timedelta(hours=4)
-        window_end   = req_at_naive + timedelta(minutes=flight_mins)
-        # Aging deadline = cần lên lịch bay trước 2h so với committed deadline
-        order_aging_deadline = req_at_naive - timedelta(hours=2)
+        # NORMAL: hệ thống tự lập lịch — FE không cần gửi requested_delivery_at.
+        # SLA 48h từ thời điểm tạo đơn. aging_deadline = 2h trước khi SLA kết thúc.
+        SLA_HOURS = 48
+        window_start = now
+        window_end   = now + timedelta(hours=SLA_HOURS)
+        order_aging_deadline = window_end - timedelta(hours=2)
     else:  # SCHEDULED
         if not req_at_naive:
             raise HTTPException(status_code=400, detail="requested_delivery_at là bắt buộc cho chế độ SCHEDULED.")
