@@ -40,7 +40,7 @@ class BatteryOverviewResponse(BaseModel):
     battery_model: Optional[str] = None
     capacity_wh: float
     status: batteries_status
-    drone_id: Optional[int] = None
+    drone_id: Optional[Union[str, int]] = None
     current_hub_id: Optional[int] = None
     hub_name: Optional[str] = None
     charge_level_pct: Optional[int] = None

@@ -224,7 +224,7 @@ from datetime import datetime
 
 class IncidentCreate(BaseModel):
     mission_id: Optional[str] = None
-    drone_id: Optional[int] = None
+    drone_id: Optional[Union[str, int]] = None
     severity: IncidentSeverity
     description: str
     requires_technical_inspection: bool = False
@@ -232,7 +232,7 @@ class IncidentCreate(BaseModel):
 class IncidentResponse(BaseModel):
     id: int
     mission_id: Optional[str]
-    drone_id: Optional[int]
+    drone_id: Optional[Union[str, int]] = None
     reporter_id: Optional[str]
     severity: IncidentSeverity
     description: str
@@ -899,7 +899,7 @@ async def check_relay_hub_battery_availability(
     hub_dict: dict,
     all_batteries: list,
     compatible_models: list[str],
-    drone_id: Optional[int],
+    drone_id: Optional[Union[str, int]],
     drone_capacity_wh: float,
     legs_detail: list[dict],
     assigned_battery: Optional[Battery] = None,
@@ -1139,7 +1139,7 @@ async def check_relay_hub_battery_availability(
 async def compute_mission_routes_internal(
     db: AsyncSession,
     order: Order,
-    drone_id: Optional[int] = None,
+    drone_id: Optional[Union[str, int]] = None,
     battery_id: Optional[str] = None,
     strict_battery: bool = False,
 ) -> tuple[list[RouteOptionSchema], list[dict]]:

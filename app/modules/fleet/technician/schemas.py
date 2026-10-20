@@ -27,7 +27,7 @@ class DroneProfileResponse(BaseModel):
 
 class IncomingMissionResponse(BaseModel):
     mission_code: str
-    drone_id: Optional[int] = None
+    drone_id: Optional[Union[str, int]] = None
     drone_code: Optional[str] = None
     model: Optional[str] = None
     mission_state: Optional[str] = None
@@ -45,7 +45,7 @@ class BatteryResponse(BaseModel):
     serial_number: str
     capacity_wh: float
     status: str
-    drone_id: Optional[int] = None
+    drone_id: Optional[Union[str, int]] = None
     current_hub_id: Optional[int] = None
     charge_level_pct: Optional[int] = None
     create_at: Optional[datetime] = None
