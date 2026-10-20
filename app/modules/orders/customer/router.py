@@ -12,8 +12,9 @@ from app.modules.system.models import Hub
 from app.modules.missions.models import (
     Order, OrderStatus, PaymentStatus, DeliveryMode,
     Mission, MissionStatus, TelemetryLog, MissionHubCheckpoint,
+    MissionLeg, MissionLegStatus,
 )
-from app.modules.fleet.models import Drone
+from app.modules.fleet.models import Drone, Battery
 from app.modules.orders.customer.schemas import (
     HubResponse,
     OrderEstimateRequest,
@@ -25,6 +26,10 @@ from app.modules.orders.schemas import (
     TrackingResponse,
     DroneLocationSchema,
     RoutePointSchema,
+    TrackingHubSchema,
+    TrackingLegSchema,
+    TrackingCurrentLegSchema,
+    TrailPointSchema,
     MissionReportResponse,
     ReportHubSchema,
     ReportRouteSchema,
@@ -446,10 +451,30 @@ async def track_delivery(
         drone_id=mission.drone_id if mission else None,
     )
 
-    # Điểm đầu/cuối tuyến từ hub
-    hub_ids = [i for i in (order.origin_hub_id, order.destination_hub_id) if i is not None]
-    if hub_ids:
-        hubs = {h.id: h for h in (await db.execute(select(Hub).where(Hub.id.in_(hub_ids)))).scalars().all()}
+    # Thu thập toàn bộ Hub ID (từ order và mission legs)
+    all_hub_ids = set()
+    if order.origin_hub_id:
+        all_hub_ids.add(order.origin_hub_id)
+    if order.destination_hub_id:
+        all_hub_ids.add(order.destination_hub_id)
+
+    mission_legs = []
+    if mission:
+        legs_res = await db.execute(
+            select(MissionLeg)
+            .where(MissionLeg.mission_id == mission.id)
+            .order_by(MissionLeg.sequence_no.asc())
+        )
+        mission_legs = legs_res.scalars().all()
+        for leg in mission_legs:
+            if leg.from_hub_id:
+                all_hub_ids.add(leg.from_hub_id)
+            if leg.to_hub_id:
+                all_hub_ids.add(leg.to_hub_id)
+
+    hubs = {}
+    if all_hub_ids:
+        hubs = {h.id: h for h in (await db.execute(select(Hub).where(Hub.id.in_(list(all_hub_ids))))).scalars().all()}
         o_hub = hubs.get(order.origin_hub_id)
         d_hub = hubs.get(order.destination_hub_id)
         if o_hub and o_hub.latitude is not None:
@@ -458,18 +483,34 @@ async def track_delivery(
             resp.destination = RoutePointSchema(latitude=d_hub.latitude, longitude=d_hub.longitude, name=d_hub.name)
 
     if mission:
+        # 1. Drone Location & Battery
         latest = (await db.execute(
             select(TelemetryLog)
             .where(TelemetryLog.mission_id == mission.id)
             .order_by(TelemetryLog.timestamp.desc())
             .limit(1)
         )).scalar_one_or_none()
+
+        bat_pct = None
+        if mission.drone_id:
+            drone_obj = await db.get(Drone, mission.drone_id)
+            if drone_obj and drone_obj.battery_level_pct is not None:
+                bat_pct = drone_obj.battery_level_pct
+        if bat_pct is None and mission.battery_id:
+            bat_obj = await db.get(Battery, mission.battery_id)
+            if bat_obj and bat_obj.charge_level_pct is not None:
+                bat_pct = bat_obj.charge_level_pct
+
         if latest:
             resp.drone_location = DroneLocationSchema(
                 latitude=latest.latitude, longitude=latest.longitude,
                 altitude=latest.altitude, speed=latest.speed,
-                battery_voltage=latest.battery_voltage, last_updated=latest.timestamp,
+                battery_voltage=latest.battery_voltage,
+                battery_pct=bat_pct,
+                last_updated=latest.timestamp,
             )
+
+        # 2. Travelled path & Checkpoints
         path_logs = (await db.execute(
             select(TelemetryLog.latitude, TelemetryLog.longitude)
             .where(TelemetryLog.mission_id == mission.id)
@@ -481,6 +522,68 @@ async def track_delivery(
             select(MissionHubCheckpoint).where(MissionHubCheckpoint.mission_id == mission.id)
         )).scalars().all()
         resp.checkpoints_passed = len(cp_count)
+
+        # 3. Legs & Current Leg
+        legs_list = []
+        current_leg_item = None
+        for leg in mission_legs:
+            f_hub = hubs.get(leg.from_hub_id)
+            t_hub = hubs.get(leg.to_hub_id)
+            leg_status_val = leg.status.value if hasattr(leg.status, "value") else str(leg.status or "")
+            leg_schema = TrackingLegSchema(
+                id=leg.id,
+                sequence_no=leg.sequence_no or 1,
+                status=leg_status_val,
+                from_hub=TrackingHubSchema(
+                    id=f_hub.id, name=f_hub.name,
+                    latitude=f_hub.latitude, longitude=f_hub.longitude
+                ) if f_hub else None,
+                to_hub=TrackingHubSchema(
+                    id=t_hub.id, name=t_hub.name,
+                    latitude=t_hub.latitude, longitude=t_hub.longitude
+                ) if t_hub else None,
+                battery_id=leg.battery_id,
+            )
+            legs_list.append(leg_schema)
+            if leg.status == MissionLegStatus.IN_PROGRESS:
+                current_leg_item = leg_schema
+
+        if not current_leg_item and legs_list:
+            pending = [l for l in legs_list if str(l.status).upper() == "PENDING"]
+            if pending:
+                current_leg_item = pending[0]
+            else:
+                current_leg_item = legs_list[-1]
+
+        if current_leg_item:
+            resp.current_leg = TrackingCurrentLegSchema(
+                id=current_leg_item.id,
+                sequence_no=current_leg_item.sequence_no,
+                status=current_leg_item.status,
+                from_hub=current_leg_item.from_hub,
+                to_hub=current_leg_item.to_hub,
+                assigned_battery_id=current_leg_item.battery_id,
+            )
+        resp.legs = legs_list
+
+        # 4. Trail: 50 điểm telemetry gần nhất (sắp xếp tăng dần theo thời gian)
+        trail_res = await db.execute(
+            select(TelemetryLog)
+            .where(TelemetryLog.mission_id == mission.id)
+            .order_by(TelemetryLog.timestamp.desc())
+            .limit(50)
+        )
+        recent_telemetry = list(reversed(trail_res.scalars().all()))
+        resp.trail = [
+            TrailPointSchema(
+                latitude=t.latitude,
+                longitude=t.longitude,
+                altitude=t.altitude,
+                speed=t.speed,
+                timestamp=t.timestamp,
+            )
+            for t in recent_telemetry
+        ]
 
     return resp
 

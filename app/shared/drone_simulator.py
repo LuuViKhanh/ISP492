@@ -27,6 +27,7 @@ from app.modules.missions.models import (
     TelemetryLog, HandlingStatus,
 )
 from app.modules.system.models import Hub
+from app.modules.fleet.models import Drone, Battery
 
 
 # ── Cấu hình ─────────────────────────────────────────────────────────────────
@@ -118,10 +119,29 @@ async def simulate_mission_flight(mission_id: str) -> None:
                 to_hub.latitude,   to_hub.longitude,
             )
 
+            # Lấy thông tin pin & drone ban đầu để tính toán khấu trừ pin
+            active_battery_id = leg.battery_id or mission.battery_id
+            active_drone_id = mission.drone_id
+            battery_capacity_wh = 150.0
+            current_battery_pct = 100.0
+
+            if active_battery_id:
+                bat_init = await db.get(Battery, active_battery_id)
+                if bat_init:
+                    if bat_init.capacity_wh and bat_init.capacity_wh > 0:
+                        battery_capacity_wh = float(bat_init.capacity_wh)
+                    if bat_init.charge_level_pct is not None:
+                        current_battery_pct = float(bat_init.charge_level_pct)
+            elif active_drone_id:
+                dr_init = await db.get(Drone, active_drone_id)
+                if dr_init and dr_init.battery_level_pct is not None:
+                    current_battery_pct = float(dr_init.battery_level_pct)
+
             print(
                 f"[SIMULATOR] Mission {mission_id} | Leg {leg.sequence_no}: "
                 f"{from_hub.name} → {to_hub.name} | "
-                f"{dist_m/1000:.2f} km | {len(waypoints)} điểm | interval={INTERVAL_SEC}s"
+                f"{dist_m/1000:.2f} km | {len(waypoints)} điểm | interval={INTERVAL_SEC}s | "
+                f"Battery start: {current_battery_pct:.1f}% (cap: {battery_capacity_wh}Wh)"
             )
 
         except Exception as e:
@@ -144,6 +164,12 @@ async def simulate_mission_flight(mission_id: str) -> None:
         energy_wh    = round(energy_wh + 0.8, 3)
         wind_speed   = round(2.0 + math.sin(idx * 0.5) * 1.5 + random.uniform(-0.2, 0.2), 2)
 
+        # Khấu trừ mức pin theo năng lượng tiêu hao mỗi bước
+        step_wh = 0.8
+        pct_consumed = (step_wh / battery_capacity_wh) * 100.0
+        current_battery_pct = max(1.0, current_battery_pct - pct_consumed)
+        new_charge_pct = int(round(current_battery_pct))
+
         async with AsyncSessionLocal() as db:
             try:
                 # Kiểm tra mission còn FLYING không (có thể bị cancel)
@@ -152,6 +178,7 @@ async def simulate_mission_flight(mission_id: str) -> None:
                     print(f"[SIMULATOR] Mission {mission_id} không còn FLYING, dừng simulator.")
                     return
 
+                # Ghi nhận Telemetry Log
                 log = TelemetryLog(
                     mission_id=mission_id,
                     timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
@@ -164,16 +191,27 @@ async def simulate_mission_flight(mission_id: str) -> None:
                     wind_speed=wind_speed,
                 )
                 db.add(log)
+
+                # Cập nhật mức pin trực tiếp vào Database (batteries và drones)
+                if active_battery_id:
+                    bat = await db.get(Battery, active_battery_id)
+                    if bat:
+                        bat.charge_level_pct = new_charge_pct
+                if active_drone_id:
+                    dr = await db.get(Drone, active_drone_id)
+                    if dr:
+                        dr.battery_level_pct = new_charge_pct
+
                 await db.commit()
 
                 print(
                     f"[SIMULATOR] [{idx+1:>3}/{total_points}] "
                     f"({lat:.6f}, {lng:.6f}) "
-                    f"alt={altitude}m spd={speed}m/s bat={battery_volt}V"
+                    f"alt={altitude}m spd={speed}m/s bat={battery_volt}V pin={new_charge_pct}%"
                 )
 
             except Exception as e:
-                print(f"[SIMULATOR] Lỗi insert TelemetryLog điểm {idx+1}: {e}")
+                print(f"[SIMULATOR] Lỗi insert TelemetryLog & cập nhật pin điểm {idx+1}: {e}")
 
     # ── Hết điểm → drone đã đến hub đích của leg này ─────────────────────────
     async with AsyncSessionLocal() as db:

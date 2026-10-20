@@ -242,8 +242,12 @@ class LiveTrackingDrone(BaseModel):
     latest_altitude: Optional[float]
     latest_speed: Optional[float]
     latest_battery_voltage: Optional[float]
+    latest_battery_pct: Optional[int] = None
     last_updated: Optional[datetime]
     checkpoints_passed: Optional[int] = 0
+    current_leg: Optional[dict] = None
+    legs: list[dict] = []
+    trail: list[dict] = []
     weather_temperature: Optional[float] = None
     weather_apparent_temp: Optional[float] = None
     weather_dew_point: Optional[float] = None
