@@ -75,7 +75,7 @@ async def get_incoming_drones(
     db: AsyncSession = Depends(get_async_db),
 ):
     from sqlalchemy import cast, String, or_
-    from app.modules.missions.models import MissionLeg
+    from app.modules.missions.models import MissionLeg, MissionLegStatus
     import traceback
     try:
         query = (
@@ -117,10 +117,8 @@ async def get_incoming_drones(
             leg_mission_ids_subq = (
                 select(MissionLeg.mission_id)
                 .where(
-                    or_(
-                        MissionLeg.to_hub_id == tech_hub_id,
-                        MissionLeg.from_hub_id == tech_hub_id,
-                    )
+                    MissionLeg.to_hub_id == tech_hub_id,
+                    MissionLeg.status == MissionLegStatus.IN_PROGRESS,
                 )
             )
             query = query.where(
