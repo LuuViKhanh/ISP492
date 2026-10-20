@@ -1383,6 +1383,7 @@ async def swap_battery_at_relay(
         if old_battery:
             old_battery.drone_id = None
             old_battery.current_hub_id = relay_hub_id  # pin cũ ở lại relay hub để sạc
+            old_battery.status = batteries_status.ACTIVE  # reset về ACTIVE để cronjob sạc nhận ra
 
     # Gán pin mới
     new_battery.drone_id = mission.drone_id
