@@ -1053,6 +1053,22 @@ async def update_inspection(
     wo = await db.get(WorkOrder, work_order_id)
     if not wo:
         raise HTTPException(status_code=404, detail="Work order not found")
+
+    # Idempotent: nếu đã COMPLETED rồi thì không làm gì thêm
+    if wo.status == WorkOrderStatus.COMPLETED and body.status == WorkOrderStatus.COMPLETED:
+        return wo
+
+    # Khi Complete: bắt buộc phải có Maintenance Record trước
+    if body.status == WorkOrderStatus.COMPLETED:
+        record_result = await db.execute(
+            select(MaintenanceRecord).where(MaintenanceRecord.work_order_id == work_order_id).limit(1)
+        )
+        if not record_result.scalars().first():
+            raise HTTPException(
+                status_code=400,
+                detail="Chưa có Maintenance Record cho Work Order này. Vui lòng tạo Maintenance Record trước khi Complete."
+            )
+
     old_status = wo.status.value
     wo.action_taken = body.action_taken
     wo.status = body.status
