@@ -40,6 +40,10 @@ class OrderResponse(BaseModel):
     # overdue_minutes > 0 = số phút đã trễ so với customer_deadline
     overdue_minutes: Optional[float] = None
     is_overdue: bool = False
+    # Priority scoring fields (computed)
+    slack_minutes: Optional[float] = None
+    priority_score: Optional[float] = None
+    priority_level: Optional[str] = None
     # Aging Priority fields
     is_aging_priority: bool = False
     aging_deadline: Optional[datetime] = None
