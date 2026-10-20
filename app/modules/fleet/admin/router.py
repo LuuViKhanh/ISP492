@@ -35,7 +35,7 @@ class DroneUpdate(BaseModel):
 
 
 class DroneResponse(BaseModel):
-    id: int
+    id: Union[str, int]
     name: str
     model: str
     payload_capacity_kg: float
@@ -49,12 +49,13 @@ class DroneResponse(BaseModel):
         from_attributes = True
 
 
+
 class BatteryCreate(BaseModel):
     serial_number: str
     capacity_wh: float
     status: batteries_status = batteries_status.ACTIVE
     current_hub_id: Optional[int] = None
-    drone_id: Optional[int] = None
+    drone_id: Optional[Union[str, int]] = None
     charge_level_pct: Optional[int] = 100
 
 
@@ -63,7 +64,7 @@ class BatteryUpdate(BaseModel):
     capacity_wh: Optional[float] = None
     status: Optional[batteries_status] = None
     current_hub_id: Optional[int] = None
-    drone_id: Optional[int] = None
+    drone_id: Optional[Union[str, int]] = None
     charge_level_pct: Optional[int] = None
 
 
@@ -72,7 +73,7 @@ class BatteryResponse(BaseModel):
     serial_number: str
     capacity_wh: float
     status: batteries_status
-    drone_id: Optional[int] = None
+    drone_id: Optional[Union[str, int]] = None
     current_hub_id: Optional[int] = None
     charge_level_pct: Optional[int] = None
     battery_model: Optional[str] = None
@@ -96,11 +97,11 @@ async def list_drones(
 
 @router.get("/drones/{drone_id}", response_model=DroneResponse, summary="Xem chi tiết một drone")
 async def get_drone(
-    drone_id: int,
+    drone_id: str,
     user: CurrentUser = Depends(allow_admin),
     db: AsyncSession = Depends(get_async_db),
 ):
-    drone = await db.get(Drone, drone_id)
+    drone = await db.get(Drone, str(drone_id))
     if not drone:
         raise HTTPException(status_code=404, detail="Drone not found")
     return drone
@@ -114,11 +115,13 @@ async def create_drone(
 ):
     """
     Tạo mới một drone và thêm vào kho fleet.
-
-    Các trường bắt buộc: `name`, `model`, `payload_capacity_kg`, `max_speed`.
-    Status mặc định là `Available` nếu không truyền.
+    Tự động sinh mã ID theo chuẩn DRN-XXXX (ví dụ: DRN-0001).
     """
+    from app.shared.id_generator import generate_sequential_id
+    drone_id = await generate_sequential_id(db, Drone, "DRN")
+
     drone = Drone(
+        id=drone_id,
         name=body.name,
         model=body.model,
         payload_capacity_kg=body.payload_capacity_kg,
@@ -134,8 +137,9 @@ async def create_drone(
 
 @router.put("/drones/{drone_id}", response_model=DroneResponse, summary="Cập nhật toàn bộ thông tin drone")
 async def update_drone(
-    drone_id: int,
+    drone_id: str,
     body: DroneUpdate,
+
     user: CurrentUser = Depends(allow_admin),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -167,7 +171,7 @@ async def update_drone(
 
 @router.delete("/drones/{drone_id}", status_code=204, summary="Xóa drone khỏi hệ thống")
 async def delete_drone(
-    drone_id: int,
+    drone_id: str,
     user: CurrentUser = Depends(allow_admin),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -176,10 +180,11 @@ async def delete_drone(
     Thường chỉ dùng khi drone bị hỏng hoàn toàn hoặc nhập sai.
     Nếu muốn ngưng sử dụng, hãy dùng PUT để chuyển status sang `Retired`.
     """
-    drone = await db.get(Drone, drone_id)
+    drone = await db.get(Drone, str(drone_id))
     if not drone:
         raise HTTPException(status_code=404, detail="Drone not found")
     await db.delete(drone)
+
     await db.commit()
 
 

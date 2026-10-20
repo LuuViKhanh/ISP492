@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from app.core.timezone import get_vn_naive_datetime, get_vn_datetime
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.missions.models import Mission, MissionStatus, TelemetryLog
@@ -18,7 +19,7 @@ async def run_approval_deadline_watcher(db: AsyncSession):
     Worker 1: Quản lý đếm ngược (Approval Deadline Watcher)
     Tự động hủy các chuyến bay chưa được duyệt khi đã quá giờ scheduled_time.
     """
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
     result = await db.execute(
         select(Mission).where(
             and_(
@@ -66,7 +67,7 @@ async def run_telemetry_signal_loss_watcher(db: AsyncSession):
     """
     Worker 2: Quét log, mất tín hiệu quá 3s tự tạo Incident và đẩy thông báo cho Operator
     """
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
     threshold_time = now - timedelta(seconds=3)
     
     # Tìm các chuyến bay đang bay
@@ -145,14 +146,15 @@ async def run_battery_charging_simulation(db: AsyncSession):
     - Việc áp dụng mô hình toán học này vào phần mềm giúp Digital Twin của hệ thống Drone mô phỏng chính xác
       khoảng thời gian chết (downtime), giúp AI điều phối quyết định việc lấy pin 85% đi bay ngay thay vì đợi sạc đầy 100%.
     """
-    from app.modules.fleet.models import Battery
+    from app.modules.fleet.models import Battery, batteries_status
     
-    # Tìm các pin đang ở Hub (drone_id IS NULL) và pin chưa đầy
+    # Tìm các pin đang ở Hub (drone_id IS NULL), đang ACTIVE và pin chưa đầy
     result = await db.execute(
         select(Battery).where(
             and_(
                 Battery.current_hub_id.isnot(None),
                 Battery.drone_id.is_(None),
+                Battery.status == batteries_status.ACTIVE,
                 Battery.charge_level_pct < 100
             )
         )
@@ -176,6 +178,7 @@ async def run_battery_charging_simulation(db: AsyncSession):
             
         # Làm tròn số và chặn trần tối đa ở 100%
         battery.charge_level_pct = min(round(new_charge), 100)
+        battery.update_at = datetime.now(timezone.utc)
         
     await db.commit()
 
@@ -214,7 +217,7 @@ async def run_pickup_reminder_watcher(db: AsyncSession):
       thông báo nhắc gần nhất của kiện (reference_id == PICKUP_REMINDER_REF); chỉ gửi
       thông báo mới nếu đã đủ 5 tiếng kể từ lần nhắc gần nhất (hoặc kể từ arrived_at nếu chưa nhắc lần nào).
     """
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
 
     # Lấy các kiện đang chờ khách tới nhận (drone đã đáp hub đích: arrived_at != None, khách chưa nhận: arrival_confirmed_at == None)
     result = await db.execute(
@@ -330,6 +333,8 @@ from app.modules.missions.models import DeliveryMode as _DeliveryMode
 
 
 async def run_aging_priority_watcher(db: AsyncSession):
+    # T?m th?i v� hi?u h�a worker v� DB server chua migrate c?t is_aging_priority
+    return
     """
     Worker: Tự động đánh dấu Aging Priority cho đơn NORMAL khi sắp hết deadline.
 
@@ -341,9 +346,10 @@ async def run_aging_priority_watcher(db: AsyncSession):
 
     Mỗi đơn chỉ được nâng cấp 1 lần (dedup bằng is_aging_priority flag).
     """
+    return  # Tạm thời vô hiệu hóa cho tới khi DB migration cột is_aging_priority
     from app.modules.missions.models import Order, OrderStatus, Mission
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
 
     # Lấy đơn NORMAL đủ điều kiện nâng cấp
     result = await db.execute(
@@ -407,3 +413,4 @@ async def run_aging_priority_watcher(db: AsyncSession):
             ))
 
     await db.commit()
+

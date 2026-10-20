@@ -13,7 +13,7 @@ class AvailableDroneSchema(BaseModel):
     # Cấu hình để Pydantic convert từ SQLAlchemy instance
     model_config = ConfigDict(from_attributes=True)
     
-    id: int
+    id: Union[str, int]
     name: str
     model: str
     payload_capacity_kg: float
@@ -26,7 +26,8 @@ class AvailableBatterySchema(BaseModel):
     serial_number: str
     capacity_wh: float
     status: str
-    drone_id: Optional[int] = None
+    drone_id: Optional[Union[str, int]] = None
+
     current_hub_id: Optional[int] = None
     charge_level_pct: Optional[int] = None
     create_at: Optional[datetime] = None
@@ -48,7 +49,7 @@ class AvailabilityResponse(BaseModel):
 
 # ==================== DTO CHO WORK ORDER (BẢO TRÌ) ====================
 class WorkOrderCreate(BaseModel):
-    drone_id: int
+    drone_id: Optional[Union[str, int]] = None
     battery_id: Optional[str] = None
     issue_description: str
     alert_id: Optional[int] = None
@@ -65,7 +66,7 @@ class WorkOrderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    drone_id: int
+    drone_id: Optional[Union[str, int]] = None
     battery_id: Optional[str] = None
     technician_id: str
     issue_description: str

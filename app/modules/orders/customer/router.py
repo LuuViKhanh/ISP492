@@ -4,6 +4,7 @@ from sqlalchemy import select, delete
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import uuid
+import math
 
 from app.database.db import get_async_db
 from app.shared.dependencies import get_current_user, CurrentUser
@@ -11,8 +12,9 @@ from app.modules.system.models import Hub
 from app.modules.missions.models import (
     Order, OrderStatus, PaymentStatus, DeliveryMode,
     Mission, MissionStatus, TelemetryLog, MissionHubCheckpoint,
+    MissionLeg, MissionLegStatus,
 )
-from app.modules.fleet.models import Drone
+from app.modules.fleet.models import Drone, Battery
 from app.modules.orders.customer.schemas import (
     HubResponse,
     OrderEstimateRequest,
@@ -24,6 +26,10 @@ from app.modules.orders.schemas import (
     TrackingResponse,
     DroneLocationSchema,
     RoutePointSchema,
+    TrackingHubSchema,
+    TrackingLegSchema,
+    TrackingCurrentLegSchema,
+    TrailPointSchema,
     MissionReportResponse,
     ReportHubSchema,
     ReportRouteSchema,
@@ -48,19 +54,24 @@ def compute_delivery_status(order: Order, mission: Optional[Mission]) -> tuple[s
     if order.status == OrderStatus.CANCELLED:
         return "CANCELLED", "Đã hủy"
     if mission is None:
+        if order.status == OrderStatus.AWAITING_DROP_OFF:
+            return "AWAITING_DROP_OFF", "Chờ mang hàng đến Hub"
+        if order.status == OrderStatus.AT_HUB:
+            return "AT_HUB", "Đã nhận tại Hub, chờ lên lịch bay"
+        if order.payment_status == PaymentStatus.PAID:
+            return "PAID", "Đã thanh toán, chờ gửi hàng"
         return "PENDING", "Chờ xử lý"
-    ms = mission.status
-    if mission.arrival_confirmed_at is not None or ms in (
-        MissionStatus.MISSION_COMPLETED, MissionStatus.COMPLETED
-    ):
+    
+    ms_str = (mission.status.value if hasattr(mission.status, "value") else str(mission.status or "")).upper()
+    if mission.arrival_confirmed_at is not None or ms_str in ("MISSION_COMPLETED", "COMPLETED"):
         return "DELIVERED", "Đã giao"
     if mission.arrived_at is not None:
         return "ARRIVED_AT_HUB", "Đã tới hub đích, chờ nhận"
-    if ms in (MissionStatus.FLYING, MissionStatus.IN_PROGRESS, MissionStatus.ACTIVE_MISSION):
+    if ms_str in ("FLYING", "IN_PROGRESS", "ACTIVE_MISSION"):
         return "IN_DELIVERY", "Đang giao"
-    if ms in (MissionStatus.SCHEDULED, MissionStatus.APPROVED, MissionStatus.PENDING_APPROVAL):
+    if ms_str in ("SCHEDULED", "APPROVED", "PENDING_APPROVAL"):
         return "SCHEDULED", "Đã lên lịch"
-    if ms in (MissionStatus.CANCELLED, MissionStatus.REJECTED, MissionStatus.FAILED):
+    if ms_str in ("CANCELLED", "REJECTED", "FAILED"):
         return "CANCELLED", "Đã hủy"
     return "PROCESSING", "Đang xử lý"
 
@@ -156,10 +167,14 @@ async def estimate_order(
     delivery_fee = core_fee
     now = datetime.now(timezone.utc)
 
+    # Tính thời gian bay từ AI model (vận tốc chuẩn 10 m/s = 36 km/h)
+    flight_duration_sec = dist_km * 1000 / 10.0
+    flight_mins = max(math.ceil(flight_duration_sec / 60.0), 10)
+
     if body.delivery_mode == DeliveryMode.EXPRESS:
         handover_deadline = now + timedelta(hours=3)
         estimated_departure = handover_deadline + timedelta(minutes=30)
-        estimated_arrival = estimated_departure + timedelta(hours=1)
+        estimated_arrival = estimated_departure + timedelta(minutes=flight_mins)
     elif body.delivery_mode == DeliveryMode.NORMAL:
         # NORMAL: cần cam kết thời gian giao, window linh hoạt ±4h
         if not body.requested_delivery_at:
@@ -169,7 +184,7 @@ async def estimate_order(
             req_time = req_time.replace(tzinfo=timezone.utc)
         handover_deadline = req_time - timedelta(hours=4)   # cần giao hàng trước 4h
         estimated_departure = req_time - timedelta(hours=2)
-        estimated_arrival = req_time
+        estimated_arrival = req_time + timedelta(minutes=flight_mins)
     else:
         if not body.requested_delivery_at:
             raise HTTPException(status_code=400, detail="requested_delivery_at is required for SCHEDULED mode")
@@ -178,7 +193,7 @@ async def estimate_order(
             req_time = req_time.replace(tzinfo=timezone.utc)
         handover_deadline = req_time - timedelta(hours=3)
         estimated_departure = req_time
-        estimated_arrival = estimated_departure + timedelta(hours=1)
+        estimated_arrival = estimated_departure + timedelta(minutes=flight_mins)
 
     return OrderEstimateResponse(
         delivery_fee=round(delivery_fee, 2),
@@ -206,8 +221,9 @@ async def create_order(
         raise HTTPException(status_code=400, detail="Package weight must be between 0.1 kg and 10.0 kg (Size XL limit).")
 
     from app.shared.id_generator import generate_sequential_id
+    from app.core.timezone import get_vn_naive_datetime
     order_id = await generate_sequential_id(db, Order, "ORD")
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
 
     origin_hub = await db.get(Hub, body.origin_hub_id)
     dest_hub = await db.get(Hub, body.destination_hub_id)
@@ -226,25 +242,29 @@ async def create_order(
         has_insurance=getattr(body, "has_insurance", False)
     )
 
+    # Tính thời gian bay từ AI model (vận tốc chuẩn 10 m/s = 36 km/h)
+    flight_duration_sec = dist_km * 1000 / 10.0
+    flight_mins = max(math.ceil(flight_duration_sec / 60.0), 10)
+
     # Tính toán thời gian cam kết theo delivery mode
     req_at_naive = body.requested_delivery_at.replace(tzinfo=None) if body.requested_delivery_at else None
 
     if body.delivery_mode == DeliveryMode.EXPRESS:
         window_start = now + timedelta(hours=3)
-        window_end   = now + timedelta(hours=4, minutes=30)
+        window_end   = window_start + timedelta(minutes=flight_mins + 30)
         order_aging_deadline = None
     elif body.delivery_mode == DeliveryMode.NORMAL:
         if not req_at_naive:
             raise HTTPException(status_code=400, detail="requested_delivery_at là bắt buộc cho chế độ NORMAL.")
         window_start = req_at_naive - timedelta(hours=4)
-        window_end   = req_at_naive
+        window_end   = req_at_naive + timedelta(minutes=flight_mins)
         # Aging deadline = cần lên lịch bay trước 2h so với committed deadline
         order_aging_deadline = req_at_naive - timedelta(hours=2)
     else:  # SCHEDULED
         if not req_at_naive:
             raise HTTPException(status_code=400, detail="requested_delivery_at là bắt buộc cho chế độ SCHEDULED.")
-        window_start = req_at_naive - timedelta(minutes=30)
-        window_end   = req_at_naive + timedelta(minutes=30)
+        window_start = req_at_naive
+        window_end   = req_at_naive + timedelta(minutes=flight_mins + 15)
         order_aging_deadline = None
 
     new_order = Order(
@@ -259,8 +279,8 @@ async def create_order(
         requested_delivery_at=req_at_naive,
         estimated_window_start=window_start,
         estimated_window_end=window_end,
-        aging_deadline=order_aging_deadline,
-        is_aging_priority=False,
+        # aging_deadline=order_aging_deadline,
+        # is_aging_priority=False,
         status=OrderStatus.PENDING,
         delivery_fee=total_fee,
         sender_phone=body.sender_phone,
@@ -431,10 +451,30 @@ async def track_delivery(
         drone_id=mission.drone_id if mission else None,
     )
 
-    # Điểm đầu/cuối tuyến từ hub
-    hub_ids = [i for i in (order.origin_hub_id, order.destination_hub_id) if i is not None]
-    if hub_ids:
-        hubs = {h.id: h for h in (await db.execute(select(Hub).where(Hub.id.in_(hub_ids)))).scalars().all()}
+    # Thu thập toàn bộ Hub ID (từ order và mission legs)
+    all_hub_ids = set()
+    if order.origin_hub_id:
+        all_hub_ids.add(order.origin_hub_id)
+    if order.destination_hub_id:
+        all_hub_ids.add(order.destination_hub_id)
+
+    mission_legs = []
+    if mission:
+        legs_res = await db.execute(
+            select(MissionLeg)
+            .where(MissionLeg.mission_id == mission.id)
+            .order_by(MissionLeg.sequence_no.asc())
+        )
+        mission_legs = legs_res.scalars().all()
+        for leg in mission_legs:
+            if leg.from_hub_id:
+                all_hub_ids.add(leg.from_hub_id)
+            if leg.to_hub_id:
+                all_hub_ids.add(leg.to_hub_id)
+
+    hubs = {}
+    if all_hub_ids:
+        hubs = {h.id: h for h in (await db.execute(select(Hub).where(Hub.id.in_(list(all_hub_ids))))).scalars().all()}
         o_hub = hubs.get(order.origin_hub_id)
         d_hub = hubs.get(order.destination_hub_id)
         if o_hub and o_hub.latitude is not None:
@@ -443,18 +483,34 @@ async def track_delivery(
             resp.destination = RoutePointSchema(latitude=d_hub.latitude, longitude=d_hub.longitude, name=d_hub.name)
 
     if mission:
+        # 1. Drone Location & Battery
         latest = (await db.execute(
             select(TelemetryLog)
             .where(TelemetryLog.mission_id == mission.id)
             .order_by(TelemetryLog.timestamp.desc())
             .limit(1)
         )).scalar_one_or_none()
+
+        bat_pct = None
+        if mission.drone_id:
+            drone_obj = await db.get(Drone, mission.drone_id)
+            if drone_obj and drone_obj.battery_level_pct is not None:
+                bat_pct = drone_obj.battery_level_pct
+        if bat_pct is None and mission.battery_id:
+            bat_obj = await db.get(Battery, mission.battery_id)
+            if bat_obj and bat_obj.charge_level_pct is not None:
+                bat_pct = bat_obj.charge_level_pct
+
         if latest:
             resp.drone_location = DroneLocationSchema(
                 latitude=latest.latitude, longitude=latest.longitude,
                 altitude=latest.altitude, speed=latest.speed,
-                battery_voltage=latest.battery_voltage, last_updated=latest.timestamp,
+                battery_voltage=latest.battery_voltage,
+                battery_pct=bat_pct,
+                last_updated=latest.timestamp,
             )
+
+        # 2. Travelled path & Checkpoints
         path_logs = (await db.execute(
             select(TelemetryLog.latitude, TelemetryLog.longitude)
             .where(TelemetryLog.mission_id == mission.id)
@@ -466,6 +522,68 @@ async def track_delivery(
             select(MissionHubCheckpoint).where(MissionHubCheckpoint.mission_id == mission.id)
         )).scalars().all()
         resp.checkpoints_passed = len(cp_count)
+
+        # 3. Legs & Current Leg
+        legs_list = []
+        current_leg_item = None
+        for leg in mission_legs:
+            f_hub = hubs.get(leg.from_hub_id)
+            t_hub = hubs.get(leg.to_hub_id)
+            leg_status_val = leg.status.value if hasattr(leg.status, "value") else str(leg.status or "")
+            leg_schema = TrackingLegSchema(
+                id=leg.id,
+                sequence_no=leg.sequence_no or 1,
+                status=leg_status_val,
+                from_hub=TrackingHubSchema(
+                    id=f_hub.id, name=f_hub.name,
+                    latitude=f_hub.latitude, longitude=f_hub.longitude
+                ) if f_hub else None,
+                to_hub=TrackingHubSchema(
+                    id=t_hub.id, name=t_hub.name,
+                    latitude=t_hub.latitude, longitude=t_hub.longitude
+                ) if t_hub else None,
+                battery_id=leg.battery_id,
+            )
+            legs_list.append(leg_schema)
+            if leg.status == MissionLegStatus.IN_PROGRESS:
+                current_leg_item = leg_schema
+
+        if not current_leg_item and legs_list:
+            pending = [l for l in legs_list if str(l.status).upper() == "PENDING"]
+            if pending:
+                current_leg_item = pending[0]
+            else:
+                current_leg_item = legs_list[-1]
+
+        if current_leg_item:
+            resp.current_leg = TrackingCurrentLegSchema(
+                id=current_leg_item.id,
+                sequence_no=current_leg_item.sequence_no,
+                status=current_leg_item.status,
+                from_hub=current_leg_item.from_hub,
+                to_hub=current_leg_item.to_hub,
+                assigned_battery_id=current_leg_item.battery_id,
+            )
+        resp.legs = legs_list
+
+        # 4. Trail: 50 điểm telemetry gần nhất (sắp xếp tăng dần theo thời gian)
+        trail_res = await db.execute(
+            select(TelemetryLog)
+            .where(TelemetryLog.mission_id == mission.id)
+            .order_by(TelemetryLog.timestamp.desc())
+            .limit(50)
+        )
+        recent_telemetry = list(reversed(trail_res.scalars().all()))
+        resp.trail = [
+            TrailPointSchema(
+                latitude=t.latitude,
+                longitude=t.longitude,
+                altitude=t.altitude,
+                speed=t.speed,
+                timestamp=t.timestamp,
+            )
+            for t in recent_telemetry
+        ]
 
     return resp
 

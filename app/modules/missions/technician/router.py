@@ -4,6 +4,7 @@ from sqlalchemy import select, cast, String, and_
 from datetime import datetime, timezone
 from typing import Optional
 from pydantic import BaseModel
+from app.core.timezone import get_vn_naive_datetime
 
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser, get_current_user
@@ -286,7 +287,7 @@ async def receive_outbound_delivery(
     if order.payment_status != PaymentStatus.PAID:
         raise HTTPException(status_code=400, detail="Order chưa được thanh toán")
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
 
     # Nếu đơn đã ở trạng thái AT_HUB rồi thì xử lý idempotent (không báo lỗi)
     if order.status == OrderStatus.AT_HUB:
@@ -465,11 +466,11 @@ async def prepare_battery_for_delivery(
                 detail=f"Pin {battery.id} hiện không ở trạng thái sẵn sàng (Trạng thái: {battery.status})."
             )
 
-        # Validate mức sạc pin phải đạt 100%
-        if (battery.charge_level_pct or 0) < 100:
+        # Validate mức sạc pin phải còn năng lượng
+        if (battery.charge_level_pct or 0) <= 0:
             raise HTTPException(
                 status_code=400,
-                detail=f"Pin {battery.id} chưa sạc đầy 100% (Mức sạc hiện tại: {battery.charge_level_pct}%). Chỉ pin đầy 100% mới đủ điều kiện bay."
+                detail=f"Pin {battery.id} cạn năng lượng (Mức sạc hiện tại: {battery.charge_level_pct}%). Vui lòng sạc pin hoặc chọn viên pin khác."
             )
 
         # Validate pin chưa bị gán cho Drone khác
@@ -481,23 +482,37 @@ async def prepare_battery_for_delivery(
                 detail=f"Pin {battery.id} hiện đang được gắn trên máy bay khác ({other_name}). Vui lòng chọn viên pin khả dụng khác."
             )
 
-    # TRƯỜNG HỢP B: FE không truyền battery_id (Fallback tự động chọn 1 pin 100% tương thích tại Hub)
+    # TRƯỜNG HỢP B: FE không truyền battery_id -> Ưu tiên viên pin Operator đã chọn sẵn cho Mission (mission.battery_id),
+    # nếu chưa có mới fallback tự động chọn 1 pin tương thích tại Hub
     else:
-        auto_bat_stmt = select(Battery).where(
-            and_(
-                Battery.current_hub_id == hub_id,
-                Battery.battery_model.in_(compatible_battery_models),
-                Battery.charge_level_pct >= 100,
-                Battery.status == batteries_status.ACTIVE,
-                (Battery.drone_id == mission.drone_id) | (Battery.drone_id.is_(None))
-            )
-        ).order_by(Battery.id)
-        res_auto = await db.execute(auto_bat_stmt)
-        battery = res_auto.scalars().first()
+        battery = None
+        if mission.battery_id:
+            preassigned_bat = await db.get(Battery, str(mission.battery_id))
+            if (
+                preassigned_bat
+                and (not hub_id or preassigned_bat.current_hub_id == hub_id or preassigned_bat.drone_id == mission.drone_id)
+                and (not compatible_battery_models or not preassigned_bat.battery_model or preassigned_bat.battery_model in compatible_battery_models)
+                and (preassigned_bat.status == batteries_status.ACTIVE or str(preassigned_bat.status).upper() in ["ACTIVE", "AVAILABLE", "READY"])
+                and (preassigned_bat.drone_id is None or preassigned_bat.drone_id == mission.drone_id)
+            ):
+                battery = preassigned_bat
+
+        if not battery:
+            auto_bat_stmt = select(Battery).where(
+                and_(
+                    Battery.current_hub_id == hub_id,
+                    Battery.battery_model.in_(compatible_battery_models),
+                    Battery.charge_level_pct > 0,
+                    Battery.status == batteries_status.ACTIVE,
+                    (Battery.drone_id == mission.drone_id) | (Battery.drone_id.is_(None))
+                )
+            ).order_by(Battery.charge_level_pct.desc(), Battery.capacity_wh.desc())
+            res_auto = await db.execute(auto_bat_stmt)
+            battery = res_auto.scalars().first()
         if not battery:
             raise HTTPException(
                 status_code=400,
-                detail=f"Tại Hub {hub_id} hiện không có viên pin nào sạc đầy 100% tương thích với máy bay {drone.name} ({drone.model}). Vui lòng sạc pin hoặc chọn viên pin khác."
+                detail=f"Tại Hub {hub_id} hiện không có viên pin khả dụng nào tương thích với máy bay {drone.name} ({drone.model}). Vui lòng sạc pin hoặc chọn viên pin khác."
             )
 
     # Validate pin chưa bị gán cho Mission đang hoạt động khác
@@ -534,6 +549,18 @@ async def prepare_battery_for_delivery(
     battery.drone_id = mission.drone_id
     if hub_id:
         battery.current_hub_id = hub_id
+
+    # Đồng bộ battery_id cho chặng đầu tiên (sequence_no = 1) của MissionLeg
+    from app.modules.missions.models import MissionLeg
+    leg1_res = await db.execute(
+        select(MissionLeg)
+        .where(MissionLeg.mission_id == mission.id)
+        .order_by(MissionLeg.sequence_no.asc(), MissionLeg.id.asc())
+        .limit(1)
+    )
+    leg1 = leg1_res.scalars().first()
+    if leg1:
+        leg1.battery_id = battery.id
 
     await db.commit()
     await db.refresh(mission)
@@ -641,7 +668,7 @@ async def confirm_pickup(
     if mission.arrival_confirmed_at is not None and mission.status == MissionStatus.MISSION_COMPLETED:
         raise HTTPException(status_code=400, detail="Pickup already confirmed")
         
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
     mission.arrival_confirmed_at = now
     mission.arrival_confirmed_by = user.id
     mission.status = MissionStatus.MISSION_COMPLETED

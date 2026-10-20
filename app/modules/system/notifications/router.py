@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Union
 from datetime import datetime
 
 from app.database.db import get_async_db
@@ -21,7 +21,7 @@ class NotificationResponse(BaseModel):
     reference_id: Optional[str]
     is_read: bool
     created_at: datetime
-    drone_id: Optional[int]
+    drone_id: Optional[Union[str, int]] = None
     work_order_id: Optional[int]
     mission_id: Optional[str]
 

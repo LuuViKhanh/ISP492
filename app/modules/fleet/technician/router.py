@@ -1,7 +1,10 @@
+import asyncio
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text, cast, String
+
+from app.core.timezone import get_vn_naive_datetime, get_vn_datetime
 
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
@@ -335,7 +338,7 @@ async def confirm_arrival(
     ):
         raise HTTPException(status_code=400, detail="Arrival already confirmed")
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
     dest_hub_id = mission.destination_hub_id or (int(user.hub_id) if (user.hub_id and str(user.hub_id).isdigit()) else None)
 
     # ── 1. Cập nhật Mission (rời danh sách Transit đang hoạt động sang History) ──
@@ -493,7 +496,7 @@ async def list_drones(
 
 @router.get("/drones/{drone_id}", response_model=DroneProfileResponse)
 async def get_drone_profile(
-    drone_id: int,
+    drone_id: str,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -554,7 +557,7 @@ async def get_drone_profile(
 
 @router.patch("/drones/{drone_id}/status", response_model=DroneProfileResponse)
 async def update_drone_status(
-    drone_id: int,
+    drone_id: str,
     body: DroneStatusUpdate,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
@@ -675,7 +678,7 @@ async def mark_battery_charged(
 
 @router.get("/drones/{drone_id}/maintenance-history", response_model=list[MaintenanceHistoryItem])
 async def get_drone_maintenance_history(
-    drone_id: int,
+    drone_id: str,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -689,7 +692,7 @@ async def get_drone_maintenance_history(
 
 @router.get("/maintenance-records/{drone_id}", response_model=list[MaintenanceRecordResponse])
 async def get_maintenance_records(
-    drone_id: int,
+    drone_id: str,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -733,7 +736,7 @@ async def create_maintenance_record(
         diagnosis=body.diagnosis,
         corrective_action=body.corrective_action,
         resulting_drone_status=body.resulting_drone_status,
-        created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        created_at=get_vn_naive_datetime(),
     )
     db.add(record)
     await db.flush()
@@ -744,7 +747,7 @@ async def create_maintenance_record(
             maintenance_record_id=record.id,
             item_name=item.item_name,
             is_completed=item.is_completed,
-            checked_at=datetime.now(timezone.utc).replace(tzinfo=None) if item.is_completed else None,
+            checked_at=get_vn_naive_datetime() if item.is_completed else None,
         )
         db.add(inspection_item)
         items.append(inspection_item)
@@ -794,7 +797,7 @@ async def list_maintenance_schedules(
 
 @router.get("/maintenance-schedules/drone/{drone_id}", response_model=list[MaintenanceScheduleResponse])
 async def get_drone_maintenance_schedules(
-    drone_id: int,
+    drone_id: str,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -812,7 +815,7 @@ async def create_maintenance_schedule(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
     next_inspection = now + timedelta(days=body.interval_days) if body.interval_days else None
     schedule = MaintenanceSchedule(
         drone_id=body.drone_id,
@@ -886,8 +889,6 @@ async def acknowledge_alert(
     - Không thể acknowledge alert đã `Handled` hoặc đã được người khác acknowledge.
     - Idempotent: nếu cùng user acknowledge lại thì trả về alert hiện tại (không lỗi).
     """
-    from datetime import datetime, timezone
-
     alert = await db.get(MaintenanceAlert, alert_id)
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -906,7 +907,7 @@ async def acknowledge_alert(
             detail=f"Alert này đã được acknowledge bởi technician khác (ID: {alert.acknowledged_by})."
         )
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
     alert.status = "Acknowledged"
     alert.acknowledged_by = user.id
     alert.acknowledged_at = now
@@ -1052,18 +1053,34 @@ async def update_inspection(
     wo = await db.get(WorkOrder, work_order_id)
     if not wo:
         raise HTTPException(status_code=404, detail="Work order not found")
+
+    # Idempotent: nếu đã COMPLETED rồi thì không làm gì thêm
+    if wo.status == WorkOrderStatus.COMPLETED and body.status == WorkOrderStatus.COMPLETED:
+        return wo
+
+    # Khi Complete: bắt buộc phải có Maintenance Record trước
+    if body.status == WorkOrderStatus.COMPLETED:
+        record_result = await db.execute(
+            select(MaintenanceRecord).where(MaintenanceRecord.work_order_id == work_order_id).limit(1)
+        )
+        if not record_result.scalars().first():
+            raise HTTPException(
+                status_code=400,
+                detail="Chưa có Maintenance Record cho Work Order này. Vui lòng tạo Maintenance Record trước khi Complete."
+            )
+
     old_status = wo.status.value
     wo.action_taken = body.action_taken
     wo.status = body.status
     if body.status == WorkOrderStatus.COMPLETED:
-        wo.resolved_at = datetime.now(timezone.utc)
+        wo.resolved_at = get_vn_naive_datetime()
     log = WorkOrderLog(
         work_order_id=wo.id,
         action="inspection_update",
         from_status=old_status,
         to_status=body.status.value,
         changed_by=user.id,
-        created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        created_at=get_vn_naive_datetime(),
     )
     db.add(log)
     await db.commit()
@@ -1092,7 +1109,7 @@ async def confirm_relay_arrival(
     - Cập nhật drone.current_hub_id → hub trung gian vừa đáp.
     """
     from app.modules.missions.models import MissionLeg, MissionLegStatus
-    from app.modules.fleet.models import DroneStatus
+    from app.modules.fleet.models import DroneStatus, batteries_status
 
     mission = await _resolve_mission(db, mission_id)
     if mission.status not in [
@@ -1137,7 +1154,7 @@ async def confirm_relay_arrival(
             detail="Không tìm thấy chặng bay đang hoạt động. Tất cả legs đã hoàn thành?"
         )
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
 
     # Không phải leg cuối cùng → đây là relay hub, không phải hub đích
     if next_leg is None:
@@ -1164,12 +1181,22 @@ async def confirm_relay_arrival(
             drone.current_hub_id = relay_hub_id
             drone.status = DroneStatus.AVAILABLE
 
+    # Tháo pin cũ khỏi drone → về Battery Management tại relay hub để sạc
+    # (swap-battery sẽ lắp pin mới sau)
+    if mission.battery_id and relay_hub_id:
+        old_battery = await db.get(Battery, mission.battery_id)
+        if old_battery:
+            old_battery.drone_id = None
+            old_battery.current_hub_id = relay_hub_id
+            old_battery.status = batteries_status.ACTIVE
+
     # Cập nhật mission handling_status → AT_HUB (chờ Technician swap pin)
     mission.handling_status = HandlingStatus.AT_HUB
 
     await db.commit()
 
     relay_hub = await db.get(Hub, relay_hub_id) if relay_hub_id else None
+    designated_bat = await db.get(Battery, str(next_leg.battery_id)) if (next_leg and next_leg.battery_id) else None
     return {
         "message": "Relay arrival confirmed. Drone đang chờ swap pin tại relay hub.",
         "mission_id": mission.id,
@@ -1179,6 +1206,7 @@ async def confirm_relay_arrival(
             "sequence_no": current_leg.sequence_no,
             "from_hub_id": current_leg.from_hub_id,
             "to_hub_id": current_leg.to_hub_id,
+            "battery_id": current_leg.battery_id,
             "status": current_leg.status.value,
         },
         "next_leg": {
@@ -1186,7 +1214,15 @@ async def confirm_relay_arrival(
             "sequence_no": next_leg.sequence_no,
             "from_hub_id": next_leg.from_hub_id,
             "to_hub_id": next_leg.to_hub_id,
+            "battery_id": next_leg.battery_id,
+            "designated_battery_id": designated_bat.id if designated_bat else next_leg.battery_id,
+            "designated_battery_serial": designated_bat.serial_number if designated_bat else None,
+            "designated_battery_model": designated_bat.battery_model if designated_bat else None,
+            "designated_battery_charge_pct": designated_bat.charge_level_pct if designated_bat else None,
         },
+        "designated_battery_id": designated_bat.id if designated_bat else next_leg.battery_id,
+        "designated_battery_serial": designated_bat.serial_number if designated_bat else None,
+        "designated_battery_model": designated_bat.battery_model if designated_bat else None,
         "relay_hub": relay_hub.name if relay_hub else str(relay_hub_id),
         "relay_hub_id": relay_hub_id,
         "handling_status": mission.handling_status.value,
@@ -1255,6 +1291,42 @@ async def swap_battery_at_relay(
         raise HTTPException(status_code=400, detail="Không xác định được relay hub hiện tại của drone.")
 
     compatible_models = await get_compatible_battery_models(db, drone.model)
+
+    active_statuses = [
+        MissionStatus.SCHEDULED,
+        MissionStatus.IN_PROGRESS,
+        MissionStatus.APPROVED,
+        MissionStatus.FLYING,
+        MissionStatus.ACTIVE_MISSION,
+    ]
+    # Tập các mã pin đã được giữ bởi các Mission active KHÁC (gồm cả Mission.battery_id và MissionLeg.battery_id)
+    other_mission_bats_res = await db.execute(
+        select(Mission.battery_id).where(
+            and_(
+                Mission.id != mission.id,
+                Mission.status.in_(active_statuses),
+                Mission.battery_id.is_not(None),
+            )
+        )
+    )
+    other_reserved_bat_ids = {str(r[0]) for r in other_mission_bats_res.all() if r[0]}
+
+    other_leg_bats_res = await db.execute(
+        select(MissionLeg.battery_id)
+        .join(Mission, MissionLeg.mission_id == Mission.id)
+        .where(
+            and_(
+                Mission.id != mission.id,
+                Mission.status.in_(active_statuses),
+                MissionLeg.status.in_([MissionLegStatus.PENDING, MissionLegStatus.IN_PROGRESS]),
+                MissionLeg.battery_id.is_not(None),
+            )
+        )
+    )
+    for r in other_leg_bats_res.all():
+        if r[0]:
+            other_reserved_bat_ids.add(str(r[0]))
+
     target_battery_id = None
     if body:
         target_battery_id = (body.new_battery_id or body.battery_id or "").strip() or None
@@ -1271,10 +1343,10 @@ async def swap_battery_at_relay(
             )
         if new_battery.status != batteries_status.ACTIVE:
             raise HTTPException(status_code=400, detail=f"Pin {new_battery.id} không ở trạng thái Active.")
-        if (new_battery.charge_level_pct or 0) < 100:
+        if (new_battery.charge_level_pct or 0) <= 0:
             raise HTTPException(
                 status_code=400,
-                detail=f"Pin {new_battery.id} chưa sạc đủ 100% (hiện {new_battery.charge_level_pct}%)."
+                detail=f"Pin {new_battery.id} đã cạn năng lượng (hiện {new_battery.charge_level_pct}%)."
             )
         if new_battery.drone_id is not None and new_battery.drone_id != mission.drone_id:
             raise HTTPException(status_code=400, detail=f"Pin {new_battery.id} đang gắn trên drone khác.")
@@ -1284,48 +1356,50 @@ async def swap_battery_at_relay(
                 detail=f"Pin {new_battery.id} (model: {new_battery.battery_model}) không tương thích với {drone.model}. Cần: {', '.join(compatible_models)}."
             )
     else:
-        # Tự động chọn pin 100% tương thích tại relay hub nếu FE không truyền mã pin cụ thể
-        auto_stmt = select(Battery).where(
-            and_(
-                Battery.current_hub_id == relay_hub_id,
-                Battery.battery_model.in_(compatible_models),
-                Battery.charge_level_pct >= 100,
-                Battery.status == batteries_status.ACTIVE,
-                Battery.drone_id.is_(None),
-            )
-        ).order_by(Battery.id)
-        res_auto = await db.execute(auto_stmt)
-        new_battery = res_auto.scalars().first()
+        # Ưu tiên viên pin đã được AI / Operator chỉ định sẵn cho chặng kế tiếp (next_leg.battery_id)
+        new_battery = None
+        if next_leg and next_leg.battery_id:
+            designated_bat = await db.get(Battery, str(next_leg.battery_id))
+            if (
+                designated_bat
+                and designated_bat.current_hub_id == relay_hub_id
+                and designated_bat.status == batteries_status.ACTIVE
+                and (designated_bat.charge_level_pct or 0) > 0
+                and (designated_bat.drone_id is None or designated_bat.drone_id == mission.drone_id)
+                and (not compatible_models or not designated_bat.battery_model or designated_bat.battery_model in compatible_models)
+                and designated_bat.id not in other_reserved_bat_ids
+            ):
+                new_battery = designated_bat
+
+        # Nếu pin chỉ định trước không khả dụng hoặc chưa có, tự động chọn pin có năng lượng cao nhất tương thích rảnh tại relay hub
+        if not new_battery:
+            auto_stmt = select(Battery).where(
+                and_(
+                    Battery.current_hub_id == relay_hub_id,
+                    Battery.battery_model.in_(compatible_models),
+                    Battery.charge_level_pct > 0,
+                    Battery.status == batteries_status.ACTIVE,
+                    Battery.drone_id.is_(None),
+                )
+            ).order_by(Battery.charge_level_pct.desc(), Battery.capacity_wh.desc())
+            res_auto = await db.execute(auto_stmt)
+            candidates = [b for b in res_auto.scalars().all() if b.id not in other_reserved_bat_ids]
+            new_battery = candidates[0] if candidates else None
+
         if not new_battery:
             raise HTTPException(
                 status_code=400,
-                detail=f"Tại Relay Hub #{relay_hub_id} hiện không có viên pin nào sạc đầy 100% tương thích với {drone.model}."
+                detail=f"Tại Relay Hub #{relay_hub_id} hiện không có viên pin khả dụng nào tương thích với {drone.model}."
             )
 
-    # Kiểm tra pin mới chưa bị giữ bởi Mission active khác
-    active_m_res = await db.execute(
-        select(Mission).where(
-            and_(
-                Mission.battery_id == new_battery.id,
-                Mission.id != mission.id,
-                Mission.status.in_([
-                    MissionStatus.SCHEDULED,
-                    MissionStatus.IN_PROGRESS,
-                    MissionStatus.APPROVED,
-                    MissionStatus.FLYING,
-                    MissionStatus.ACTIVE_MISSION,
-                ])
-            )
-        )
-    )
-    other_m = active_m_res.scalars().first()
-    if other_m:
+    # Kiểm tra pin mới chưa bị giữ bởi Mission active khác (hoặc chặng trung gian của Mission khác)
+    if new_battery.id in other_reserved_bat_ids:
         raise HTTPException(
             status_code=400,
-            detail=f"Pin {new_battery.id} đang được giữ bởi nhiệm vụ bay khác ({other_m.id})."
+            detail=f"Pin {new_battery.id} đang được giữ chỗ bởi một nhiệm vụ bay đang hoạt động khác."
         )
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
     old_battery_id = mission.battery_id
 
     # Tháo pin cũ
@@ -1334,6 +1408,7 @@ async def swap_battery_at_relay(
         if old_battery:
             old_battery.drone_id = None
             old_battery.current_hub_id = relay_hub_id  # pin cũ ở lại relay hub để sạc
+            old_battery.status = batteries_status.ACTIVE  # reset về ACTIVE để cronjob sạc nhận ra
 
     # Gán pin mới
     new_battery.drone_id = mission.drone_id
@@ -1367,8 +1442,51 @@ async def swap_battery_at_relay(
         "old_battery_id": old_battery_id,
         "new_battery_id": new_battery.id,
         "new_battery_serial": new_battery.serial_number,
+        "new_battery_model": new_battery.battery_model,
         "handling_status": mission.handling_status.value,
         "status": mission.status.value if hasattr(mission.status, "value") else str(mission.status),
+    }
+
+
+@router.post("/missions/{mission_id}/ready", summary="Technician xác nhận drone đã sẵn sàng bay")
+async def mark_mission_ready(
+    mission_id: str,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Technician xác nhận đã kiểm tra drone và lắp pin xong — sẵn sàng bay.
+
+    Yêu cầu:
+    - handling_status = AT_HUB (drone đang ở hub, chờ chuẩn bị).
+    - Mission phải có drone_id và battery_id.
+
+    Actions:
+    - mission.handling_status → READY.
+    """
+    mission = await _resolve_mission(db, mission_id)
+
+    if mission.handling_status != HandlingStatus.AT_HUB:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Mission phải ở trạng thái AT_HUB mới có thể mark READY. Hiện tại: {mission.handling_status}."
+        )
+
+    if not mission.drone_id:
+        raise HTTPException(status_code=400, detail="Mission chưa có drone. Operator cần phân công drone trước.")
+
+    if not mission.battery_id:
+        raise HTTPException(status_code=400, detail="Mission chưa có pin. Vui lòng lắp pin trước khi mark READY.")
+
+    mission.handling_status = HandlingStatus.READY
+    await db.commit()
+
+    return {
+        "message": "Mission đã sẵn sàng bay. Technician có thể bấm Dispatch.",
+        "mission_id": mission.id,
+        "handling_status": mission.handling_status.value,
+        "drone_id": mission.drone_id,
+        "battery_id": mission.battery_id,
     }
 
 
@@ -1410,7 +1528,7 @@ async def dispatch_drone(
             detail=f"Mission phải ở trạng thái READY (đã lắp/thay pin) trước khi dispatch. Hiện tại: {mission.handling_status}."
         )
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = get_vn_naive_datetime()
 
     # Tìm leg tiếp theo cần bay (PENDING)
     next_leg_result = await db.execute(
@@ -1538,6 +1656,14 @@ async def dispatch_drone(
         print(f"[NOTIFICATION] Lỗi gửi thông báo dispatch cho Operator: {e}")
 
     await db.commit()
+
+    # Spawn background task giả lập drone bay theo leg vừa dispatch
+    try:
+        from app.shared.drone_simulator import simulate_mission_flight
+        asyncio.create_task(simulate_mission_flight(str(mission.id)))
+        print(f"[DISPATCH] Spawned simulator task cho mission {mission.id}")
+    except Exception as e:
+        print(f"[DISPATCH] Lỗi spawn simulator: {e}")
 
     return {
         "message": f"Drone đã được dispatch. Bay tiếp chặng {next_leg.sequence_no} → {to_hub_label}.",

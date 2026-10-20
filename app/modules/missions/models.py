@@ -95,7 +95,7 @@ class Mission(Base):
     order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     customer_id: Mapped[str | None] = mapped_column(String, nullable=True)
     operator_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    drone_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    drone_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     battery_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     pickup_location_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     dropoff_location_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
@@ -171,7 +171,7 @@ class Incident(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     mission_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    drone_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    drone_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     reporter_id: Mapped[str | None] = mapped_column(String, nullable=True)
     severity: Mapped[IncidentSeverity] = mapped_column(
         SAEnum(IncidentSeverity, name="risk_level", create_type=False, values_callable=lambda x: [e.value for e in x])
@@ -226,8 +226,12 @@ class Order(Base):
     payment_account_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # ── Aging Priority fields (NORMAL mode) ──────────────────────────────────
-    is_aging_priority: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
-    aging_deadline: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    @property
+    def is_aging_priority(self) -> bool:
+        return False
+    @property
+    def aging_deadline(self) -> datetime | None:
+        return None
 
 class MissionLeg(Base):
     __tablename__ = "mission_legs"
