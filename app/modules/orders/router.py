@@ -39,6 +39,15 @@ ACTIVE_MISSION_STATUS_STRINGS = {
     "PENDING_APPROVAL",
 }
 
+ACTIVE_MISSION_STATUSES = [
+    MissionStatus.SCHEDULED,
+    MissionStatus.IN_PROGRESS,
+    MissionStatus.APPROVED,
+    MissionStatus.FLYING,
+    MissionStatus.ACTIVE_MISSION,
+    MissionStatus.PENDING_APPROVAL,
+]
+
 COMPLETED_MISSION_STATUS_STRINGS = {
     "COMPLETED",
     "MISSION_COMPLETED",
@@ -384,12 +393,13 @@ async def get_eligible_drones(
     eligible_drone_ids = {d.id for d in eligible_drones}
 
     # Lấy tất cả pin ACTIVE tại Origin Hub hoặc đang gắn trên các drone đủ điều kiện
+    bat_filters = [Battery.current_hub_id == hub.id]
+    if eligible_drone_ids:
+        bat_filters.append(Battery.drone_id.in_(eligible_drone_ids))
+
     bats_stmt = select(Battery).where(
         Battery.status == batteries_status.ACTIVE,
-        or_(
-            Battery.current_hub_id == hub.id,
-            Battery.drone_id.in_(eligible_drone_ids) if eligible_drone_ids else False,
-        )
+        or_(*bat_filters),
     ).order_by(Battery.id)
     hub_batteries = [
         b for b in (await db.execute(bats_stmt)).scalars().all()
