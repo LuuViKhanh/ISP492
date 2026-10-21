@@ -246,7 +246,7 @@ async def simulate_mission_flight(mission_id: str) -> None:
                 # Drone đáp xuống hub → cập nhật vị trí, giữ Incoming chờ Technician confirm
                 mission.handling_status = HandlingStatus.INCOMING
                 if to_hub:
-                    from app.modules.fleet.models import Drone
+                    
                     drone = await db.get(Drone, mission.drone_id) if mission.drone_id else None
                     if drone:
                         drone.current_hub_id = to_hub.id
