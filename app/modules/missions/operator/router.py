@@ -1334,6 +1334,7 @@ async def compute_mission_routes_internal(
         reserved_battery_ids=reserved_battery_ids,
         strict=strict_battery,
     )
+    max_safe_origin_energy_wh = round(origin_bat_energy_wh * 0.8, 2)
 
     # 6. Tính thời gian chờ pin & năng lượng pin thay thế tốt nhất tại từng Hub trung gian
     hub_wait_times: dict[int, float] = {}
@@ -1386,9 +1387,9 @@ async def compute_mission_routes_internal(
             # Chặng 1 (xuất phát từ Origin Hub) dùng năng lượng thực tế của viên pin được assign cho Drone;
             # Các chặng tiếp theo (xuất phát từ Relay Hub) dùng năng lượng của pin thay thế tại Relay Hub đó.
             if current_node == origin_hub.id:
-                leg_available_energy_wh = origin_bat_energy_wh if origin_bat_energy_wh > 0 else drone_capacity_wh
+                leg_available_energy_wh = origin_bat_energy_wh if origin_bat_energy_wh > 0 else (drone_capacity_wh if not assigned_battery else 0.0)
             else:
-                leg_available_energy_wh = hub_best_energy_wh.get(current_node, drone_capacity_wh)
+                leg_available_energy_wh = hub_best_energy_wh.get(current_node, 0.0)
 
             for n_hub in hubs:
                 if n_hub.id == current_node or n_hub.id in exclude_nodes:
@@ -1413,7 +1414,7 @@ async def compute_mission_routes_internal(
                     wait_time = hub_wait_times.get(n_hub.id, float('inf'))
                     if mode == "zero_wait" and wait_time > 0:
                         continue
-                    if wait_time == float('inf'):
+                    if wait_time == float('inf') or hub_best_energy_wh.get(n_hub.id, 0.0) <= 0:
                         continue
                     if wait_time == 0:
                         exp += " - Đổi pin nhanh (0p)"
@@ -1575,31 +1576,42 @@ async def compute_mission_routes_internal(
             raw_routes.append({"key": "DIR", "type": "direct", "data": r_dir})
             seen_route_strings.add(dir_string)
 
-    # 6. Dự phòng để ĐẢM BẢO LUÔN CÓ ĐỦ 3 TUYẾN ĐƯỜNG: Tìm tuyến trung gian qua các Hub lân cận
+    # 6. Dự phòng để TÌM THÊM TUYẾN ĐƯỜNG: Tìm tuyến trung gian qua các Hub lân cận
+    # CHỈ ĐỀ XUẤT NẾU HUB TRUNG GIAN THỰC SỰ CÓ PIN KHẢ DỤNG TRONG KHO & NĂNG LƯỢNG ĐỦ CHO TỪNG CHẶNG
     if len(raw_routes) < 3:
         candidates = []
         for h in hubs:
             if h.id not in (origin_hub.id, dest_hub.id):
+                mid_energy = hub_best_energy_wh.get(h.id, 0.0)
+                mid_wait = hub_wait_times.get(h.id, float('inf'))
+                # BẮT BUỘC: Hub trung gian phải có pin tương thích khả dụng trong kho (chưa gắn drone, chưa bị giữ chỗ)
+                if mid_energy <= 0 or mid_wait == float('inf'):
+                    continue
+
                 d1 = haversine_distance(origin_hub.latitude or 0, origin_hub.longitude or 0, h.latitude or 0, h.longitude or 0)
                 d2 = haversine_distance(h.latitude or 0, h.longitude or 0, dest_hub.latitude or 0, dest_hub.longitude or 0)
-                candidates.append((d1 + d2, h.id))
+                e_leg1 = predict_flight_energy(d1, payload)["energy_wh"]
+                e_leg2 = predict_flight_energy(d2, payload)["energy_wh"]
+
+                # BẮT BUỘC: Pin xuất phát phải đủ bay Chặng 1 và pin tại Hub trung gian phải đủ bay Chặng 2 (dự phòng >= 20%)
+                if origin_bat_energy_wh > 0 and e_leg1 > max_safe_origin_energy_wh:
+                    continue
+                if e_leg2 > mid_energy * 0.8:
+                    continue
+
+                candidates.append((d1 + d2, h.id, d_leg1, d_leg2, e_leg1, e_leg2, mid_wait))
         candidates.sort(key=lambda x: x[0])
 
-        for _, mid_hub_id in candidates:
+        for _, mid_hub_id, d_leg1, d_leg2, e_leg1, e_leg2, mid_wait in candidates:
             if len(raw_routes) >= 3:
                 break
-            d_leg1 = haversine_distance(origin_hub.latitude or 0, origin_hub.longitude or 0, hub_dict[mid_hub_id].latitude or 0, hub_dict[mid_hub_id].longitude or 0)
-            d_leg2 = haversine_distance(hub_dict[mid_hub_id].latitude or 0, hub_dict[mid_hub_id].longitude or 0, dest_hub.latitude or 0, dest_hub.longitude or 0)
-            e_leg1 = predict_flight_energy(d_leg1, payload)["energy_wh"]
-            e_leg2 = predict_flight_energy(d_leg2, payload)["energy_wh"]
 
             cand_path = [origin_hub.id, mid_hub_id, dest_hub.id]
             cand_route_codes = [origin_hub.code or origin_hub.name, hub_dict[mid_hub_id].code or hub_dict[mid_hub_id].name, dest_hub.code or dest_hub.name]
             cand_route_string = " -> ".join(cand_route_codes)
 
             if cand_route_string not in seen_route_strings:
-                w_mid = hub_wait_times.get(mid_hub_id, 0)
-                w_val = w_mid if w_mid != float('inf') else 15
+                w_val = mid_wait if mid_wait != float('inf') else 0
                 tot_dist = d_leg1 + d_leg2
                 tot_energy = e_leg1 + e_leg2
                 cand_data = {
@@ -1822,6 +1834,16 @@ async def compute_mission_routes_internal(
                     s.reason = f"Tuyến bay thẳng trực tiếp: Cự ly {s.distanceKm} km, không qua trạm sạc trung gian. {origin_bat_note}".strip()
                 else:
                     s.reason = f"Tuyến cân bằng: Cự ly {s.distanceKm} km, thời gian {s.predictedDurationMin} phút. {origin_bat_note}{swap_summary}".strip()
+
+    # ── LOẠI BỎ CÁC TUYẾN ĐƯỜNG KHÔNG ĐỦ PIN / KHÔNG KHẢ THI KHỎI DANH SÁCH RECOMMEND ──
+    # Quy tắc: Nếu những tuyến đường đưa ra không có đủ pin, không có pin khả dụng
+    # để assign cho mission của drone này thì loại bỏ tuyến đường đó ra khỏi recommend.
+    feasible_schemas = [s for s in routes_schemas if s.feasible]
+    feasible_raw_data = [d for s, d in zip(routes_schemas, raw_data_list) if s.feasible]
+
+    if feasible_schemas:
+        routes_schemas = feasible_schemas
+        raw_data_list = feasible_raw_data
 
     return routes_schemas, raw_data_list
 
