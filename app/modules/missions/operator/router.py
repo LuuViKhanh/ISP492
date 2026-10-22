@@ -10,7 +10,7 @@ from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
 from app.core.config import settings
-from app.modules.missions.models import Mission, MissionStatus, HandlingStatus, Location, LocationType, Incident, IncidentStatus, IncidentSeverity, TelemetryLog, MissionHubCheckpoint
+from app.modules.missions.models import Mission, MissionStatus, HandlingStatus, Location, LocationType, Incident, IncidentStatus, IncidentSeverity, TelemetryLog, MissionHubCheckpoint, MissionLeg, MissionLegStatus
 from app.modules.system.models import Hub
 from app.modules.fleet.models import MaintenanceAlert
 import heapq
@@ -184,9 +184,128 @@ async def get_live_tracking(
     )
     cp_counts = {row.mission_id: row.cnt for row in cp_counts_result.all()}
 
+    # Lấy thông tin Legs cho các mission đang bay
+    legs_result = await db.execute(
+        select(MissionLeg)
+        .where(MissionLeg.mission_id.in_(mission_ids))
+        .order_by(MissionLeg.sequence_no.asc())
+    )
+    all_legs = legs_result.scalars().all()
+    legs_by_mid = {}
+    hub_ids_to_fetch = set()
+    for l in all_legs:
+        legs_by_mid.setdefault(l.mission_id, []).append(l)
+        if l.from_hub_id:
+            hub_ids_to_fetch.add(l.from_hub_id)
+        if l.to_hub_id:
+            hub_ids_to_fetch.add(l.to_hub_id)
+
+    hubs_map = {}
+    if hub_ids_to_fetch:
+        hubs_res = await db.execute(select(Hub).where(Hub.id.in_(list(hub_ids_to_fetch))))
+        hubs_map = {h.id: h for h in hubs_res.scalars().all()}
+
+    # Lấy drone & battery để lấy % pin
+    drone_ids = [m.drone_id for m in flying_missions if m.drone_id]
+    battery_ids = [m.battery_id for m in flying_missions if m.battery_id]
+    drones_map = {}
+    if drone_ids:
+        d_res = await db.execute(select(Drone).where(Drone.id.in_(drone_ids)))
+        drones_map = {d.id: d for d in d_res.scalars().all()}
+    batteries_map = {}
+    if battery_ids:
+        b_res = await db.execute(select(Battery).where(Battery.id.in_(battery_ids)))
+        batteries_map = {b.id: b for b in b_res.scalars().all()}
+
+    # Lấy trail (50 điểm gần nhất theo thứ tự thời gian tăng dần)
+    trails_by_mid = {}
+    for mid in mission_ids:
+        t_res = await db.execute(
+            select(TelemetryLog)
+            .where(TelemetryLog.mission_id == mid)
+            .order_by(TelemetryLog.timestamp.desc())
+            .limit(50)
+        )
+        recent_logs = list(reversed(t_res.scalars().all()))
+        trails_by_mid[mid] = [
+            {
+                "latitude": t.latitude,
+                "longitude": t.longitude,
+                "altitude": t.altitude,
+                "speed": t.speed,
+                "timestamp": t.timestamp.isoformat() if t.timestamp else None,
+            }
+            for t in recent_logs
+        ]
+
     drones = []
     for mission in flying_missions:
         log = latest_logs.get(mission.id)
+        m_legs = legs_by_mid.get(mission.id, [])
+        legs_data = []
+        curr_leg = None
+        for leg in m_legs:
+            f_hub = hubs_map.get(leg.from_hub_id)
+            t_hub = hubs_map.get(leg.to_hub_id)
+            leg_stat = leg.status.value if hasattr(leg.status, "value") else str(leg.status or "")
+            item = {
+                "id": leg.id,
+                "sequence_no": leg.sequence_no or 1,
+                "status": leg_stat,
+                "from_hub": {
+                    "id": f_hub.id,
+                    "name": f_hub.name,
+                    "latitude": f_hub.latitude,
+                    "longitude": f_hub.longitude,
+                } if f_hub else None,
+                "to_hub": {
+                    "id": t_hub.id,
+                    "name": t_hub.name,
+                    "latitude": t_hub.latitude,
+                    "longitude": t_hub.longitude,
+                } if t_hub else None,
+                "battery_id": leg.battery_id,
+            }
+            legs_data.append(item)
+            if leg.status == MissionLegStatus.IN_PROGRESS:
+                curr_leg = {
+                    "id": item["id"],
+                    "sequence_no": item["sequence_no"],
+                    "status": item["status"],
+                    "from_hub": item["from_hub"],
+                    "to_hub": item["to_hub"],
+                    "assigned_battery_id": item["battery_id"],
+                }
+
+        if not curr_leg and legs_data:
+            pending = [l for l in legs_data if str(l.get("status", "")).upper() == "PENDING"]
+            if pending:
+                p = pending[0]
+                curr_leg = {
+                    "id": p["id"],
+                    "sequence_no": p["sequence_no"],
+                    "status": p["status"],
+                    "from_hub": p["from_hub"],
+                    "to_hub": p["to_hub"],
+                    "assigned_battery_id": p.get("battery_id"),
+                }
+            else:
+                p = legs_data[-1]
+                curr_leg = {
+                    "id": p["id"],
+                    "sequence_no": p["sequence_no"],
+                    "status": p["status"],
+                    "from_hub": p["from_hub"],
+                    "to_hub": p["to_hub"],
+                    "assigned_battery_id": p.get("battery_id"),
+                }
+
+        drone_obj = drones_map.get(mission.drone_id)
+        bat_obj = batteries_map.get(mission.battery_id)
+        bat_pct = drone_obj.battery_level_pct if drone_obj and drone_obj.battery_level_pct is not None else (
+            bat_obj.charge_level_pct if bat_obj and bat_obj.charge_level_pct is not None else None
+        )
+
         drones.append(
             LiveTrackingDrone(
                 mission_id=mission.id,
@@ -197,8 +316,12 @@ async def get_live_tracking(
                 latest_altitude=log.altitude if log else None,
                 latest_speed=log.speed if log else None,
                 latest_battery_voltage=log.battery_voltage if log else None,
+                latest_battery_pct=bat_pct,
                 last_updated=log.timestamp if log else None,
                 checkpoints_passed=cp_counts.get(mission.id, 0),
+                current_leg=curr_leg,
+                legs=legs_data,
+                trail=trails_by_mid.get(mission.id, []),
                 # Weather từ telemetry log mới nhất
                 weather_temperature=log.weather_temperature if log else None,
                 weather_apparent_temp=log.weather_apparent_temp if log else None,
@@ -1211,6 +1334,7 @@ async def compute_mission_routes_internal(
         reserved_battery_ids=reserved_battery_ids,
         strict=strict_battery,
     )
+    max_safe_origin_energy_wh = round(origin_bat_energy_wh * 0.8, 2)
 
     # 6. Tính thời gian chờ pin & năng lượng pin thay thế tốt nhất tại từng Hub trung gian
     hub_wait_times: dict[int, float] = {}
@@ -1263,9 +1387,9 @@ async def compute_mission_routes_internal(
             # Chặng 1 (xuất phát từ Origin Hub) dùng năng lượng thực tế của viên pin được assign cho Drone;
             # Các chặng tiếp theo (xuất phát từ Relay Hub) dùng năng lượng của pin thay thế tại Relay Hub đó.
             if current_node == origin_hub.id:
-                leg_available_energy_wh = origin_bat_energy_wh if origin_bat_energy_wh > 0 else drone_capacity_wh
+                leg_available_energy_wh = origin_bat_energy_wh if origin_bat_energy_wh > 0 else (drone_capacity_wh if not assigned_battery else 0.0)
             else:
-                leg_available_energy_wh = hub_best_energy_wh.get(current_node, drone_capacity_wh)
+                leg_available_energy_wh = hub_best_energy_wh.get(current_node, 0.0)
 
             for n_hub in hubs:
                 if n_hub.id == current_node or n_hub.id in exclude_nodes:
@@ -1290,7 +1414,7 @@ async def compute_mission_routes_internal(
                     wait_time = hub_wait_times.get(n_hub.id, float('inf'))
                     if mode == "zero_wait" and wait_time > 0:
                         continue
-                    if wait_time == float('inf'):
+                    if wait_time == float('inf') or hub_best_energy_wh.get(n_hub.id, 0.0) <= 0:
                         continue
                     if wait_time == 0:
                         exp += " - Đổi pin nhanh (0p)"
@@ -1452,31 +1576,42 @@ async def compute_mission_routes_internal(
             raw_routes.append({"key": "DIR", "type": "direct", "data": r_dir})
             seen_route_strings.add(dir_string)
 
-    # 6. Dự phòng để ĐẢM BẢO LUÔN CÓ ĐỦ 3 TUYẾN ĐƯỜNG: Tìm tuyến trung gian qua các Hub lân cận
+    # 6. Dự phòng để TÌM THÊM TUYẾN ĐƯỜNG: Tìm tuyến trung gian qua các Hub lân cận
+    # CHỈ ĐỀ XUẤT NẾU HUB TRUNG GIAN THỰC SỰ CÓ PIN KHẢ DỤNG TRONG KHO & NĂNG LƯỢNG ĐỦ CHO TỪNG CHẶNG
     if len(raw_routes) < 3:
         candidates = []
         for h in hubs:
             if h.id not in (origin_hub.id, dest_hub.id):
+                mid_energy = hub_best_energy_wh.get(h.id, 0.0)
+                mid_wait = hub_wait_times.get(h.id, float('inf'))
+                # BẮT BUỘC: Hub trung gian phải có pin tương thích khả dụng trong kho (chưa gắn drone, chưa bị giữ chỗ)
+                if mid_energy <= 0 or mid_wait == float('inf'):
+                    continue
+
                 d1 = haversine_distance(origin_hub.latitude or 0, origin_hub.longitude or 0, h.latitude or 0, h.longitude or 0)
                 d2 = haversine_distance(h.latitude or 0, h.longitude or 0, dest_hub.latitude or 0, dest_hub.longitude or 0)
-                candidates.append((d1 + d2, h.id))
+                e_leg1 = predict_flight_energy(d1, payload)["energy_wh"]
+                e_leg2 = predict_flight_energy(d2, payload)["energy_wh"]
+
+                # BẮT BUỘC: Pin xuất phát phải đủ bay Chặng 1 và pin tại Hub trung gian phải đủ bay Chặng 2 (dự phòng >= 20%)
+                if origin_bat_energy_wh > 0 and e_leg1 > max_safe_origin_energy_wh:
+                    continue
+                if e_leg2 > mid_energy * 0.8:
+                    continue
+
+                candidates.append((d1 + d2, h.id, d_leg1, d_leg2, e_leg1, e_leg2, mid_wait))
         candidates.sort(key=lambda x: x[0])
 
-        for _, mid_hub_id in candidates:
+        for _, mid_hub_id, d_leg1, d_leg2, e_leg1, e_leg2, mid_wait in candidates:
             if len(raw_routes) >= 3:
                 break
-            d_leg1 = haversine_distance(origin_hub.latitude or 0, origin_hub.longitude or 0, hub_dict[mid_hub_id].latitude or 0, hub_dict[mid_hub_id].longitude or 0)
-            d_leg2 = haversine_distance(hub_dict[mid_hub_id].latitude or 0, hub_dict[mid_hub_id].longitude or 0, dest_hub.latitude or 0, dest_hub.longitude or 0)
-            e_leg1 = predict_flight_energy(d_leg1, payload)["energy_wh"]
-            e_leg2 = predict_flight_energy(d_leg2, payload)["energy_wh"]
 
             cand_path = [origin_hub.id, mid_hub_id, dest_hub.id]
             cand_route_codes = [origin_hub.code or origin_hub.name, hub_dict[mid_hub_id].code or hub_dict[mid_hub_id].name, dest_hub.code or dest_hub.name]
             cand_route_string = " -> ".join(cand_route_codes)
 
             if cand_route_string not in seen_route_strings:
-                w_mid = hub_wait_times.get(mid_hub_id, 0)
-                w_val = w_mid if w_mid != float('inf') else 15
+                w_val = mid_wait if mid_wait != float('inf') else 0
                 tot_dist = d_leg1 + d_leg2
                 tot_energy = e_leg1 + e_leg2
                 cand_data = {
@@ -1699,6 +1834,16 @@ async def compute_mission_routes_internal(
                     s.reason = f"Tuyến bay thẳng trực tiếp: Cự ly {s.distanceKm} km, không qua trạm sạc trung gian. {origin_bat_note}".strip()
                 else:
                     s.reason = f"Tuyến cân bằng: Cự ly {s.distanceKm} km, thời gian {s.predictedDurationMin} phút. {origin_bat_note}{swap_summary}".strip()
+
+    # ── LOẠI BỎ CÁC TUYẾN ĐƯỜNG KHÔNG ĐỦ PIN / KHÔNG KHẢ THI KHỎI DANH SÁCH RECOMMEND ──
+    # Quy tắc: Nếu những tuyến đường đưa ra không có đủ pin, không có pin khả dụng
+    # để assign cho mission của drone này thì loại bỏ tuyến đường đó ra khỏi recommend.
+    feasible_schemas = [s for s in routes_schemas if s.feasible]
+    feasible_raw_data = [d for s, d in zip(routes_schemas, raw_data_list) if s.feasible]
+
+    if feasible_schemas:
+        routes_schemas = feasible_schemas
+        raw_data_list = feasible_raw_data
 
     return routes_schemas, raw_data_list
 
@@ -2969,3 +3114,56 @@ async def emergency_land(
             f"Drone #{mission.drone_id} chuyển sang MAINTENANCE."
         ),
     )
+
+
+# ── Simulator Config ──────────────────────────────────────────────────────────
+
+class SimulatorConfigRequest(BaseModel):
+    incident_enabled:     Optional[bool]  = None
+    incident_probability: Optional[float] = None  # 0.0 – 1.0
+    incident_min_step:    Optional[int]   = None
+    incident_severity:    Optional[str]   = None  # Low / Medium / High
+    interval_sec:         Optional[int]   = None  # Giây giữa mỗi điểm telemetry
+    steps_per_leg:        Optional[int]   = None  # Số điểm nội suy mỗi chặng
+
+
+@router.get("/simulator/config", summary="Lấy cấu hình simulator hiện tại")
+async def get_simulator_config(
+    user: CurrentUser = Depends(allow_operator),
+):
+    from app.shared.drone_simulator import simulator_config
+    return simulator_config.to_dict()
+
+
+@router.patch("/simulator/config", summary="Cập nhật cấu hình simulator")
+async def update_simulator_config(
+    body: SimulatorConfigRequest,
+    user: CurrentUser = Depends(allow_operator),
+):
+    from app.shared.drone_simulator import simulator_config
+
+    if body.incident_enabled is not None:
+        simulator_config.incident_enabled = body.incident_enabled
+    if body.incident_probability is not None:
+        if not 0.0 <= body.incident_probability <= 1.0:
+            raise HTTPException(status_code=400, detail="incident_probability phải từ 0.0 đến 1.0")
+        simulator_config.incident_probability = body.incident_probability
+    if body.incident_min_step is not None:
+        simulator_config.incident_min_step = body.incident_min_step
+    if body.incident_severity is not None:
+        if body.incident_severity not in ("Low", "Medium", "High"):
+            raise HTTPException(status_code=400, detail="incident_severity phải là Low / Medium / High")
+        simulator_config.incident_severity = body.incident_severity
+    if body.interval_sec is not None:
+        if body.interval_sec < 1:
+            raise HTTPException(status_code=400, detail="interval_sec phải >= 1")
+        simulator_config.interval_sec = body.interval_sec
+    if body.steps_per_leg is not None:
+        if body.steps_per_leg < 5:
+            raise HTTPException(status_code=400, detail="steps_per_leg phải >= 5")
+        simulator_config.steps_per_leg = body.steps_per_leg
+
+    return {
+        "message": "Cấu hình simulator đã cập nhật.",
+        "config": simulator_config.to_dict(),
+    }

@@ -1,7 +1,7 @@
 [
   {
     "title": "Cách tạo đơn hàng giao drone",
-    "content": "Để tạo đơn hàng: (1) Chọn Hub xuất phát và Hub đích; (2) Nhập thông tin kiện hàng: trọng lượng (tối đa 10kg), loại hàng; (3) Chọn chế độ giao hàng Express hoặc Scheduled; (4) Xem báo giá và xác nhận. Đơn hàng sẽ ở trạng thái PENDING cho đến khi Operator lên lịch bay.",
+    "content": "Để tạo đơn hàng: (1) Chọn Hub xuất phát và Hub đích; (2) Nhập thông tin kiện hàng: trọng lượng (tối đa 10kg), loại hàng; (3) Chọn chế độ giao hàng Normal, Express hoặc Scheduled; (4) Xem báo giá và xác nhận. Đơn hàng sẽ ở trạng thái PENDING cho đến khi Operator lên lịch bay.",
     "category": "order_process",
     "role": "customer"
   },
@@ -24,8 +24,8 @@
     "role": "customer"
   },
   {
-    "title": "Chế độ giao hàng Express và Scheduled",
-    "content": "Express: Giao trong 1-3 giờ, phụ phí +25% trên Core Fee. Khách hàng cần bàn giao hàng trong 3 giờ kể từ khi đặt. Scheduled: Chọn thời gian giao trước, phụ phí 0%. Cần bàn giao hàng trước giờ bay ít nhất 3 giờ. Khuyến nghị Scheduled cho hàng không gấp để tiết kiệm chi phí.",
+    "title": "Chế độ giao hàng Normal, Express và Scheduled",
+    "content": "Normal (Tiêu chuẩn): Không cần chọn giờ, hệ thống tự lập lịch trong SLA 4h từ lúc đặt. Không phụ phí. Khách bàn giao hàng trong 2h. Phù hợp khi không gấp nhưng vẫn cần giao trong ngày. Express: Giao ưu tiên, phụ phí +25% Core Fee. Drone được ưu tiên xếp lịch sớm nhất. Scheduled: Chọn thời gian giao cụ thể, phụ phí 0%. Cần bàn giao hàng trước giờ bay ít nhất 3 giờ. Khuyến nghị Scheduled khi biết trước thời gian, Normal khi linh hoạt.",
     "category": "delivery_modes",
     "role": "customer"
   },

@@ -29,11 +29,25 @@ class OrderResponse(BaseModel):
     originPackage: Optional[OriginPackageSchema] = None
     requested_delivery_at: Optional[datetime] = None
     estimated_window_start: Optional[datetime] = None
+    # estimated_window_end = ETA (giờ giao dự kiến, dynamic)
     estimated_window_end: Optional[datetime] = None
     planning_at: Optional[datetime] = None
+    # ── Deadline & Urgency fields (computed, không lưu DB) ────────────
+    # customer_deadline: deadline cam kết với khách (= estimated_window_end khi tạo đơn)
+    customer_deadline: Optional[datetime] = None
+    # coordination_deadline: thời điểm Operator phải assign xong drone để kịp deadline
+    coordination_deadline: Optional[datetime] = None
+    # overdue_minutes > 0 = số phút đã trễ so với customer_deadline
+    overdue_minutes: Optional[float] = None
+    is_overdue: bool = False
+    # Priority scoring fields (computed)
+    slack_minutes: Optional[float] = None
+    priority_score: Optional[float] = None
+    priority_level: Optional[str] = None
     # Aging Priority fields
     is_aging_priority: bool = False
     aging_deadline: Optional[datetime] = None
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -143,6 +157,7 @@ class DroneLocationSchema(BaseModel):
     altitude: Optional[float] = None
     speed: Optional[float] = None
     battery_voltage: Optional[float] = None
+    battery_pct: Optional[int] = None
     last_updated: Optional[datetime] = None
 
 
@@ -150,6 +165,39 @@ class RoutePointSchema(BaseModel):
     latitude: float
     longitude: float
     name: Optional[str] = None
+
+
+class TrackingHubSchema(BaseModel):
+    id: Optional[int] = None
+    name: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+
+class TrackingLegSchema(BaseModel):
+    id: Optional[int] = None
+    sequence_no: int
+    status: Optional[str] = None
+    from_hub: Optional[TrackingHubSchema] = None
+    to_hub: Optional[TrackingHubSchema] = None
+    battery_id: Optional[str] = None
+
+
+class TrackingCurrentLegSchema(BaseModel):
+    id: Optional[int] = None
+    sequence_no: int
+    status: Optional[str] = None
+    from_hub: Optional[TrackingHubSchema] = None
+    to_hub: Optional[TrackingHubSchema] = None
+    assigned_battery_id: Optional[str] = None
+
+
+class TrailPointSchema(BaseModel):
+    latitude: float
+    longitude: float
+    altitude: Optional[float] = None
+    speed: Optional[float] = None
+    timestamp: Optional[datetime] = None
 
 
 class TrackingResponse(BaseModel):
@@ -166,6 +214,9 @@ class TrackingResponse(BaseModel):
     destination: Optional[RoutePointSchema] = None
     travelled_path: List[RoutePointSchema] = []
     checkpoints_passed: int = 0
+    current_leg: Optional[TrackingCurrentLegSchema] = None
+    legs: List[TrackingLegSchema] = []
+    trail: List[TrailPointSchema] = []
 
 
 # ── Mission Report ────────────────────────────────────────────────────

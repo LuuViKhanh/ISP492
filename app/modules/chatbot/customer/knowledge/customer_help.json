@@ -71,6 +71,15 @@
   },
   "delivery_modes": [
     {
+      "mode": "NORMAL",
+      "label": "Normal Delivery",
+      "label_vi": "Giao hàng tiêu chuẩn (Normal)",
+      "surcharge_rate": 0.0,
+      "surcharge_display": "0% Core Fee",
+      "customer_meaning": "Standard delivery, system auto-schedules within 4h SLA. No need to pick a time.",
+      "customer_meaning_vi": "Giao hàng linh hoạt, hệ thống tự lập lịch trong SLA 4h. Không cần chọn giờ cụ thể. Không phụ phí. Khách hàng bàn giao hàng trong 2h kể từ khi đặt đơn."
+    },
+    {
       "mode": "SCHEDULED",
       "label": "Scheduled Delivery",
       "label_vi": "Giao hàng hẹn giờ (Scheduled)",
@@ -86,7 +95,7 @@
       "surcharge_rate": 0.25,
       "surcharge_display": "+25% Core Fee",
       "customer_meaning": "Priority shipment for urgent deliveries.",
-      "customer_meaning_vi": "Ưu tiên xếp lịch bay sớm hơn Scheduled (+25% Core Fee). Thời gian dự kiến cụ thể được lấy từ kết quả ước tính hoặc đơn hàng trên hệ thống."
+      "customer_meaning_vi": "Ưu tiên xếp lịch bay sớm hơn Normal/Scheduled (+25% Core Fee). Thời gian dự kiến cụ thể được lấy từ kết quả ước tính hoặc đơn hàng trên hệ thống."
     }
   ],
   "delivery_flow": {
@@ -148,9 +157,9 @@
     },
     "delivery_modes": {
       "key": "delivery_modes",
-      "title": "Hình thức giao hàng: Scheduled vs Express",
-      "summary": "So sánh chế độ giao hẹn giờ (Scheduled) và giao ưu tiên (Express).",
-      "content": "Scheduled (Giao hẹn giờ): 0% phụ phí dịch vụ, khách hàng chọn thời gian giao mong muốn. Express (Giao ưu tiên): +25% Core Fee, kiện hàng được ưu tiên xếp lịch sớm. Thời gian dự kiến khởi hành/đến nơi cụ thể luôn lấy trực tiếp từ hệ thống khi báo giá hoặc tạo đơn."
+      "title": "Hình thức giao hàng: Normal, Scheduled và Express",
+      "summary": "So sánh 3 chế độ giao hàng: Normal (tiêu chuẩn 4h), Scheduled (hẹn giờ) và Express (ưu tiên).",
+      "content": "Normal (Giao tiêu chuẩn): 0% phụ phí, hệ thống tự lập lịch trong SLA 4h, không cần chọn giờ, bàn giao hàng trong 2h. Scheduled (Giao hẹn giờ): 0% phụ phí, khách chọn thời gian giao cụ thể, bàn giao trước 3h. Express (Giao ưu tiên): +25% Core Fee, ưu tiên xếp lịch sớm nhất. Thời gian dự kiến khởi hành/đến nơi luôn lấy trực tiếp từ hệ thống khi báo giá hoặc tạo đơn."
     },
     "handover_deadline": {
       "key": "handover_deadline",
