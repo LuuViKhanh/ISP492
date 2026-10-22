@@ -567,6 +567,22 @@ async def update_drone_status(
     drone = await db.get(Drone, drone_id)
     if not drone:
         raise HTTPException(status_code=404, detail="Drone not found")
+    
+    # Nếu cố gắng update status từ MAINTENANCE thành AVAILABLE → kiểm tra có alert pending không
+    if drone.status == DroneStatus.MAINTENANCE and body.status == DroneStatus.AVAILABLE:
+        pending_alerts_result = await db.execute(
+            select(MaintenanceAlert).where(
+                MaintenanceAlert.drone_id == drone_id,
+                MaintenanceAlert.work_order_id == None,  # alert chưa được xử lý (chưa có work order)
+                MaintenanceAlert.status == "Pending"
+            ).limit(1)
+        )
+        if pending_alerts_result.scalars().first():
+            raise HTTPException(
+                status_code=400,
+                detail="Không thể chuyển drone về Available khi còn Maintenance Alert Pending chưa xử lý. Vui lòng giải quyết alert trước."
+            )
+    
     drone.status = body.status
     await db.commit()
     await db.refresh(drone)
@@ -852,12 +868,19 @@ async def list_maintenance_alerts(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Chỉ trả alerts chưa được xử lý (chưa có work order)."""
-    result = await db.execute(
+    """Chỉ trả alerts chưa được xử lý (chưa có work order) tại hub của technician."""
+    query = (
         select(MaintenanceAlert)
+        .outerjoin(Drone, MaintenanceAlert.drone_id == Drone.id)
         .where(MaintenanceAlert.work_order_id == None)
         .order_by(MaintenanceAlert.id.desc())
     )
+    
+    # TECHNICIAN chỉ thấy alert của drone tại hub mình
+    if user.hub_id and str(user.hub_id).isdigit():
+        query = query.where(Drone.current_hub_id == int(user.hub_id))
+    
+    result = await db.execute(query)
     return result.scalars().all()
 
 
@@ -866,12 +889,19 @@ async def list_maintenance_alerts_history(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Trả alerts đã được xử lý (đã có work order)."""
-    result = await db.execute(
+    """Trả alerts đã được xử lý (đã có work order) tại hub của technician."""
+    query = (
         select(MaintenanceAlert)
+        .outerjoin(Drone, MaintenanceAlert.drone_id == Drone.id)
         .where(MaintenanceAlert.work_order_id != None)
         .order_by(MaintenanceAlert.id.desc())
     )
+    
+    # TECHNICIAN chỉ thấy alert của drone tại hub mình
+    if user.hub_id and str(user.hub_id).isdigit():
+        query = query.where(Drone.current_hub_id == int(user.hub_id))
+    
+    result = await db.execute(query)
     return result.scalars().all()
 
 
@@ -1010,6 +1040,12 @@ async def create_work_order(
     )
     db.add(wo)
     await db.flush()  # lấy wo.id trước khi commit
+
+    # Cập nhật drone sang MAINTENANCE khi tạo work order (drone đi bảo trì)
+    if body.drone_id:
+        drone = await db.get(Drone, body.drone_id)
+        if drone:
+            drone.status = DroneStatus.MAINTENANCE
 
     # Nếu tạo từ một alert → gắn work_order_id vào alert, chuyển alert sang history
     if body.alert_id:
