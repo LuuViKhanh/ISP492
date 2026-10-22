@@ -178,6 +178,10 @@ async def simulate_mission_flight(mission_id: str) -> None:
                     print(f"[SIMULATOR] Mission {mission_id} không còn FLYING, dừng simulator.")
                     return
 
+                # Fetch weather theo tọa độ điểm này
+                from app.shared.weather import fetch_weather
+                weather = await fetch_weather(lat, lng)
+
                 # Ghi nhận Telemetry Log
                 log = TelemetryLog(
                     mission_id=mission_id,
@@ -189,6 +193,16 @@ async def simulate_mission_flight(mission_id: str) -> None:
                     battery_voltage=battery_volt,
                     energy_consumed_wh=energy_wh,
                     wind_speed=wind_speed,
+                    weather_temperature=weather.temperature if weather else None,
+                    weather_apparent_temp=weather.apparent_temperature if weather else None,
+                    weather_dew_point=weather.dew_point if weather else None,
+                    weather_humidity=weather.humidity if weather else None,
+                    weather_wind_speed=weather.wind_speed if weather else None,
+                    weather_wind_gust=weather.wind_gust if weather else None,
+                    weather_wind_direction=weather.wind_direction if weather else None,
+                    weather_precipitation=weather.precipitation if weather else None,
+                    weather_pressure=weather.pressure if weather else None,
+                    weather_cloud_cover=weather.cloud_cover if weather else None,
                 )
                 db.add(log)
 
