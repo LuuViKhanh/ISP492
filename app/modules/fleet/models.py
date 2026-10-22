@@ -24,6 +24,21 @@ class BatteryAvailableStatus(str, enum.Enum):
     REPLACED = "Replaced"   # hết vòng đời
 
 
+class BatteryLifecycleStatus(str, enum.Enum):
+    """Vòng đời pin theo thời gian kể từ khi nhập kho (create_at).
+
+    Quy ước: Pin drone có tuổi thọ khoảng 2 năm (730 ngày) kể từ ngày nhập kho.
+    - ACTIVE    : còn trong vòng đời (< 730 ngày)
+    - EXPIRED   : hết vòng đời (>= 730 ngày) → cần thay thế
+    """
+    ACTIVE  = "Active"
+    EXPIRED = "Expired"
+
+
+# Số ngày tối đa của vòng đời pin (2 năm)
+BATTERY_LIFECYCLE_DAYS = 730
+
+
 def compute_battery_available_status(battery: "Battery") -> BatteryAvailableStatus:
     """
     Tính toán trạng thái khả dụng của pin từ các field hiện có.
@@ -41,6 +56,53 @@ def compute_battery_available_status(battery: "Battery") -> BatteryAvailableStat
     if (battery.charge_level_pct or 0) >= 100:
         return BatteryAvailableStatus.READY
     return BatteryAvailableStatus.CHARGING
+
+
+def compute_battery_lifecycle(battery: "Battery", now: datetime | None = None) -> tuple[BatteryLifecycleStatus, int]:
+    """
+    Tính on-the-fly vòng đời pin dựa trên `create_at` (ngày nhập kho).
+
+    Returns:
+        (lifecycle_status, days_until_expiry)
+        - lifecycle_status: Active | Expired
+        - days_until_expiry: số ngày còn lại đến khi hết vòng đời (0 nếu đã Expired)
+
+    Logic:
+        age_in_days = (now - create_at).days
+        - Nếu create_at NULL → mặc định Active, days_until_expiry = 730 (chưa biết tuổi)
+        - Nếu age_in_days < 730 → Active, days_until_expiry = 730 - age_in_days
+        - Nếu age_in_days >= 730 → Expired, days_until_expiry = 0
+    """
+    from datetime import datetime, timezone
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    # Nếu pin đã bị đánh dấu Replaced → coi như Expired
+    if battery.status == batteries_status.REPLACED:
+        return BatteryLifecycleStatus.EXPIRED, 0
+
+    if battery.create_at is None:
+        # Không có ngày nhập kho → mặc định Active, chưa biết tuổi
+        return BatteryLifecycleStatus.ACTIVE, BATTERY_LIFECYCLE_DAYS
+
+    # Chuẩn hóa create_at về aware UTC để so sánh
+    create_at = battery.create_at
+    if create_at.tzinfo is None:
+        # naive → giả định UTC
+        create_at = create_at.replace(tzinfo=timezone.utc)
+    # Chuẩn hóa now về aware UTC
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    age_in_days = (now - create_at).days
+
+    if age_in_days >= BATTERY_LIFECYCLE_DAYS:
+        return BatteryLifecycleStatus.EXPIRED, 0
+    if age_in_days < 0:
+        # create_at trong tương lai (do lệch múi giờ) → coi như mới
+        return BatteryLifecycleStatus.ACTIVE, BATTERY_LIFECYCLE_DAYS
+    return BatteryLifecycleStatus.ACTIVE, BATTERY_LIFECYCLE_DAYS - age_in_days
 
 class WorkOrderStatus(str, enum.Enum):
     PENDING = "Pending"
@@ -77,6 +139,8 @@ class Battery(Base):
     create_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     update_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     battery_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Thời điểm pin gần nhất được sạc đầy 100% (ghi bởi charging worker hoặc manual mark-charged)
+    last_charged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     
     drone = relationship("Drone", back_populates="batteries")
 
@@ -179,3 +243,27 @@ class MaintenanceSchedule(Base):
     status: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+# ==================== SUPPLIES (Vật tư tại Hub) ====================
+class HubSupply(Base):
+    """Bảng quản lý vật tư tiêu hao (cánh quạt, thiết bị sửa chữa, ...) tại mỗi Hub.
+
+    Theo dõi số lượng tồn kho theo loại vật tư tại từng hub —
+    KHÔNG định danh từng đơn vị vật tư (không serial number).
+
+    Ví dụ:
+        Hub Quận 1:
+        - Cánh quạt DJI Matrice 100: 12 cái
+        - Cánh quạt Aurellia X6: 8 cái
+        - Bộ dụng cụ sửa chữa: 2 bộ
+    """
+    __tablename__ = "hub_supplies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    hub_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("hubs.id"), nullable=True, index=True)
+    item_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unit: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
