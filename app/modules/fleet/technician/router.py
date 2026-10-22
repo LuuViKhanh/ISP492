@@ -344,9 +344,11 @@ async def confirm_arrival(
     # ── 1. Cập nhật Mission (rời danh sách Transit đang hoạt động sang History) ──
     if not mission.arrived_at:
         mission.arrived_at = now       # trigger pickup reminder countdown (3 ngày chờ KH lấy hàng)
-    if not mission.arrival_confirmed_at:
-        mission.arrival_confirmed_at = now   # ghi nhận thời điểm Technician confirm drone đáp hub
-    mission.arrival_confirmed_by = str(user.id)
+    # Lưu ý: KHÔNG set arrival_confirmed_at ở đây — trường đó dành riêng cho
+    # /confirm-pickup (xác nhận KH đã tới nhận hàng). Nếu set ở đây, gói hàng sẽ
+    # bị loại khỏi danh sách /confirmations (trang delivery chờ KH nhận) và
+    # pickup_reminder_watcher sẽ không nhắc KH tới nhận. Thời điểm drone đáp
+    # đã được ghi bởi `arrived_at` ở trên.
     if mission.status != MissionStatus.MISSION_COMPLETED:
         mission.status = MissionStatus.COMPLETED
     mission.end_time = mission.end_time or now
