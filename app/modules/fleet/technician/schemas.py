@@ -51,7 +51,11 @@ class BatteryResponse(BaseModel):
     create_at: Optional[datetime] = None
     update_at: Optional[datetime] = None
     battery_model: Optional[str] = None
+    last_charged_at: Optional[datetime] = None
     estimated_minutes_remaining: Optional[int] = None
+    # Vòng đời pin (tính on-the-fly, không lưu DB)
+    lifecycle_status: Optional[str] = None       # Active | Expired
+    days_until_expiry: Optional[int] = None      # số ngày còn lại đến khi hết vòng đời (730 ngày)
 
 
 class BatteryUseRequest(BaseModel):
@@ -174,3 +178,34 @@ class MaintenanceScheduleCreate(BaseModel):
     maintenance_type: str
     interval_days: Optional[int] = None
     interval_flight_hours: Optional[float] = None
+
+
+# ── HubSupply (Quản lý vật tư tại Hub) ───────────────────────────────────────
+
+class HubSupplyCreate(BaseModel):
+    """Tạo mới bản ghi vật tư tại hub."""
+    hub_id: int
+    item_name: str
+    quantity: int = 0
+    unit: Optional[str] = None       # vd: "cái", "bộ", "chiếc"
+
+
+class HubSupplyUpdate(BaseModel):
+    """Cập nhật vật tư (partial update — chỉ field nào được truyền mới thay đổi)."""
+    item_name: Optional[str] = None
+    quantity: Optional[int] = None
+    unit: Optional[str] = None
+
+
+class HubSupplyResponse(BaseModel):
+    """Phản hồi khi truy vấn vật tư."""
+    id: int
+    hub_id: Optional[int] = None
+    item_name: str
+    quantity: int
+    unit: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

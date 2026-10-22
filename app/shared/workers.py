@@ -179,6 +179,10 @@ async def run_battery_charging_simulation(db: AsyncSession):
         # Làm tròn số và chặn trần tối đa ở 100%
         battery.charge_level_pct = min(round(new_charge), 100)
         battery.update_at = datetime.now(timezone.utc)
+
+        # Ghi nhận thời điểm pin được sạc đầy 100% (lần cuối cùng)
+        if battery.charge_level_pct >= 100:
+            battery.last_charged_at = datetime.now(timezone.utc)
         
     await db.commit()
 

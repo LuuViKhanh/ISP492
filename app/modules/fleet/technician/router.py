@@ -12,7 +12,8 @@ from app.shared.roles import UserRole
 from app.modules.auth.models import User
 from app.modules.fleet.models import (
     Drone, Battery, WorkOrder, WorkOrderStatus, batteries_status,
-    MaintenanceRecord, MaintenanceInspectionItem, WorkOrderLog, MaintenanceAlert, MaintenanceSchedule
+    MaintenanceRecord, MaintenanceInspectionItem, WorkOrderLog, MaintenanceAlert, MaintenanceSchedule,
+    HubSupply
 )
 from app.modules.system.models import Hub
 from app.modules.fleet.schemas import WorkOrderCreate, WorkOrderUpdate, InspectionUpdate, WorkOrderResponse
@@ -21,7 +22,8 @@ from app.modules.fleet.technician.schemas import (
     MaintenanceRecordCreate, MaintenanceRecordResponse,
     WorkOrderLogResponse, MaintenanceAlertResponse,
     MaintenanceScheduleResponse, MaintenanceScheduleCreate,
-    IncomingMissionResponse, BatteryResponse, BatteryUseRequest
+    IncomingMissionResponse, BatteryResponse, BatteryUseRequest,
+    HubSupplyCreate, HubSupplyUpdate, HubSupplyResponse
 )
 from app.modules.missions.models import Mission, MissionStatus, HandlingStatus, Incident, IncidentStatus
 from app.core.config import settings
@@ -597,10 +599,14 @@ async def get_hub_batteries(
         select(Battery).where(Battery.current_hub_id == hub_id).order_by(Battery.id)
     )
     batteries = result.scalars().all()
-    
+
+    # Import helper tính vòng đời pin (on-the-fly, không lưu DB)
+    from app.modules.fleet.models import compute_battery_lifecycle
+
     response = []
     for b in batteries:
         mins = get_estimated_charging_minutes(b.charge_level_pct) if b.status == "Charging" or (b.charge_level_pct and b.charge_level_pct < 100 and b.drone_id is None) else 0
+        lifecycle_status, days_until_expiry = compute_battery_lifecycle(b)
         response.append({
             "id": b.id,
             "serial_number": b.serial_number,
@@ -610,7 +616,12 @@ async def get_hub_batteries(
             "drone_id": b.drone_id,
             "current_hub_id": b.current_hub_id,
             "charge_level_pct": b.charge_level_pct,
-            "estimated_minutes_remaining": mins
+            "create_at": b.create_at,
+            "update_at": b.update_at,
+            "last_charged_at": b.last_charged_at,
+            "estimated_minutes_remaining": mins,
+            "lifecycle_status": lifecycle_status.value if hasattr(lifecycle_status, "value") else str(lifecycle_status),
+            "days_until_expiry": days_until_expiry,
         })
     return response
 
@@ -660,6 +671,7 @@ async def mark_battery_charged(
     #     raise HTTPException(status_code=403, detail="Battery is not at your hub")
         
     battery.charge_level_pct = 100
+    battery.last_charged_at = get_vn_naive_datetime()
     await db.commit()
     await db.refresh(battery)
     
@@ -669,7 +681,8 @@ async def mark_battery_charged(
             "id": battery.id,
             "serial_number": battery.serial_number,
             "charge_level_pct": battery.charge_level_pct,
-            "current_hub_id": battery.current_hub_id
+            "current_hub_id": battery.current_hub_id,
+            "last_charged_at": battery.last_charged_at.isoformat() if battery.last_charged_at else None,
         }
     }
 
@@ -1706,3 +1719,166 @@ async def worker_battery_overdue_alerts(
         "battery_alerts_created": len(batt_ids),
         "overdue_alerts_created": len(overdue_ids)
     }
+
+
+# ── Hub Supplies (Quản lý vật tư tại Hub) ──────────────────────────────────────
+#
+# Quản lý vật tư tiêu hao (cánh quạt, thiết bị sửa chữa, ...) theo số lượng tại mỗi Hub.
+# Không định danh từng đơn vị vật tư (không serial number) — chỉ theo dõi số lượng tồn kho.
+#
+# Phân quyền:
+# - TECHNICIAN: chỉ quản lý vật tư tại Hub của mình (lọc theo user.hub_id).
+# - ADMIN: có thể quản lý vật tư tại mọi Hub (truyền hub_id qua body/query).
+
+@router.get("/supplies", response_model=list[HubSupplyResponse], summary="Danh sách vật tư tại Hub")
+async def list_hub_supplies(
+    hub_id: Optional[int] = None,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Lấy danh sách vật tư tại Hub.
+    - TECHNICIAN: tự động lọc theo Hub của technician (bỏ qua tham số hub_id).
+    - ADMIN: có thể truyền `?hub_id=` để lọc theo Hub cụ thể, không truyền thì trả tất cả.
+    """
+    query = select(HubSupply).order_by(HubSupply.id)
+
+    # TECHNICIAN chỉ xem vật tư tại Hub của mình
+    if user.role == UserRole.TECHNICIAN:
+        if not user.hub_id:
+            return []
+        query = query.where(HubSupply.hub_id == int(user.hub_id))
+    elif hub_id is not None:
+        # ADMIN có thể lọc theo hub_id
+        query = query.where(HubSupply.hub_id == hub_id)
+
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+@router.post("/supplies", response_model=HubSupplyResponse, status_code=201, summary="Thêm vật tư vào Hub")
+async def create_hub_supply(
+    body: HubSupplyCreate,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Tạo bản ghi vật tư mới tại Hub.
+    - TECHNICIAN: hub_id tự động lấy từ user.hub_id (bỏ qua body.hub_id).
+    - ADMIN: dùng body.hub_id để chỉ định Hub.
+    """
+    now = get_vn_naive_datetime()
+
+    # TECHNICIAN chỉ thêm vật tư vào Hub của mình
+    if user.role == UserRole.TECHNICIAN:
+        if not user.hub_id:
+            raise HTTPException(status_code=400, detail="Technician chưa được gán Hub nào.")
+        target_hub_id = int(user.hub_id)
+    else:
+        if not body.hub_id:
+            raise HTTPException(status_code=400, detail="hub_id là bắt buộc khi Admin tạo vật tư.")
+        target_hub_id = body.hub_id
+
+    # Kiểm tra Hub tồn tại
+    hub = await db.get(Hub, target_hub_id)
+    if not hub:
+        raise HTTPException(status_code=404, detail=f"Hub #{target_hub_id} không tồn tại.")
+
+    supply = HubSupply(
+        hub_id=target_hub_id,
+        item_name=body.item_name,
+        quantity=body.quantity,
+        unit=body.unit,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(supply)
+    await db.commit()
+    await db.refresh(supply)
+    return supply
+
+
+@router.put("/supplies/{supply_id}", response_model=HubSupplyResponse, summary="Cập nhật vật tư")
+async def update_hub_supply(
+    supply_id: int,
+    body: HubSupplyUpdate,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Cập nhật thông tin vật tư (item_name, quantity, unit).
+    - TECHNICIAN: chỉ cập nhật vật tư tại Hub của mình.
+    - ADMIN: cập nhật bất kỳ.
+    """
+    supply = await db.get(HubSupply, supply_id)
+    if not supply:
+        raise HTTPException(status_code=404, detail="Supply not found")
+
+    # TECHNICIAN chỉ sửa vật tư tại Hub của mình
+    if user.role == UserRole.TECHNICIAN:
+        if not user.hub_id or supply.hub_id != int(user.hub_id):
+            raise HTTPException(status_code=403, detail="Vật tư không thuộc Hub của bạn.")
+
+    if body.item_name is not None:
+        supply.item_name = body.item_name
+    if body.quantity is not None:
+        supply.quantity = body.quantity
+    if body.unit is not None:
+        supply.unit = body.unit
+    supply.updated_at = get_vn_naive_datetime()
+
+    await db.commit()
+    await db.refresh(supply)
+    return supply
+
+
+@router.patch("/supplies/{supply_id}/adjust", response_model=HubSupplyResponse, summary="Điều chỉnh số lượng vật tư (tăng/giảm)")
+async def adjust_hub_supply_quantity(
+    supply_id: int,
+    delta: int,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Điều chỉnh số lượng vật tư theo delta (có thể âm để trừ tồn kho).
+    Vd: PATCH /supplies/1/adjust?delta=-2 → trừ 2 cái khỏi tồn kho.
+    """
+    supply = await db.get(HubSupply, supply_id)
+    if not supply:
+        raise HTTPException(status_code=404, detail="Supply not found")
+
+    if user.role == UserRole.TECHNICIAN:
+        if not user.hub_id or supply.hub_id != int(user.hub_id):
+            raise HTTPException(status_code=403, detail="Vật tư không thuộc Hub của bạn.")
+
+    new_qty = (supply.quantity or 0) + delta
+    if new_qty < 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Số lượng điều chỉnh không hợp lệ: {supply.quantity} + ({delta}) = {new_qty} < 0."
+        )
+    supply.quantity = new_qty
+    supply.updated_at = get_vn_naive_datetime()
+
+    await db.commit()
+    await db.refresh(supply)
+    return supply
+
+
+@router.delete("/supplies/{supply_id}", status_code=204, summary="Xóa vật tư khỏi Hub")
+async def delete_hub_supply(
+    supply_id: int,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Xóa bản ghi vật tư (thường dùng khi loại vật tư không còn sử dụng)."""
+    supply = await db.get(HubSupply, supply_id)
+    if not supply:
+        raise HTTPException(status_code=404, detail="Supply not found")
+
+    if user.role == UserRole.TECHNICIAN:
+        if not user.hub_id or supply.hub_id != int(user.hub_id):
+            raise HTTPException(status_code=403, detail="Vật tư không thuộc Hub của bạn.")
+
+    await db.delete(supply)
+    await db.commit()
