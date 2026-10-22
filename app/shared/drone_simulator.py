@@ -24,7 +24,7 @@ from sqlalchemy import select
 from app.database.db import AsyncSessionLocal
 from app.modules.missions.models import (
     Mission, MissionStatus, MissionLeg, MissionLegStatus,
-    TelemetryLog, HandlingStatus,
+    TelemetryLog, HandlingStatus, Incident, IncidentStatus, IncidentSeverity,
 )
 from app.modules.system.models import Hub
 from app.modules.fleet.models import Drone, Battery
@@ -34,6 +34,12 @@ from app.modules.fleet.models import Drone, Battery
 
 INTERVAL_SEC = 3        # Giây giữa mỗi điểm telemetry
 STEPS_PER_LEG = 20      # Số điểm nội suy mỗi chặng (tăng lên để mượt hơn)
+
+# ── Cấu hình Incident Simulator ──────────────────────────────────────────────
+INCIDENT_ENABLED     = True   # Bật/tắt tính năng giả lập incident
+INCIDENT_PROBABILITY = 0.08   # Xác suất incident mỗi điểm (0.0 → 0 %, 1.0 → 100%)
+INCIDENT_MIN_STEP    = 3      # Không xảy ra trước điểm thứ N (tránh incident ngay khi cất cánh)
+INCIDENT_SEVERITY    = "Medium"  # Low / Medium / High
 
 
 # ── Haversine helper ──────────────────────────────────────────────────────────
@@ -60,6 +66,178 @@ def _interpolate(lat1: float, lon1: float, lat2: float, lon2: float, steps: int)
 
 
 # ── Core simulator ────────────────────────────────────────────────────────────
+
+async def _trigger_incident(
+    mission_id: str,
+    incident_lat: float,
+    incident_lng: float,
+    from_hub: Hub,
+    severity: str = "Medium",
+) -> None:
+    """Tạo Incident, MaintenanceAlert và Notification cho Operators khi sự cố xảy ra."""
+    from app.modules.missions.models import Incident, IncidentStatus, IncidentSeverity
+    from app.modules.fleet.models import MaintenanceAlert
+    from app.modules.system.models import Notification, NotificationType
+    from app.shared.workers import get_operator_ids
+
+    severity_map = {
+        "Low": IncidentSeverity.LOW,
+        "Medium": IncidentSeverity.MEDIUM,
+        "High": IncidentSeverity.HIGH,
+    }
+    sev = severity_map.get(severity, IncidentSeverity.MEDIUM)
+
+    async with AsyncSessionLocal() as db:
+        try:
+            mission = await db.get(Mission, mission_id)
+            if not mission:
+                return
+
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+            # 1. Chuyển mission → INCIDENT_RETURN
+            mission.status = MissionStatus.INCIDENT_RETURN
+            mission.handling_status = HandlingStatus.INCOMING
+
+            # 2. Tạo Incident
+            incident = Incident(
+                mission_id=mission_id,
+                drone_id=str(mission.drone_id) if mission.drone_id else None,
+                reporter_id="SIMULATOR",
+                severity=sev,
+                description=(
+                    f"[SIMULATOR] Sự cố xảy ra tại ({incident_lat:.5f}, {incident_lng:.5f}) "
+                    f"trong chuyến bay {mission_id}. Drone đang quay về {from_hub.name}."
+                ),
+                status=IncidentStatus.OPEN,
+                reported_at=now,
+                requires_technical_inspection=True,
+            )
+            db.add(incident)
+            await db.flush()
+
+            # 3. Tạo MaintenanceAlert
+            alert = MaintenanceAlert(
+                drone_id=str(mission.drone_id) if mission.drone_id else None,
+                source="Incident",
+                mission_id=str(mission_id),
+                incident_id=incident.id,
+                title=f"Sự cố chuyến bay {mission_id} — {severity} severity",
+                status="Pending",
+                created_at=now,
+            )
+            db.add(alert)
+
+            # 4. Gửi Notification cho tất cả Operators
+            try:
+                operator_ids = await get_operator_ids(db)
+                for op_id in operator_ids:
+                    db.add(Notification(
+                        user_id=op_id,
+                        title=f"⚠️ Sự cố Mission #{mission_id}",
+                        message=(
+                            f"Drone #{mission.drone_id} gặp sự cố tại ({incident_lat:.5f}, {incident_lng:.5f}). "
+                            f"Đang quay về {from_hub.name}. Severity: {severity}."
+                        ),
+                        notifications_type=NotificationType.SYSTEM_ALERT,
+                        mission_id=str(mission_id),
+                        created_at=now,
+                    ))
+            except Exception as e:
+                print(f"[SIMULATOR] Lỗi gửi notification incident: {e}")
+
+            await db.commit()
+            print(f"[SIMULATOR] Incident #{incident.id} đã tạo, mission → INCIDENT_RETURN.")
+
+        except Exception as e:
+            print(f"[SIMULATOR] Lỗi tạo incident: {e}")
+
+
+async def _fly_incident_return(
+    mission_id: str,
+    waypoints: list[tuple[float, float]],
+    return_hub: Hub,
+    active_battery_id: str | None,
+    active_drone_id: str | None,
+    battery_capacity_wh: float,
+    current_battery_pct: float,
+) -> None:
+    """Bay ngược về from_hub sau khi incident xảy ra."""
+    total = len(waypoints)
+    battery_volt = 22.0
+    energy_wh = 0.0
+
+    for idx, (lat, lng) in enumerate(waypoints):
+        await asyncio.sleep(INTERVAL_SEC)
+
+        altitude    = round(40.0 + math.sin(idx * 0.3) * 3, 2)
+        speed       = round(8.0 + math.cos(idx * 0.2) * 2, 2)
+        battery_volt = round(max(18.0, battery_volt - 0.05), 2)
+        energy_wh   = round(energy_wh + 0.9, 3)
+        step_wh = 0.9
+        pct_consumed = (step_wh / battery_capacity_wh) * 100.0
+        current_battery_pct = max(1.0, current_battery_pct - pct_consumed)
+        new_charge_pct = int(round(current_battery_pct))
+
+        async with AsyncSessionLocal() as db:
+            try:
+                mission = await db.get(Mission, mission_id)
+                if not mission:
+                    return
+
+                from app.shared.weather import fetch_weather
+                weather = await fetch_weather(lat, lng)
+
+                log = TelemetryLog(
+                    mission_id=mission_id,
+                    timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+                    latitude=lat, longitude=lng,
+                    altitude=altitude, speed=speed,
+                    battery_voltage=battery_volt,
+                    energy_consumed_wh=energy_wh,
+                    wind_speed=round(3.0 + random.uniform(-0.5, 0.5), 2),
+                    weather_temperature=weather.temperature if weather else None,
+                    weather_apparent_temp=weather.apparent_temperature if weather else None,
+                    weather_dew_point=weather.dew_point if weather else None,
+                    weather_humidity=weather.humidity if weather else None,
+                    weather_wind_speed=weather.wind_speed if weather else None,
+                    weather_wind_gust=weather.wind_gust if weather else None,
+                    weather_wind_direction=weather.wind_direction if weather else None,
+                    weather_precipitation=weather.precipitation if weather else None,
+                    weather_pressure=weather.pressure if weather else None,
+                    weather_cloud_cover=weather.cloud_cover if weather else None,
+                )
+                db.add(log)
+
+                if active_battery_id:
+                    bat = await db.get(Battery, active_battery_id)
+                    if bat:
+                        bat.charge_level_pct = new_charge_pct
+                if active_drone_id:
+                    dr = await db.get(Drone, active_drone_id)
+                    if dr:
+                        dr.battery_level_pct = new_charge_pct
+
+                await db.commit()
+                print(f"[SIMULATOR] [RETURN {idx+1:>3}/{total}] ({lat:.6f}, {lng:.6f}) pin={new_charge_pct}%")
+
+            except Exception as e:
+                print(f"[SIMULATOR] Lỗi telemetry lúc quay về: {e}")
+
+    # Đáp về from_hub
+    async with AsyncSessionLocal() as db:
+        try:
+            mission = await db.get(Mission, mission_id)
+            if mission:
+                mission.handling_status = HandlingStatus.CANNOT_CONTINUE
+                drone = await db.get(Drone, mission.drone_id) if mission.drone_id else None
+                if drone:
+                    drone.current_hub_id = return_hub.id
+                await db.commit()
+                print(f"[SIMULATOR] Drone đáp {return_hub.name} — handling_status = Cannot continue.")
+        except Exception as e:
+            print(f"[SIMULATOR] Lỗi cập nhật sau khi quay về hub: {e}")
+
 
 async def simulate_mission_flight(mission_id: str) -> None:
     """
@@ -226,6 +404,22 @@ async def simulate_mission_flight(mission_id: str) -> None:
 
             except Exception as e:
                 print(f"[SIMULATOR] Lỗi insert TelemetryLog & cập nhật pin điểm {idx+1}: {e}")
+
+        # ── Kiểm tra incident sau mỗi điểm ───────────────────────────────────
+        if INCIDENT_ENABLED and idx >= INCIDENT_MIN_STEP:
+            if random.random() < INCIDENT_PROBABILITY:
+                print(f"[SIMULATOR] ⚠️  INCIDENT xảy ra tại điểm {idx+1}/{total_points} ({lat:.6f}, {lng:.6f})")
+                await _trigger_incident(
+                    mission_id=mission_id,
+                    incident_lat=lat,
+                    incident_lng=lng,
+                    from_hub=from_hub,
+                    severity=INCIDENT_SEVERITY,
+                )
+                # Bay ngược về from_hub
+                return_waypoints = _interpolate(lat, lng, from_hub.latitude, from_hub.longitude, max(5, (total_points - idx)))
+                await _fly_incident_return(mission_id, return_waypoints, from_hub, active_battery_id, active_drone_id, battery_capacity_wh, current_battery_pct)
+                return
 
     # ── Hết điểm → drone đã đến hub đích của leg này ─────────────────────────
     async with AsyncSessionLocal() as db:
