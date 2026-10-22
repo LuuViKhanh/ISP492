@@ -243,9 +243,10 @@ async def simulate_mission_flight(mission_id: str) -> None:
                 )
                 next_leg = next_leg_res.scalars().first()
 
-                # Drone đáp xuống hub → set AT_HUB để Technician thấy nút confirm
-                mission.handling_status = HandlingStatus.AT_HUB
+                # Drone đáp xuống hub → cập nhật vị trí, giữ Incoming chờ Technician confirm
+                mission.handling_status = HandlingStatus.INCOMING
                 if to_hub:
+                    
                     drone = await db.get(Drone, mission.drone_id) if mission.drone_id else None
                     if drone:
                         drone.current_hub_id = to_hub.id
