@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import Optional, Union
 from pydantic import BaseModel
+from datetime import datetime
 
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
@@ -66,6 +67,7 @@ class BatteryUpdate(BaseModel):
     current_hub_id: Optional[int] = None
     drone_id: Optional[Union[str, int]] = None
     charge_level_pct: Optional[int] = None
+    last_charged_at: Optional[datetime] = None
 
 
 class BatteryResponse(BaseModel):
@@ -77,7 +79,11 @@ class BatteryResponse(BaseModel):
     current_hub_id: Optional[int] = None
     charge_level_pct: Optional[int] = None
     battery_model: Optional[str] = None
+    last_charged_at: Optional[datetime] = None
     available_status: Optional[BatteryAvailableStatus] = None  # computed, không lưu DB
+    # Vòng đời pin (tính on-the-fly, không lưu DB)
+    lifecycle_status: Optional[str] = None       # Active | Expired
+    days_until_expiry: Optional[int] = None      # số ngày còn lại đến khi hết vòng đời (730 ngày)
 
     class Config:
         from_attributes = True
@@ -191,7 +197,9 @@ async def delete_drone(
 # ── Battery Endpoints ─────────────────────────────────────────────────────────
 
 def _battery_to_response(battery: Battery) -> BatteryResponse:
-    """Chuyển Battery ORM object thành BatteryResponse kèm computed available_status."""
+    """Chuyển Battery ORM object thành BatteryResponse kèm computed available_status & lifecycle."""
+    from app.modules.fleet.models import compute_battery_lifecycle
+    lifecycle_status, days_until_expiry = compute_battery_lifecycle(battery)
     return BatteryResponse(
         id=battery.id,
         serial_number=battery.serial_number,
@@ -201,7 +209,10 @@ def _battery_to_response(battery: Battery) -> BatteryResponse:
         current_hub_id=battery.current_hub_id,
         charge_level_pct=battery.charge_level_pct,
         battery_model=battery.battery_model,
+        last_charged_at=battery.last_charged_at,
         available_status=compute_battery_available_status(battery),
+        lifecycle_status=lifecycle_status.value if hasattr(lifecycle_status, "value") else str(lifecycle_status),
+        days_until_expiry=days_until_expiry,
     )
 
 
@@ -280,6 +291,8 @@ async def update_battery(
         battery.drone_id = body.drone_id
     if body.charge_level_pct is not None:
         battery.charge_level_pct = body.charge_level_pct
+    if body.last_charged_at is not None:
+        battery.last_charged_at = body.last_charged_at
 
     await db.commit()
     await db.refresh(battery)
