@@ -237,7 +237,223 @@ L.polyline(tail, {
 
 ---
 
-## 9. Sắp có (chưa implement)
+## 9. Sự cố (Incident) & Bay quay về (Return to Hub)
+
+### 9.1 Kích hoạt Incident
+
+**Điều kiện:**
+- Xác suất **8%** xảy ra tại mỗi điểm telemetry (có thể điều chỉnh qua config)
+- Không xảy ra ở 3 điểm đầu (tránh incident ngay khi cất cánh)
+
+**Khi Incident xảy ra:**
+
+1. **Mission Status thay đổi:**
+   ```json
+   {
+     "mission_id": "MSN-20261018-0001",
+     "status": "INCIDENT_RETURN",        // ← Từ FLYING → INCIDENT_RETURN
+     "handling_status": "INCOMING",       // ← Drone đang bay về
+     "incident_id": 3001
+   }
+   ```
+
+2. **Incident Record được tạo:**
+   ```json
+   {
+     "id": 3001,
+     "mission_id": "MSN-20261018-0001",
+     "drone_id": 28,
+     "severity": "Medium",                // Low / Medium / High
+     "description": "[SIMULATOR] Sự cố xảy ra tại (10.754890, 106.710782)...",
+     "status": "OPEN",
+     "reported_at": "2026-10-18T10:23:45",
+     "requires_technical_inspection": true
+   }
+   ```
+
+3. **MaintenanceAlert được tạo:**
+   ```json
+   {
+     "id": 5001,
+     "drone_id": "28",
+     "source": "Incident",
+     "incident_id": 3001,
+     "title": "Sự cố chuyến bay MSN-20261018-0001 — Medium severity",
+     "status": "Pending",
+     "created_at": "2026-10-18T10:23:45"
+   }
+   ```
+
+4. **Notification gửi tới Operators:**
+   ```json
+   {
+     "user_id": "operator-123",
+     "title": "⚠️ Sự cố Mission #MSN-20261018-0001",
+     "message": "Drone #28 gặp sự cố tại (10.754890, 106.710782). Đang quay về Hub Quận 1. Severity: Medium.",
+     "type": "SYSTEM_ALERT",
+     "mission_id": "MSN-20261018-0001",
+     "created_at": "2026-10-18T10:23:45"
+   }
+   ```
+
+### 9.2 FE xử lý Notification
+
+```javascript
+// Lắng nghe thay đổi notification (WebSocket hoặc polling)
+onNotificationReceived((notification) => {
+  if (notification.type === 'SYSTEM_ALERT' && notification.message.includes('Sự cố')) {
+    // 1. Hiện alert banner
+    showAlert({
+      type: 'danger',
+      icon: '⚠️',
+      title: notification.title,
+      message: notification.message,
+      action: {
+        label: 'Xem chi tiết',
+        onClick: () => navigateTo(`/missions/${notification.mission_id}`)
+      }
+    });
+    
+    // 2. Cập nhật mission status trong bảng
+    updateMissionRow(notification.mission_id, {
+      status: 'INCIDENT_RETURN',
+      lastStatus: 'Gặp sự cố - Quay về hub'
+    });
+  }
+});
+```
+
+### 9.3 Theo dõi Bay quay về (Return Flight)
+
+**Mission Status từ INCIDENT_RETURN:**
+
+```
+GET /live-tracking  → Drone vẫn xuất hiện trong danh sách "Flying"
+   ↓
+GET /telemetry/{mission_id}  → Telemetry còn được ghi lại quá trình quay về
+   ↓
+Vẽ route quay về = Trail màu đỏ (khác với trail bình thường)
+```
+
+**Ví dụ vẽ Return Route:**
+
+```javascript
+// Khi nhận notification incident, fetch telemetry từ lúc incident tới landing
+const telemetry = await fetch(
+  `/api/v1/operator/missions/MSN-20261018-0001/telemetry?limit=1000`
+).then(r => r.json());
+
+// Tìm thời điểm incident (từ notification)
+const incidentTime = new Date('2026-10-18T10:23:45');
+const returnStartIndex = telemetry.findIndex(log => 
+  new Date(log.timestamp) >= incidentTime
+);
+
+if (returnStartIndex !== -1) {
+  const returnCoordinates = telemetry
+    .slice(returnStartIndex)
+    .map(point => [point.latitude, point.longitude]);
+  
+  // Vẽ polyline màu đỏ cho return route
+  L.polyline(returnCoordinates, {
+    color: '#ef4444',           // Màu đỏ
+    weight: 4,
+    dashArray: '5, 5',          // Đứt nét
+    opacity: 0.8,
+    className: 'return-route-animated'
+  }).addTo(map).bindPopup('Return Route (Bay quay về)');
+}
+```
+
+**CSS Animation cho Return Route:**
+
+```css
+.return-route-animated {
+  stroke-dasharray: 8 6;
+  animation: return-dash 1s linear infinite;
+}
+
+@keyframes return-dash {
+  to { stroke-dashoffset: -14; }
+}
+```
+
+### 9.4 Drone Landing tại Hub (Incident)
+
+**Khi drone hạ cánh:**
+
+```json
+{
+  "mission_id": "MSN-20261018-0001",
+  "status": "INCIDENT_RETURN",
+  "handling_status": "CANNOT_CONTINUE",     // ← Không thể tiếp tục
+  "drone": {
+    "id": 28,
+    "current_hub_id": 1,                    // ← Đáp tại Hub Quận 1
+    "battery_level_pct": 70
+  }
+}
+```
+
+**FE xử lý:**
+
+```javascript
+// Khi drone không còn trong live-tracking response (landing)
+// 1. Xóa drone marker khỏi map
+removeDroneMarker('MSN-20261018-0001');
+
+// 2. Hiện notification
+showAlert({
+  type: 'info',
+  title: 'Drone đã hạ cánh',
+  message: 'Drone #28 đã đáp xuống Hub Quận 1 do sự cố. Cần kiểm tra kỹ thuật.',
+  action: {
+    label: 'Xem Maintenance Alert',
+    onClick: () => navigateTo('/maintenance/alerts')
+  }
+});
+```
+
+---
+
+## 10. Điều chỉnh Config Simulator (Testing)
+
+**Endpoint:** `PATCH /api/v1/operator/simulator/config`
+
+```bash
+curl -X PATCH "http://localhost:8000/api/v1/operator/simulator/config" \
+  -H "Authorization: Bearer <operator_token>" \
+  -H "Content-Type: application/json" \
+  -d {
+    "incident_enabled": true,
+    "incident_probability": 0.15,        # Tăng xác suất incident lên 15%
+    "incident_min_step": 2,              # Bắt đầu từ bước 2
+    "incident_severity": "High",         # Severity cao hơn
+    "interval_sec": 2,                   # Giảm interval xuống 2s (bay nhanh)
+    "steps_per_leg": 30                  # Tăng số điểm nội suy (bay mượt)
+  }
+```
+
+**Response:**
+```json
+{
+  "incident_enabled": true,
+  "incident_probability": 0.15,
+  "incident_min_step": 2,
+  "incident_severity": "High",
+  "interval_sec": 2,
+  "steps_per_leg": 30
+}
+```
+
+**Test Scenario:**
+- Để `incident_probability = 1.0` → buộc incident xảy ra
+- Để `incident_probability = 0.0` → không có incident
+- Để `incident_severity = "High"` → hiện alert priority cao
+
+---
+
+## 11. Sắp có (chưa implement)
 
 > Các endpoint dưới đây sẽ bổ sung sau khi backend hoàn thiện Task 2 & 3.
 
