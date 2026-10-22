@@ -42,6 +42,30 @@ INCIDENT_MIN_STEP    = 3      # Không xảy ra trước điểm thứ N (tránh
 INCIDENT_SEVERITY    = "Medium"  # Low / Medium / High
 
 
+class _SimulatorConfig:
+    """Object lưu config simulator — có thể mutate từ endpoint API."""
+    def __init__(self):
+        self.incident_enabled     = INCIDENT_ENABLED
+        self.incident_probability = INCIDENT_PROBABILITY
+        self.incident_min_step    = INCIDENT_MIN_STEP
+        self.incident_severity    = INCIDENT_SEVERITY
+        self.interval_sec         = INTERVAL_SEC
+        self.steps_per_leg        = STEPS_PER_LEG
+
+    def to_dict(self):
+        return {
+            "incident_enabled":     self.incident_enabled,
+            "incident_probability": self.incident_probability,
+            "incident_min_step":    self.incident_min_step,
+            "incident_severity":    self.incident_severity,
+            "interval_sec":         self.interval_sec,
+            "steps_per_leg":        self.steps_per_leg,
+        }
+
+# Singleton config — import cái này từ các module khác để đọc/ghi
+simulator_config = _SimulatorConfig()
+
+
 # ── Haversine helper ──────────────────────────────────────────────────────────
 
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -168,7 +192,7 @@ async def _fly_incident_return(
     energy_wh = 0.0
 
     for idx, (lat, lng) in enumerate(waypoints):
-        await asyncio.sleep(INTERVAL_SEC)
+        await asyncio.sleep(simulator_config.interval_sec)
 
         altitude    = round(40.0 + math.sin(idx * 0.3) * 3, 2)
         speed       = round(8.0 + math.cos(idx * 0.2) * 2, 2)
@@ -289,7 +313,7 @@ async def simulate_mission_flight(mission_id: str) -> None:
             waypoints = _interpolate(
                 from_hub.latitude, from_hub.longitude,
                 to_hub.latitude,   to_hub.longitude,
-                STEPS_PER_LEG,
+                simulator_config.steps_per_leg,
             )
 
             dist_m = _haversine_m(
@@ -333,7 +357,7 @@ async def simulate_mission_flight(mission_id: str) -> None:
     total_points  = len(waypoints)
 
     for idx, (lat, lng) in enumerate(waypoints):
-        await asyncio.sleep(INTERVAL_SEC)
+        await asyncio.sleep(simulator_config.interval_sec)
 
         # Giả lập sensor values
         altitude     = round(50.0 + math.sin(idx * 0.3) * 5, 2)
@@ -406,15 +430,15 @@ async def simulate_mission_flight(mission_id: str) -> None:
                 print(f"[SIMULATOR] Lỗi insert TelemetryLog & cập nhật pin điểm {idx+1}: {e}")
 
         # ── Kiểm tra incident sau mỗi điểm ───────────────────────────────────
-        if INCIDENT_ENABLED and idx >= INCIDENT_MIN_STEP:
-            if random.random() < INCIDENT_PROBABILITY:
+        if simulator_config.incident_enabled and idx >= simulator_config.incident_min_step:
+            if random.random() < simulator_config.incident_probability:
                 print(f"[SIMULATOR] ⚠️  INCIDENT xảy ra tại điểm {idx+1}/{total_points} ({lat:.6f}, {lng:.6f})")
                 await _trigger_incident(
                     mission_id=mission_id,
                     incident_lat=lat,
                     incident_lng=lng,
                     from_hub=from_hub,
-                    severity=INCIDENT_SEVERITY,
+                    severity=simulator_config.incident_severity,
                 )
                 # Bay ngược về from_hub
                 return_waypoints = _interpolate(lat, lng, from_hub.latitude, from_hub.longitude, max(5, (total_points - idx)))

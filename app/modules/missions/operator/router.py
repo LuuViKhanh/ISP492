@@ -3114,3 +3114,56 @@ async def emergency_land(
             f"Drone #{mission.drone_id} chuyển sang MAINTENANCE."
         ),
     )
+
+
+# ── Simulator Config ──────────────────────────────────────────────────────────
+
+class SimulatorConfigRequest(BaseModel):
+    incident_enabled:     Optional[bool]  = None
+    incident_probability: Optional[float] = None  # 0.0 – 1.0
+    incident_min_step:    Optional[int]   = None
+    incident_severity:    Optional[str]   = None  # Low / Medium / High
+    interval_sec:         Optional[int]   = None  # Giây giữa mỗi điểm telemetry
+    steps_per_leg:        Optional[int]   = None  # Số điểm nội suy mỗi chặng
+
+
+@router.get("/simulator/config", summary="Lấy cấu hình simulator hiện tại")
+async def get_simulator_config(
+    user: CurrentUser = Depends(allow_operator),
+):
+    from app.shared.drone_simulator import simulator_config
+    return simulator_config.to_dict()
+
+
+@router.patch("/simulator/config", summary="Cập nhật cấu hình simulator")
+async def update_simulator_config(
+    body: SimulatorConfigRequest,
+    user: CurrentUser = Depends(allow_operator),
+):
+    from app.shared.drone_simulator import simulator_config
+
+    if body.incident_enabled is not None:
+        simulator_config.incident_enabled = body.incident_enabled
+    if body.incident_probability is not None:
+        if not 0.0 <= body.incident_probability <= 1.0:
+            raise HTTPException(status_code=400, detail="incident_probability phải từ 0.0 đến 1.0")
+        simulator_config.incident_probability = body.incident_probability
+    if body.incident_min_step is not None:
+        simulator_config.incident_min_step = body.incident_min_step
+    if body.incident_severity is not None:
+        if body.incident_severity not in ("Low", "Medium", "High"):
+            raise HTTPException(status_code=400, detail="incident_severity phải là Low / Medium / High")
+        simulator_config.incident_severity = body.incident_severity
+    if body.interval_sec is not None:
+        if body.interval_sec < 1:
+            raise HTTPException(status_code=400, detail="interval_sec phải >= 1")
+        simulator_config.interval_sec = body.interval_sec
+    if body.steps_per_leg is not None:
+        if body.steps_per_leg < 5:
+            raise HTTPException(status_code=400, detail="steps_per_leg phải >= 5")
+        simulator_config.steps_per_leg = body.steps_per_leg
+
+    return {
+        "message": "Cấu hình simulator đã cập nhật.",
+        "config": simulator_config.to_dict(),
+    }
