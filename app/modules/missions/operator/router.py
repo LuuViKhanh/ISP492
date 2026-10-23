@@ -22,6 +22,12 @@ from app.modules.missions.schemas import (
     HubCheckpointResponse, TelemetryIngestResponse,
     FailsafeEvaluateRequest, FailsafeEvaluateResponse,
     FailsafeExecuteRequest, FailsafeExecuteResponse, FailsafeHubInfo,
+    PreAnalyzeBundleCandidatesRequest, ValidateBundleRequest, PostAnalyzeBundleCandidatesRequest,
+)
+from app.modules.missions.bundle_service import (
+    get_pre_analyze_bundle_candidates,
+    validate_bundle_orders,
+    get_post_analyze_bundle_candidates,
 )
 from app.modules.fleet.models import Drone, Battery, DroneStatus, batteries_status
 from app.modules.fleet.schemas import CheckAvailabilityRequest, AvailabilityResponse, AvailableBatterySchema
@@ -1425,8 +1431,10 @@ async def compute_mission_routes_internal(
     drone_id: Optional[Union[str, int]] = None,
     battery_id: Optional[str] = None,
     strict_battery: bool = False,
+    override_payload_kg: Optional[float] = None,
     zone_tracker: Optional[dict] = None,
 ) -> tuple[list[RouteOptionSchema], list[dict]]:
+    effective_payload = float(override_payload_kg) if override_payload_kg is not None else float(order.payload_kg or 0)
     def _set_zone(zone_name: str):
         if zone_tracker is not None:
             zone_tracker["current"] = zone_name
@@ -1514,7 +1522,7 @@ async def compute_mission_routes_internal(
                 and_(
                     Drone.status == DroneStatus.AVAILABLE,
                     Drone.current_hub_id == origin_hub.id,
-                    Drone.payload_capacity_kg >= float(order.payload_kg or 0)
+                    Drone.payload_capacity_kg >= effective_payload
                 )
             ).order_by(Drone.id)
         )
@@ -1535,7 +1543,7 @@ async def compute_mission_routes_internal(
                     and_(
                         Drone.status == DroneStatus.AVAILABLE,
                         Drone.current_hub_id != origin_hub.id,
-                        Drone.payload_capacity_kg >= float(order.payload_kg or 0)
+                        Drone.payload_capacity_kg >= effective_payload
                     )
                 ).order_by(Drone.id)
             )
@@ -1625,7 +1633,7 @@ async def compute_mission_routes_internal(
                 hub_wait_times[h.id] = float('inf')
                 hub_best_energy_wh[h.id] = 0.0
 
-    payload = float(order.payload_kg or 0)
+    payload = effective_payload
 
     def plan_single_path(mode="energy", exclude_nodes=None):
         if exclude_nodes is None:
@@ -2683,6 +2691,60 @@ async def get_eligible_batteries_for_mission_planning(
     }
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ORDER CONSOLIDATION / PIGGYBACKING (GOM ĐƠN / GHÉP ĐƠN)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/bundle/candidates-pre-analyze", summary="[Luồng 1 - Pre-Analyze] Lấy danh sách đơn có thể gộp trước khi analyze")
+async def get_bundle_candidates_pre_analyze(
+    request: PreAnalyzeBundleCandidatesRequest,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    **[Luồng 1 - Pre-Analyze Consolidation]**
+    Trả về danh sách các đơn hàng khả dụng tại cùng Hub xuất phát & Hub đích để Operator gom đơn trước.
+    Kèm gợi ý dòng Drone (Swift, Falcon, Eagle) phù hợp với tổng tải trọng.
+    """
+    return await get_pre_analyze_bundle_candidates(db, request.orderId)
+
+
+@router.post("/bundle/validate-pre-analyze", summary="[Luồng 1 & 2] Xác thực gói đơn hàng gộp trước khi lập lộ trình hoặc tạo mission")
+async def validate_bundle_orders_endpoint(
+    request: ValidateBundleRequest,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Xác thực tập hợp đơn hàng định gộp chung một chuyến bay:
+    - Kiểm tra cùng Hub gửi và nhận.
+    - Kiểm tra trạng thái AT_HUB & PAID.
+    - Kiểm tra tổng tải trọng <= tải trọng tối đa của Drone (nếu có chọn Drone).
+    """
+    return await validate_bundle_orders(db, request.orderIds, request.droneId)
+
+
+@router.post("/bundle/candidates-post-analyze", summary="[Luồng 2 - Post-Analyze] Hiển thị đơn có thể ghép thêm vào Drone và tuyến đã chọn")
+async def get_bundle_candidates_post_analyze(
+    request: PostAnalyzeBundleCandidatesRequest,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    **[Luồng 2 - Post-Analyze Consolidation / Piggybacking]**
+    Sau khi Operator đã chọn đơn chính & Drone và chạy Analyze:
+    - Tính tải trọng còn dư của Drone = payload_capacity - primary_order.payload.
+    - Tìm và hiển thị các đơn hàng cùng tuyến có thể gộp thêm mà không vượt quá tải trọng còn lại.
+    - Cho phép Operator chọn thêm đơn và tạo Mission trực tiếp mà không cần chạy lại vòng lặp analyze.
+    """
+    return await get_post_analyze_bundle_candidates(
+        db=db,
+        primary_order_id=request.orderId,
+        drone_id=request.droneId,
+        route_id=request.routeId,
+    )
+
 @router.post("/mission-planning/analyze", response_model=MissionPlanningAnalyzeResponse)
 async def analyze_mission_planning(
     request: MissionPlanningAnalyzeRequest,
@@ -2698,12 +2760,21 @@ async def analyze_mission_planning(
 
         clean_drone_id = str(request.droneId).strip() if request.droneId is not None else None
         requested_battery_id = (request.batteryId or request.battery_id or "").strip() or None
+        total_bundle_payload = None
+        if request.bundledOrderIds:
+            all_bundle_ids = [clean_order_id] + [str(x).strip() for x in request.bundledOrderIds if str(x).strip()]
+            val_res = await validate_bundle_orders(db, all_bundle_ids, clean_drone_id)
+            if not val_res["is_valid"]:
+                raise HTTPException(status_code=400, detail=val_res["message"])
+            total_bundle_payload = val_res["total_payload_kg"]
+
         routes_schemas, _ = await compute_mission_routes_internal(
             db=db,
             order=order,
             drone_id=clean_drone_id,
             battery_id=requested_battery_id,
             strict_battery=bool(requested_battery_id),
+            override_payload_kg=total_bundle_payload,
             zone_tracker=zone_tracker,
         )
 
@@ -2712,6 +2783,8 @@ async def analyze_mission_planning(
         is_cross = first_route.is_cross_hub if first_route else False
         return MissionPlanningAnalyzeResponse(
             orderId=order.id,
+            bundledOrderIds=request.bundledOrderIds if request.bundledOrderIds else None,
+            totalPayloadKg=total_bundle_payload if total_bundle_payload is not None else float(order.payload_kg or 0),
             droneId=first_route.suggestedDroneId if first_route else clean_drone_id,
             assignedBatteryId=first_route.assignedBatteryId if first_route else requested_battery_id,
             assignedBatterySerial=first_route.assignedBatterySerial if first_route else None,
@@ -2823,6 +2896,24 @@ async def create_mission(
         if first_leg_bat:
             requested_battery_id = str(first_leg_bat).strip() or None
 
+    # Kiểm tra và xử lý ghép đơn (Order Consolidation / Piggybacking) nếu có truyền bundledOrderIds
+    bundled_ids = [str(x).strip() for x in (request.bundledOrderIds or []) if str(x).strip() and str(x).strip() != clean_order_id]
+    all_mission_order_ids = [clean_order_id] + bundled_ids
+    total_bundle_payload = float(order.payload_kg or 0.0)
+    total_delivery_fee = float(order.delivery_fee or 0.0)
+    bundled_order_objs = [order]
+
+    if bundled_ids:
+        val_res = await validate_bundle_orders(db, all_mission_order_ids, request.droneId)
+        if not val_res["is_valid"]:
+            raise HTTPException(status_code=400, detail=val_res["message"])
+        total_bundle_payload = val_res["total_payload_kg"]
+        total_delivery_fee = val_res["total_delivery_fee"]
+        for bid in bundled_ids:
+            b_obj = await db.get(Order, bid)
+            if b_obj:
+                bundled_order_objs.append(b_obj)
+
     # Tái hiện các tùy chọn tuyến đường dựa trên năng lượng của pin được gán + chỉ định pin tại các Relay Hub
     routes_schemas, raw_data_list = await compute_mission_routes_internal(
         db=db,
@@ -2830,6 +2921,7 @@ async def create_mission(
         drone_id=request.droneId,
         battery_id=requested_battery_id,
         strict_battery=True,
+        override_payload_kg=total_bundle_payload,
     )
 
     selected_schema = None
@@ -2900,9 +2992,9 @@ async def create_mission(
         battery_id=assigned_battery.id,
         origin_hub_id=order.origin_hub_id,
         destination_hub_id=order.destination_hub_id,
-        payload_weight=order.payload_kg,
+        payload_weight=total_bundle_payload,
         distance_m=round(total_dist_km * 1000, 2),
-        delivery_fee=order.delivery_fee,
+        delivery_fee=total_delivery_fee,
         scheduled_time=order.requested_delivery_at or get_vn_naive_datetime(),
         status=MissionStatus.SCHEDULED,
         handling_status=HandlingStatus.AT_HUB,
@@ -3020,27 +3112,33 @@ async def create_mission(
     )
     db.add(ai_rec)
 
-    # 4. Ghi nhận thời gian planning trên Order
-    order.planning_at = get_vn_naive_datetime()
+    # 4. Ghi nhận thời gian planning trên tất cả các đơn hàng thuộc nhiệm vụ
+    now_naive = get_vn_naive_datetime()
+    for o_item in bundled_order_objs:
+        o_item.planning_at = now_naive
 
     await db.commit()
     await db.refresh(mission)
 
-    # Gửi email thông báo cho người nhận hàng
+    # Gửi email thông báo cho tất cả người nhận của các đơn hàng trong chuyến bay
     try:
         from app.core.email import send_mission_scheduled_email
         from app.core.config import settings
-        if order.receiver_email:
-            await send_mission_scheduled_email(
-                to_email=order.receiver_email,
-                order_id=order.id,
-                mission_id=mission.id,
-                frontend_url=settings.FRONTEND_URL,
-            )
+        for o_item in bundled_order_objs:
+            if o_item.receiver_email:
+                await send_mission_scheduled_email(
+                    to_email=o_item.receiver_email,
+                    order_id=o_item.id,
+                    mission_id=mission.id,
+                    frontend_url=settings.FRONTEND_URL,
+                )
     except Exception as e:
         print(f"[EMAIL] Lỗi gửi mission scheduled email: {e}")
 
-    return await build_mission_detail_response(db, mission)
+    resp_mission = await build_mission_detail_response(db, mission)
+    resp_mission.bundled_order_ids = all_mission_order_ids
+    resp_mission.total_orders_count = len(all_mission_order_ids)
+    return resp_mission
 
 
 @router.get("/{mission_id}", response_model=MissionResponse, summary="Lấy thông tin chi tiết một mission")
