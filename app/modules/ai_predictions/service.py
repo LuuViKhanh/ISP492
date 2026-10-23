@@ -21,6 +21,16 @@ df_weather = None
 try:
     if TEST_SET_PATH.exists():
         df_weather = pd.read_csv(TEST_SET_PATH)
+        default_weather = {
+            'temperature_c': 25.0,
+            'humidity_pct': 70.0,
+            'avg_wind_speed': 5.0,
+            'wind_gust_ms': 6.0,
+            'wind_dir_deg': 180.0,
+            'pressure_hpa': 1012.0,
+            'cloud_cover_pct': 20.0
+        }
+        df_weather = df_weather.fillna(value=default_weather)
 except Exception:
     pass
 
@@ -31,6 +41,15 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
+
+def _safe_float(val, default: float) -> float:
+    if val is None or pd.isna(val):
+        return default
+    try:
+        f = float(val)
+        return default if math.isnan(f) else f
+    except (ValueError, TypeError):
+        return default
 
 def predict_flight_energy(distance_km: float, payload_weight: float) -> dict:
     """
@@ -45,13 +64,13 @@ def predict_flight_energy(distance_km: float, payload_weight: float) -> dict:
     """
     if df_weather is not None and not df_weather.empty:
         weather_sample = df_weather.sample(n=1).iloc[0]
-        temp = float(weather_sample.get('temperature_c', 25.0))
-        hum = float(weather_sample.get('humidity_pct', 70.0))
-        wind_spd = float(weather_sample.get('avg_wind_speed', 5.0))
-        wind_gust = float(weather_sample.get('wind_gust_ms', 6.0))
-        wind_dir = float(weather_sample.get('wind_dir_deg', 180.0))
-        press = float(weather_sample.get('pressure_hpa', 1012.0))
-        cloud = float(weather_sample.get('cloud_cover_pct', 20.0))
+        temp = _safe_float(weather_sample.get('temperature_c'), 25.0)
+        hum = _safe_float(weather_sample.get('humidity_pct'), 70.0)
+        wind_spd = _safe_float(weather_sample.get('avg_wind_speed'), 5.0)
+        wind_gust = _safe_float(weather_sample.get('wind_gust_ms'), 6.0)
+        wind_dir = _safe_float(weather_sample.get('wind_dir_deg'), 180.0)
+        press = _safe_float(weather_sample.get('pressure_hpa'), 1012.0)
+        cloud = _safe_float(weather_sample.get('cloud_cover_pct'), 20.0)
     else:
         temp, hum, wind_spd, wind_gust, wind_dir, press, cloud = 25.0, 70.0, 5.0, 6.0, 180.0, 1012.0, 20.0
         
