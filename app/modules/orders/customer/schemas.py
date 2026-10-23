@@ -30,6 +30,20 @@ class FeeDetails(BaseModel):
     express_surcharge: float
     fragile_surcharge: float
 
+class HubResourceReadinessSchema(BaseModel):
+    readiness_level: str
+    is_payload_supported: bool
+    suggested_drone_tier: str
+    total_extra_wait_minutes: int
+    queue_orders_count: int
+    queue_wait_minutes: int
+    battery_readiness: str
+    highest_battery_charge_pct: int
+    charge_wait_minutes: int
+    drone_readiness: str
+    dispatch_buffer_minutes: int
+    customer_notice: str
+
 class OrderEstimateResponse(BaseModel):
     delivery_fee: float
     service_fee: float
@@ -39,6 +53,8 @@ class OrderEstimateResponse(BaseModel):
     estimated_departure: Optional[datetime] = None
     estimated_arrival: Optional[datetime] = None
     handover_deadline: Optional[datetime] = None
+    resource_readiness: Optional[HubResourceReadinessSchema] = None
+    customer_notice: Optional[str] = None
 
 class CreateOrderRequest(BaseModel):
     package_type: str
@@ -67,6 +83,8 @@ class OrderCreateResponse(BaseModel):
     aging_deadline: Optional[datetime] = None
     is_aging_priority: bool = False
     created_at: datetime
+    resource_readiness: Optional[HubResourceReadinessSchema] = None
+    customer_notice: Optional[str] = None
     
     class Config:
         from_attributes = True

@@ -148,6 +148,8 @@ class MissionResponse(BaseModel):
     pickup_location_id: Optional[int] = None
     dropoff_location_id: Optional[int] = None
     payload_weight: Optional[float] = None
+    bundled_order_ids: Optional[list[str]] = None
+    total_orders_count: Optional[int] = 1
     distance_m: Optional[float] = None
     delivery_fee: Optional[float] = None
     status: MissionStatus
@@ -295,9 +297,12 @@ class MissionPlanningAnalyzeRequest(BaseModel):
     droneId: Union[str, int]
     batteryId: Optional[str] = None
     battery_id: Optional[str] = None
+    bundledOrderIds: Optional[list[str]] = None
 
 class MissionPlanningAnalyzeResponse(BaseModel):
     orderId: Optional[str] = None
+    bundledOrderIds: Optional[list[str]] = None
+    totalPayloadKg: Optional[float] = None
     droneId: Optional[Union[str, int]] = None
     assignedBatteryId: Optional[str] = None
     assignedBatterySerial: Optional[str] = None
@@ -327,10 +332,27 @@ class MissionCreateRequest(BaseModel):
     distance_km: Optional[float] = None
     predicted_energy_wh: Optional[float] = None
     predicted_duration_min: Optional[int] = None
+    bundledOrderIds: Optional[list[str]] = None
 
 
 
 
+
+
+
+# ── Order Consolidation / Piggybacking Schemas ───────────────
+
+class PreAnalyzeBundleCandidatesRequest(BaseModel):
+    orderId: str
+
+class ValidateBundleRequest(BaseModel):
+    orderIds: list[str]
+    droneId: Optional[Union[str, int]] = None
+
+class PostAnalyzeBundleCandidatesRequest(BaseModel):
+    orderId: str
+    droneId: Union[str, int]
+    routeId: Optional[str] = None
 
 # ── Failsafe & Dynamic In-flight Divert Schemas ───────────────
 
