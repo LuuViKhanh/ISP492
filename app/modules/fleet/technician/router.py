@@ -570,8 +570,9 @@ async def get_drone_flight_history(
     
     - TECHNICIAN: chỉ xem drone tại hub của mình
     - Trả về danh sách missions, sorted by arrived_at DESC (gần nhất trước)
+    - Mỗi mission có field `is_relay_mission` để phân biệt chuyến bay thường vs chuyến bay trung gian
     """
-    from app.modules.missions.models import Mission, Order as OrderModel
+    from app.modules.missions.models import Mission, Order as OrderModel, MissionLeg
     
     # Kiểm tra drone có tại hub của technician không
     drone = await db.get(Drone, drone_id)
@@ -609,6 +610,13 @@ async def get_drone_flight_history(
             duration = row.arrived_at - row.started_at
             duration_min = int(duration.total_seconds() / 60)
         
+        # Kiểm tra số lượng legs để xác định chuyến bay trung gian
+        legs_count_res = await db.execute(
+            select(MissionLeg).where(MissionLeg.mission_id == row.mission_id)
+        )
+        legs_count = len(legs_count_res.scalars().all())
+        is_relay_mission = legs_count > 1  # Nếu > 1 leg → là chuyến bay trung gian
+        
         flights.append({
             "mission_id": row.mission_id,
             "order_id": row.order_id,
@@ -617,6 +625,8 @@ async def get_drone_flight_history(
             "arrived_at": row.arrived_at,
             "duration_minutes": duration_min,
             "battery_id": row.battery_id,
+            "is_relay_mission": is_relay_mission,
+            "legs_count": legs_count,
         })
     
     return flights
