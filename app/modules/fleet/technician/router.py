@@ -557,6 +557,129 @@ async def get_drone_profile(
     return drone_dict
 
 
+@router.get("/drones/{drone_id}/flight-history", response_model=list, summary="Lịch bay của drone")
+async def get_drone_flight_history(
+    drone_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Lấy lịch bay của drone (Flight History).
+    
+    - TECHNICIAN: chỉ xem drone tại hub của mình
+    - Trả về danh sách missions, sorted by arrived_at DESC (gần nhất trước)
+    """
+    from app.modules.missions.models import Mission, Order as OrderModel
+    
+    # Kiểm tra drone có tại hub của technician không
+    drone = await db.get(Drone, drone_id)
+    if not drone:
+        raise HTTPException(status_code=404, detail="Drone not found")
+    if user.hub_id and drone.current_hub_id != int(user.hub_id):
+        raise HTTPException(status_code=403, detail="Drone không ở Hub của bạn")
+    
+    # Lấy flight history
+    query = (
+        select(
+            Mission.id.label("mission_id"),
+            Mission.status.label("mission_status"),
+            Mission.started_at,
+            Mission.arrived_at,
+            Mission.battery_id,
+            OrderModel.id.label("order_id"),
+            OrderModel.order_code,
+        )
+        .outerjoin(OrderModel, Mission.order_id == OrderModel.id)
+        .where(
+            Mission.drone_id == drone_id,
+            Mission.status == MissionStatus.COMPLETED
+        )
+        .order_by(Mission.arrived_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    
+    result = await db.execute(query)
+    flights = []
+    for row in result.fetchall():
+        duration_min = None
+        if row.started_at and row.arrived_at:
+            duration = row.arrived_at - row.started_at
+            duration_min = int(duration.total_seconds() / 60)
+        
+        flights.append({
+            "mission_id": row.mission_id,
+            "order_id": row.order_id,
+            "order_code": row.order_code,
+            "started_at": row.started_at,
+            "arrived_at": row.arrived_at,
+            "duration_minutes": duration_min,
+            "battery_id": row.battery_id,
+        })
+    
+    return flights
+
+
+@router.get("/drones/{drone_id}/maintenance-history", response_model=list, summary="Lịch bảo trì của drone")
+async def get_drone_maintenance_history(
+    drone_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Lấy lịch bảo trì của drone (Maintenance History).
+    
+    - TECHNICIAN: chỉ xem drone tại hub của mình
+    - Trả về danh sách work orders + maintenance records, sorted by resolved_at DESC (gần nhất trước)
+    """
+    from app.modules.fleet.models import MaintenanceRecord
+    
+    # Kiểm tra drone có tại hub của technician không
+    drone = await db.get(Drone, drone_id)
+    if not drone:
+        raise HTTPException(status_code=404, detail="Drone not found")
+    if user.hub_id and drone.current_hub_id != int(user.hub_id):
+        raise HTTPException(status_code=403, detail="Drone không ở Hub của bạn")
+    
+    # Lấy maintenance history
+    query = (
+        select(
+            WorkOrder.id.label("work_order_id"),
+            WorkOrder.status,
+            WorkOrder.issue_description,
+            WorkOrder.action_taken,
+            WorkOrder.resolved_at,
+            MaintenanceRecord.id.label("record_id"),
+            MaintenanceRecord.maintenance_type,
+            MaintenanceRecord.description.label("record_description"),
+        )
+        .outerjoin(MaintenanceRecord, MaintenanceRecord.work_order_id == WorkOrder.id)
+        .where(WorkOrder.drone_id == drone_id)
+        .order_by(WorkOrder.resolved_at.desc().nullslast())
+        .limit(limit)
+        .offset(offset)
+    )
+    
+    result = await db.execute(query)
+    maintenance_records = []
+    for row in result.fetchall():
+        maintenance_records.append({
+            "work_order_id": row.work_order_id,
+            "status": row.status.value if row.status else None,
+            "issue_description": row.issue_description,
+            "action_taken": row.action_taken,
+            "resolved_at": row.resolved_at,
+            "maintenance_type": row.maintenance_type,
+            "record_description": row.record_description,
+        })
+    
+    return maintenance_records
+
+
 @router.patch("/drones/{drone_id}/status", response_model=DroneProfileResponse)
 async def update_drone_status(
     drone_id: str,
