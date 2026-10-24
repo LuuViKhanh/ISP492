@@ -29,16 +29,21 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # pool_size=2  → tối đa 2 kết nối thường trực (đủ cho cron không tranh với API)
 # max_overflow=1 → cho phép thêm 1 kết nối tạm khi burst
 # pool_timeout=10 → nếu không lấy được conn trong 10s thì raise ngay (không treo)
-# pool_recycle=1800 → tái tạo conn sau 30 phút để tránh conn bị cloud provider cắt
+# pool_recycle=300 → tái tạo conn sau 5 phút để tránh conn bị Supabase/cloud provider cắt
 cron_async_engine = create_async_engine(
     DATABASE_URL,
     pool_pre_ping=True,
     pool_size=2,
     max_overflow=1,
     pool_timeout=10,
-    pool_recycle=1800,
+    pool_recycle=300,
     connect_args={
-        "statement_cache_size": 0  # Bắt buộc với Transaction Pooler (Supabase/PgBouncer)
+        "statement_cache_size": 0,  # Bắt buộc với Transaction Pooler (Supabase/PgBouncer)
+        "command_timeout": 30,
+        "timeout": 15,
+        "server_settings": {
+            "application_name": "drone_backend_cron"
+        }
     },
 )
 
