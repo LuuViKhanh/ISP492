@@ -33,6 +33,11 @@ class MissionLegStatus(str, enum.Enum):
     IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
 
+class LegDestinationType(str, enum.Enum):
+    """Phân biệt chuyến bay thẳng vs chuyến bay trung gian."""
+    DESTINATION = "destination"   # Flying to final destination
+    CONNECTION = "connection"     # Flying to relay hub (connection)
+
 class MissionStatus(str, enum.Enum):
     # FE Operator Spec VI Statuses — viết thường khớp với DB
     SCHEDULED    = "Scheduled"
@@ -113,6 +118,7 @@ class Mission(Base):
     arrived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     arrival_confirmed_by: Mapped[str | None] = mapped_column(String, nullable=True)
     arrival_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    leg_destination_type: Mapped[str | None] = mapped_column(String(20), default="destination", nullable=True)
 
 
 class TelemetryLog(Base):

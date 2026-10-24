@@ -1796,6 +1796,19 @@ async def dispatch_drone(
         mission.start_time = now
     if not mission.departed_at:
         mission.departed_at = now
+    
+    # ── Set leg_destination_type: destination vs connection ──
+    # Nếu leg tiếp theo không phải leg cuối cùng → connection (relay hub)
+    # Nếu leg tiếp theo là leg cuối cùng → destination (đích cuối)
+    total_legs_res = await db.execute(
+        select(MissionLeg).where(MissionLeg.mission_id == mission.id)
+    )
+    total_legs = len(total_legs_res.scalars().all())
+    
+    if next_leg.sequence_no < total_legs:
+        mission.leg_destination_type = "connection"  # Bay đến relay hub
+    else:
+        mission.leg_destination_type = "destination"  # Bay đến destination cuối
     mission.handling_status = HandlingStatus.INCOMING
 
     # Nếu Order đang ở AT_HUB, chuyển sang IN_DELIVERY khi drone cất cánh
