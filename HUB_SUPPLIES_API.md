@@ -435,3 +435,241 @@ Backend sẽ có worker tự động:
 
 FE chỉ cần hiện thông báo khi có notification từ server.
 
+---
+
+## 12. Các thay đổi khác tại Technician (Bug Fixes)
+
+### 12.1 POST `/confirm-arrival` — Fix: Loại bỏ arrival_confirmed_at sớm
+
+**Vấn đề cũ:**
+- Endpoint `confirm-arrival` đang set `arrival_confirmed_at = now()` → Block package pickup flow
+- `/confirmations` endpoint filter `arrival_confirmed_at IS NULL` → Packages không hiện
+
+**Fix:**
+- Loại bỏ 2 dòng set `arrival_confirmed_at` + `arrival_confirmed_by`
+- `arrival_confirmed_at` giờ **chỉ** được set khi gọi `confirm-pickup` (khách thực sự nhận hàng)
+
+**Workflow đúng:**
+```
+1. Drone arrive at hub
+   ↓ confirm-arrival API
+   → set arrived_at = now()
+   → set status = COMPLETED
+   → set order.status = DELIVERED_TO_HUB
+   → arrival_confirmed_at = NULL (giữ trống)
+   
+2. Customer picks up package
+   ↓ confirm-pickup API (customer endpoint)
+   → set arrival_confirmed_at = now()
+   → set order.status = DELIVERED
+   → package xóa khỏi hub
+```
+
+**Impact:**
+- ✅ Packages giờ hiện đúng trên `/confirmations` endpoint
+- ✅ Package pickup flow hoạt động bình thường
+
+**FE cần biết:**
+- Sau khi `confirm-arrival`, package sẽ hiện trên `/confirmations` (chờ customer đến nhận)
+- Không cần reload lại page, data sẽ update realtime hoặc trong 1 poll cycle
+
+---
+
+### 12.2 POST `/work-orders` — Fix: Set drone status → MAINTENANCE
+
+**Vấn đề cũ:**
+- Tạo work order không set drone status → drone vẫn ở AVAILABLE
+- Technician nhầm tưởng drone available khi thực tế đang sửa chữa
+
+**Fix:**
+- Khi tạo work order → tự động set `drone.status = MAINTENANCE`
+- Khi work order đóng → set lại `drone.status = AVAILABLE`
+
+**Workflow:**
+```
+1. Technician tạo work order cho drone
+   → POST /work-orders
+   → drone.status = MAINTENANCE
+   → Drone không thể dispatch
+   
+2. Maintenance xong
+   → Close work order
+   → drone.status = AVAILABLE
+   → Drone sẵn sàng dispatch lại
+```
+
+**Response:**
+```json
+{
+  "id": 101,
+  "drone_id": "28",
+  "status": "Open",
+  "created_at": "2026-10-18T16:00:00"
+}
+```
+
+**FE cần biết:**
+- Sau tạo work order, drone sẽ mất khỏi "Available drones" list
+- Drone sẽ xuất hiện ở "Maintenance" section
+- Technician không thể dispatch drone này
+
+---
+
+### 12.3 PATCH `/drones/{drone_id}/status` — Fix: Validate pending alerts
+
+**Vấn đề cũ:**
+- Có pending maintenance alerts nhưng vẫn set drone status = AVAILABLE
+- Drone bay lại khi chưa sửa chữa xong → Nguy hiểm
+
+**Fix:**
+- Trước khi cho phép MAINTENANCE → AVAILABLE:
+  - Check xem còn pending `MaintenanceAlert` không
+  - Nếu có → reject với status 409
+  - Nếu không → allow chuyển trạng thái
+
+**Request:**
+```bash
+PATCH /drones/28/status
+{
+  "status": "AVAILABLE"
+}
+```
+
+**Response (200) — Nếu OK:**
+```json
+{
+  "id": 28,
+  "status": "AVAILABLE",
+  "updated_at": "2026-10-18T16:30:00"
+}
+```
+
+**Response (409) — Nếu có alert pending:**
+```json
+{
+  "detail": "Không thể chuyển sang AVAILABLE: còn 2 maintenance alert pending. Vui lòng resolve trước."
+}
+```
+
+**FE cần biết:**
+- Nếu gặp 409, hiện dialog:
+  - "⚠️ Drone có maintenance alert chưa xong"
+  - "Vui lòng resolve tất cả alert trước khi set AVAILABLE"
+  - Nút: "Xem alerts" → Link tới maintenance alerts page
+
+---
+
+### 12.4 GET `/maintenance-alerts` — Fix: Filter by technician's hub
+
+**Vấn đề cũ:**
+- List maintenance alerts hiện **tất cả** alert trong DB
+- Technician từ Hub A thấy alert của Hub B (bảo mật issue)
+
+**Fix:**
+- Technician chỉ thấy alert của drones tại hub của mình
+- Admin vẫn thấy tất cả (có thể filter by hub)
+
+**Query được thêm:**
+```
+WHERE Drone.current_hub_id == user.hub_id
+```
+
+**Request:**
+```bash
+# Technician — tự động filter theo hub
+GET /maintenance-alerts
+
+# Admin — lấy tất cả (or filter by hub)
+GET /maintenance-alerts?hub_id=2
+```
+
+**Response:**
+```json
+[
+  {
+    "id": 5001,
+    "drone_id": "28",
+    "source": "Incident",
+    "title": "Sự cố chuyến bay MSN-20261018-0001 — Medium severity",
+    "status": "Pending",
+    "created_at": "2026-10-18T10:23:45"
+  }
+]
+```
+
+**FE cần biết:**
+- Technician sẽ chỉ thấy alert của hub mình
+- Alert tự động filter, không cần code gì thêm
+
+---
+
+### 12.5 Battery Lifecycle & last_charged_at (Feature)
+
+**Thêm:**
+- Cột `last_charged_at` trong Battery model
+- Auto-set khi battery charge = 100% (từ charging worker)
+- GET `/batteries` trả `lifecycle_status` + `days_until_expiry`
+
+**Response:**
+```json
+{
+  "id": "BAT-001",
+  "drone_id": "28",
+  "charge_level_pct": 85,
+  "capacity_wh": 150.0,
+  "last_charged_at": "2026-10-18T08:00:00",
+  "lifecycle_status": "Active",
+  "days_until_expiry": 720,
+  "status": "In Use"
+}
+```
+
+**lifecycle_status:**
+- `Active` — Pin còn sử dụng được (< 730 ngày)
+- `Expired` — Pin quá hạn (>= 730 ngày) → Cảnh báo thay pin
+
+**FE cần biết:**
+- Hiện `days_until_expiry` trên battery detail
+- Alert nếu `days_until_expiry < 30` → "Pin sắp hết tuổi"
+- Alert nếu `lifecycle_status == Expired` → "Cần thay pin ngay"
+
+---
+
+## 13. Tóm tắt tất cả thay đổi Technician
+
+| Tính năng | Status | Impact |
+|---|---|---|
+| Hub Supplies CRUD | ✅ New | Quản lý vật tư tại hub |
+| confirm-arrival fix | ✅ Fix | Package pickup flow hoạt động |
+| work-orders status | ✅ Fix | Drone chuyển MAINTENANCE khi tạo WO |
+| drone status validation | ✅ Fix | Không cho MAINTENANCE→AVAILABLE nếu alert pending |
+| maintenance-alerts hub filter | ✅ Fix | Technician chỉ xem alert của hub mình |
+| Battery lifecycle | ✅ New | Theo dõi tuổi thọ pin, `last_charged_at` |
+
+---
+
+## 14. Migration & Setup
+
+**Chạy migration để thêm cột + table:**
+```bash
+python -m app.shared.database.migrate_battery_lifecycle
+```
+
+**Điều này sẽ:**
+- ✅ Thêm cột `last_charged_at` vào table `batteries`
+- ✅ Tạo table `hub_supplies` (id, hub_id, item_name, quantity, unit, created_at, updated_at)
+- ✅ Tạo index trên `hub_supplies(hub_id)`
+
+---
+
+## 15. Testing Checklist
+
+- [ ] GET `/supplies` — Hiện danh sách vật tư
+- [ ] POST `/supplies` — Thêm vật tư mới
+- [ ] PATCH `/supplies/{id}/adjust?delta=-2` — Giảm số lượng
+- [ ] GET `/batteries` — Hiện lifecycle_status + days_until_expiry
+- [ ] POST `/confirm-arrival` → GET `/confirmations` — Packages hiện (không bị block)
+- [ ] POST `/work-orders` — Drone chuyển MAINTENANCE
+- [ ] PATCH `/drones/{id}/status` with pending alert — Rejected (409)
+- [ ] GET `/maintenance-alerts` (as Technician) — Chỉ xem alert của hub mình
+
