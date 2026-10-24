@@ -510,10 +510,19 @@ def _build_battery_eligible_schema(
         is_selectable = False
         status_str = "INSTALLED_ON_OTHER_DRONE"
         unavailable_reason = f"Đang được gắn trên Drone #{b.drone_id}"
+    elif b.drone_id is not None and drone_id is None:
+        is_selectable = False
+        status_str = "In Use"
+        unavailable_reason = f"Đang được gắn trên Drone #{b.drone_id}"
     elif charge_pct < 100:
         is_selectable = False
         status_str = "CHARGING"
         unavailable_reason = f"Pin chưa sạc đầy ({charge_pct}% < 100%), không thể chọn để cất cánh"
+    elif b.drone_id is not None and drone_id is not None and b.drone_id == drone_id:
+        # Pin đang gắn sẵn trên chính Drone này và đã sạc 100% -> Sẵn sàng cất cánh ngay
+        is_selectable = True
+        status_str = "Ready"
+        unavailable_reason = None
 
     return BatteryEligibleSchema(
         id=b.id,
@@ -524,7 +533,7 @@ def _build_battery_eligible_schema(
         available_energy_wh=avail_energy_wh,
         current_hub_id=b.current_hub_id,
         drone_id=b.drone_id,
-        is_installed_on_drone=bool(drone_id is not None and b.drone_id == drone_id),
+        is_installed_on_drone=bool(b.drone_id is not None and (drone_id is None or b.drone_id == drone_id)),
         available_status=status_str,
         is_selectable=is_selectable,
         assigned_mission_id=assigned_mission_id,
@@ -534,21 +543,38 @@ def _build_battery_eligible_schema(
     )
 
 
-@router.get("/{order_id}/eligible-drones", response_model=EligibleDronesResponse)
+@router.get(
+    "/{order_id}/eligible-drones",
+    response_model=EligibleDronesResponse,
+    summary="Tìm kiếm Drone & Pin khả dụng (Tự động fallback / Hỗ trợ Cross-Hub Dispatch)",
+    description="""
+    **[Operator API] Tìm kiếm Drone và Pin đủ điều kiện cho đơn hàng (Hỗ trợ Cross-Hub Dispatch)**
+    
+    ### 📌 Tính năng cốt lõi:
+    1. **Drone nội bộ (Origin Hub)**:
+       - Liệt kê các Drone đang đỗ tại Origin Hub (`current_hub_id == origin_hub_id`), trạng thái `AVAILABLE`, đủ tải trọng và chưa bị gán cho Mission active khác.
+       - Với mỗi Drone, trả về danh sách Pin tương thích (`eligible_batteries`) kèm mức sạc thực tế (`charge_level_pct`) và năng lượng (`available_energy_wh`).
+       - Viên pin 100% đang lắp sẵn trên Drone sẽ trả về `available_status: "Ready"`, `is_installed_on_drone: true` để Operator chọn cất cánh ngay.
+    
+    2. **Cơ chế Cross-Hub Drone Dispatch (Điều phối máy bay liên Hub)**:
+       - **Tự động fallback (Mặc định `include_cross_hub=false`)**: Khi Hub xuất phát không còn cặp Drone-Pin nào đạt 100% để cất cánh (toàn bộ drone bận, pin đang sạc hoặc đã bị reserve), hệ thống **tự động tìm kiếm các Drone khả dụng từ Hub khác gần nhất** và gắn cờ `is_cross_hub: true`.
+       - **Chủ động bật (`include_cross_hub=true`)**: Cho phép Operator/FE chủ động xem và lựa chọn Drone từ các Hub khác kể cả khi Hub xuất phát vẫn còn Drone nội bộ (phục vụ điều phối linh hoạt hoặc test chức năng).
+    
+    ### ⚙️ Query Parameters:
+    - `include_cross_hub` (boolean, mặc định `false`):
+      - `false`: Ưu tiên Drone nội bộ tại Origin Hub. Nếu Hub hết Drone/Pin khả dụng thì tự động fallback hiển thị Drone Cross-Hub.
+      - `true`: Luôn hiển thị danh sách Drone nội bộ kèm danh sách Drone điều phối từ các Hub lân cận (`is_cross_hub: true`, có tên Hub hiện tại `current_hub_name`).
+    """,
+)
 async def get_eligible_drones(
     order_id: str,
+    include_cross_hub: bool = Query(
+        False,
+        description="Nếu True: Luôn trả về thêm danh sách Drone từ Hub khác (Cross-Hub Dispatch) kể cả khi Hub xuất phát còn Drone nội bộ. Mặc định False: Tự động fallback khi Hub xuất phát hết Drone/Pin.",
+    ),
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """
-    **[Operator API] Tìm kiếm Drone và Pin đủ điều kiện cho đơn hàng**
-    
-    - **Mục đích**: Liệt kê các Drone có sẵn tại trạm xuất phát (Origin Hub) kèm danh sách Pin khả dụng tương thích với từng Drone để Operator chọn khi tạo Mission.
-    - **Hoạt động**:
-        1. Tìm Origin Hub của `order_id` truyền vào.
-        2. Lọc các Drone đang nằm tại Origin Hub này (`current_hub_id == origin_hub_id`), ở trạng thái `AVAILABLE`, đủ tải trọng và chưa bị gán cho Mission active khác.
-        3. Với mỗi Drone, lọc danh sách Pin tương thích (`eligible_batteries`) đang ở Origin Hub (hoặc gắn sẵn trên Drone đó), trạng thái `ACTIVE`, chưa bị giữ chỗ bởi Mission/MissionLeg khác, kèm năng lượng thực tế (`available_energy_wh`).
-    """
     order_id = order_id.strip()
     order = await db.get(Order, order_id)
     if not order:
@@ -692,9 +718,9 @@ async def get_eligible_drones(
     # Kiểm tra xem có Drone nội bộ (local) nào thực sự có pin sẵn sàng để cất cánh không
     has_mission_ready_local = any((not d.is_cross_hub and d.is_selectable) for d in drones_schema_list)
 
-    # Nếu tất cả Drone nội bộ đều không có pin sẵn sàng (hoặc Hub không có drone) và chưa ở chế độ cross-hub:
-    # Tự động bổ sung các Drone từ Hub khác (Cross-Hub) có sẵn pin để Operator không bị bế tắc
-    if not has_mission_ready_local and not is_cross_hub_mode:
+    # Nếu tất cả Drone nội bộ đều không có pin sẵn sàng (hoặc Hub không có drone), HOẶC nếu Operator/FE yêu cầu include_cross_hub:
+    # Bổ sung các Drone từ Hub khác (Cross-Hub) có sẵn pin để Operator không bị bế tắc
+    if (not has_mission_ready_local or include_cross_hub) and not is_cross_hub_mode:
         hubs_res = await db.execute(select(Hub).where(Hub.status == 'ACTIVE'))
         all_hubs = hubs_res.scalars().all() or (await db.execute(select(Hub))).scalars().all()
         all_hubs_map = {h.id: h for h in all_hubs}
