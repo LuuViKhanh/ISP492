@@ -1121,15 +1121,38 @@ async def update_inspection(
     old_status = wo.status.value
     wo.action_taken = body.action_taken
     wo.status = body.status
+    now = get_vn_naive_datetime()
+    
     if body.status == WorkOrderStatus.COMPLETED:
-        wo.resolved_at = get_vn_naive_datetime()
+        wo.resolved_at = now
+        
+        # ── Fix: Cập nhật maintenance schedule khi work order hoàn thành ──
+        # Nếu work order được tạo từ 1 maintenance alert có schedule_id
+        # → Cập nhật next_inspection_at để lịch bảo trì tiếp theo là +interval_days
+        if wo.maintenance_schedule_id:
+            schedule = await db.get(MaintenanceSchedule, wo.maintenance_schedule_id)
+            if schedule and schedule.interval_days:
+                schedule.last_inspection_at = now
+                schedule.next_inspection_at = now + timedelta(days=schedule.interval_days)
+                print(f"[MAINTENANCE] Schedule #{schedule.id} updated: next inspection {schedule.next_inspection_at}")
+        
+        # ── Tự động acknowledge maintenance alert liên quan ──
+        # Tìm alert gắn với work order này (nếu có) và chuyển sang Acknowledged
+        if wo.alert_id:
+            alert = await db.get(MaintenanceAlert, wo.alert_id)
+            if alert and alert.status == "Pending":
+                alert.status = "Acknowledged"
+                alert.acknowledged_by = user.id
+                alert.acknowledged_at = now
+                print(f"[MAINTENANCE] Alert #{alert.id} acknowledged by technician {user.id}")
+    
     log = WorkOrderLog(
         work_order_id=wo.id,
         action="inspection_update",
         from_status=old_status,
         to_status=body.status.value,
         changed_by=user.id,
-        created_at=get_vn_naive_datetime(),
+        created_at=now,
     )
     db.add(log)
     await db.commit()
