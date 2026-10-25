@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func
 from datetime import datetime, timezone, timedelta
-from app.modules.ai_predictions.service import haversine_distance
+from app.modules.ai_predictions.service import haversine_distance, predict_flight_energy
 from typing import Union, Optional, List
 import math
 
@@ -485,6 +485,7 @@ def _build_battery_eligible_schema(
     b: Battery,
     drone_id: Union[str, int, None] = None,
     reserved_info_map: Optional[dict[str, dict]] = None,
+    required_energy_wh: Optional[float] = None,
 ) -> BatteryEligibleSchema:
     cap_wh = float(b.capacity_wh or 0.0)
     charge_pct = int(b.charge_level_pct if b.charge_level_pct is not None else 100)
@@ -514,12 +515,30 @@ def _build_battery_eligible_schema(
         is_selectable = False
         status_str = "In Use"
         unavailable_reason = f"Đang được gắn trên Drone #{b.drone_id}"
-    elif charge_pct < 100:
+    elif charge_pct >= 100:
+        is_selectable = True
+        status_str = "Ready"
+        unavailable_reason = None
+    elif required_energy_wh is not None and (avail_energy_wh * 0.8 >= required_energy_wh):
+        # Pin < 100% nhưng năng lượng an toàn (sau khi trừ 20% dự phòng) đủ để bay thẳng tới đích
+        is_selectable = True
+        status_str = "Ready"
+        unavailable_reason = None
+    else:
         is_selectable = False
         status_str = "CHARGING"
-        unavailable_reason = f"Pin chưa sạc đầy ({charge_pct}% < 100%), không thể chọn để cất cánh"
-    elif b.drone_id is not None and drone_id is not None and b.drone_id == drone_id:
-        # Pin đang gắn sẵn trên chính Drone này và đã sạc 100% -> Sẵn sàng cất cánh ngay
+        if required_energy_wh is not None:
+            safe_e = round(avail_energy_wh * 0.8, 1)
+            unavailable_reason = (
+                f"Pin chưa sạc đầy ({charge_pct}% - {avail_energy_wh:.1f} Wh). "
+                f"Năng lượng an toàn 80% ({safe_e} Wh) không đủ bay thẳng tới đích "
+                f"(cần tối thiểu {required_energy_wh:.1f} Wh)"
+            )
+        else:
+            unavailable_reason = f"Pin chưa sạc đầy ({charge_pct}% < 100%), không thể chọn để cất cánh"
+
+    if b.drone_id is not None and drone_id is not None and b.drone_id == drone_id and is_selectable:
+        # Pin đang gắn sẵn trên chính Drone này và đủ điều kiện -> Sẵn sàng cất cánh ngay
         is_selectable = True
         status_str = "Ready"
         unavailable_reason = None
@@ -585,6 +604,50 @@ async def get_eligible_drones(
     hub = await db.get(Hub, order.origin_hub_id)
     if not hub:
         raise HTTPException(status_code=404, detail="Origin Hub not found")
+
+    # Tính toán năng lượng bay thẳng ước tính từ Origin Hub đến Destination Hub (nếu có)
+    required_direct_energy_wh = None
+    if order.destination_hub_id:
+        dest_hub_obj = await db.get(Hub, order.destination_hub_id)
+        if (
+            dest_hub_obj
+            and hub.latitude is not None and hub.longitude is not None
+            and dest_hub_obj.latitude is not None and dest_hub_obj.longitude is not None
+        ):
+            direct_dist_km = haversine_distance(
+                float(hub.latitude), float(hub.longitude),
+                float(dest_hub_obj.latitude), float(dest_hub_obj.longitude)
+            )
+            payload_kg = float(order.payload_kg or 0.0)
+            pred = predict_flight_energy(direct_dist_km, payload_kg)
+            required_direct_energy_wh = round(float(pred.get("energy_wh") or 0.0), 2)
+
+    def _is_battery_usable(b: Battery, req_e: Optional[float] = None) -> bool:
+        if b.id in reserved_info_map:
+            return False
+        pct = int(b.charge_level_pct if b.charge_level_pct is not None else 100)
+        if pct >= 100:
+            return True
+        cap = float(b.capacity_wh or 0.0)
+        avail_e = cap * (pct / 100.0)
+        if req_e is not None:
+            return (avail_e * 0.8 >= req_e)
+        return False
+
+    def _is_battery_visible(b: Battery, target_drone_id: Union[str, int, None], req_e: Optional[float] = None) -> bool:
+        # 1. Pin 100%: Luôn luôn hiển thị
+        pct = int(b.charge_level_pct if b.charge_level_pct is not None else 100)
+        if pct >= 100:
+            return True
+        # 2. Pin < 100%: Chỉ hiển thị nếu đủ năng lượng an toàn bay thẳng từ Origin -> Destination
+        cap = float(b.capacity_wh or 0.0)
+        avail_e = cap * (pct / 100.0)
+        if req_e is not None and (avail_e * 0.8 >= req_e):
+            return True
+        # 3. Giữ lại nếu đang gắn trên chính drone này hoặc đã bị giữ chỗ để FE hiển thị trạng thái
+        if b.drone_id == target_drone_id or b.id in reserved_info_map:
+            return True
+        return False
 
     # Loại trừ các drone đang được phân công cho mission active khác
     busy_drones_res = await db.execute(
@@ -669,21 +732,23 @@ async def get_eligible_drones(
             if (b.current_hub_id == d_hub_id or b.drone_id == d.id)
             and (b.drone_id is None or b.drone_id == d.id)
             and (not compat_models or (b.battery_model and b.battery_model in compat_models))
+            and _is_battery_visible(b, d.id, required_direct_energy_wh)
         ]
         # Ưu tiên:
-        # (1) Pin khả dụng (is_selectable == True) xếp trước, pin bận xếp sau
-        # (2) đang gắn trên drone & sạc 100%, (3) sạc >= 100% tại hub, (4) mức sạc & dung lượng Wh cao nhất
+        # (1) Pin khả dụng (_is_battery_usable) xếp trước, pin bận/chưa đủ xếp sau
+        # (2) Đang gắn trên chính drone này và khả dụng
+        # (3) Mức sạc & dung lượng Wh cao nhất
         d_bats.sort(
             key=lambda b: (
-                0 if b.id not in reserved_info_map else 1,
-                0 if (b.drone_id == d.id and (b.charge_level_pct or 0) >= 100) else (1 if (b.charge_level_pct or 0) >= 100 else 2),
+                0 if _is_battery_usable(b, required_direct_energy_wh) else 1,
+                0 if (b.drone_id == d.id and _is_battery_usable(b, required_direct_energy_wh)) else 1,
                 -(b.charge_level_pct or 0),
                 -float(b.capacity_wh or 0.0),
                 b.id,
             )
         )
-        installed_bat = next((b for b in d_bats if b.drone_id == d.id and b.id not in reserved_info_map and (b.charge_level_pct or 0) >= 100), None)
-        default_bat = next((b for b in d_bats if b.id not in reserved_info_map and (b.charge_level_pct or 0) >= 100), None)
+        installed_bat = next((b for b in d_bats if b.drone_id == d.id and _is_battery_usable(b, required_direct_energy_wh)), None)
+        default_bat = next((b for b in d_bats if _is_battery_usable(b, required_direct_energy_wh)), None)
 
         d_hub = all_hubs_map.get(d.current_hub_id) if is_cross_hub_mode else hub
         d_is_cross = (d.current_hub_id is not None and d.current_hub_id != hub.id)
@@ -693,7 +758,13 @@ async def get_eligible_drones(
         d_unavail_reason = None
         if not d_is_cross and not has_ready_bat:
             d_selectable = False
-            d_unavail_reason = "Hub hiện không còn viên pin tương thích nào đạt 100% để cất cánh (toàn bộ pin < 100% đang sạc hoặc đã được gán cho nhiệm vụ khác)"
+            if required_direct_energy_wh is not None:
+                d_unavail_reason = (
+                    f"Hub hiện không còn viên pin tương thích nào đủ năng lượng an toàn bay tới đích "
+                    f"({required_direct_energy_wh:.1f} Wh với 20% dự phòng) hoặc đạt 100%."
+                )
+            else:
+                d_unavail_reason = "Hub hiện không còn viên pin tương thích nào đạt 100% để cất cánh (toàn bộ pin < 100% đang sạc hoặc đã được gán cho nhiệm vụ khác)"
 
         drones_schema_list.append(
             DroneEligibleSchema(
@@ -705,7 +776,7 @@ async def get_eligible_drones(
                 installed_battery_id=installed_bat.id if installed_bat else None,
                 default_battery_id=default_bat.id if default_bat else None,
                 compatible_battery_models=compat_models,
-                eligible_batteries=[_build_battery_eligible_schema(b, d.id, reserved_info_map) for b in d_bats],
+                eligible_batteries=[_build_battery_eligible_schema(b, d.id, reserved_info_map, required_direct_energy_wh) for b in d_bats],
                 current_hub_id=d.current_hub_id,
                 current_hub_name=d_hub.name if d_hub else None,
                 current_hub_code=d_hub.code or d_hub.name if d_hub else None,
@@ -764,18 +835,19 @@ async def get_eligible_drones(
                     if (b.current_hub_id == d.current_hub_id or b.drone_id == d.id)
                     and (b.drone_id is None or b.drone_id == d.id)
                     and (not compat_models or (b.battery_model and b.battery_model in compat_models))
+                    and _is_battery_visible(b, d.id, required_direct_energy_wh)
                 ]
                 d_bats.sort(
                     key=lambda b: (
-                        0 if b.id not in reserved_info_map else 1,
-                        0 if (b.drone_id == d.id and (b.charge_level_pct or 0) >= 100) else (1 if (b.charge_level_pct or 0) >= 100 else 2),
+                        0 if _is_battery_usable(b, required_direct_energy_wh) else 1,
+                        0 if (b.drone_id == d.id and _is_battery_usable(b, required_direct_energy_wh)) else 1,
                         -(b.charge_level_pct or 0),
                         -float(b.capacity_wh or 0.0),
                         b.id,
                     )
                 )
-                inst_bat = next((b for b in d_bats if b.drone_id == d.id and b.id not in reserved_info_map and (b.charge_level_pct or 0) >= 100), None)
-                def_bat = next((b for b in d_bats if b.id not in reserved_info_map and (b.charge_level_pct or 0) >= 100), None)
+                inst_bat = next((b for b in d_bats if b.drone_id == d.id and _is_battery_usable(b, required_direct_energy_wh)), None)
+                def_bat = next((b for b in d_bats if _is_battery_usable(b, required_direct_energy_wh)), None)
                 has_bat = (inst_bat is not None or def_bat is not None)
 
                 # Chỉ đưa vào danh sách nếu Drone ở Hub khác có pin khả dụng tại Hub đó
@@ -791,7 +863,7 @@ async def get_eligible_drones(
                             installed_battery_id=inst_bat.id if inst_bat else None,
                             default_battery_id=def_bat.id if def_bat else None,
                             compatible_battery_models=compat_models,
-                            eligible_batteries=[_build_battery_eligible_schema(b, d.id, reserved_info_map) for b in d_bats],
+                            eligible_batteries=[_build_battery_eligible_schema(b, d.id, reserved_info_map, required_direct_energy_wh) for b in d_bats],
                             current_hub_id=d.current_hub_id,
                             current_hub_name=d_hub.name if d_hub else None,
                             current_hub_code=d_hub.code or d_hub.name if d_hub else None,
@@ -809,7 +881,11 @@ async def get_eligible_drones(
             availableDrones=len([d for d in drones_schema_list if d.is_selectable])
         ),
         drones=drones_schema_list,
-        batteries=[_build_battery_eligible_schema(b, None, reserved_info_map) for b in hub_batteries],
+        batteries=[
+            _build_battery_eligible_schema(b, None, reserved_info_map, required_direct_energy_wh)
+            for b in hub_batteries
+            if _is_battery_visible(b, None, required_direct_energy_wh)
+        ],
     )
 
 
@@ -837,12 +913,53 @@ async def get_eligible_batteries_for_order(
     if not hub:
         raise HTTPException(status_code=404, detail="Origin Hub not found")
 
+    # Tính toán năng lượng bay thẳng ước tính từ Origin Hub đến Destination Hub
+    required_direct_energy_wh = None
+    if order.destination_hub_id:
+        dest_hub_obj = await db.get(Hub, order.destination_hub_id)
+        if (
+            dest_hub_obj
+            and hub.latitude is not None and hub.longitude is not None
+            and dest_hub_obj.latitude is not None and dest_hub_obj.longitude is not None
+        ):
+            direct_dist_km = haversine_distance(
+                float(hub.latitude), float(hub.longitude),
+                float(dest_hub_obj.latitude), float(dest_hub_obj.longitude)
+            )
+            payload_kg = float(order.payload_kg or 0.0)
+            pred = predict_flight_energy(direct_dist_km, payload_kg)
+            required_direct_energy_wh = round(float(pred.get("energy_wh") or 0.0), 2)
+
     drone = await db.get(Drone, drone_id)
     if not drone:
         raise HTTPException(status_code=404, detail="Drone not found")
 
     compat_models = await get_compatible_battery_models(db, drone.model)
     reserved_info_map = await _get_reserved_battery_info_map(db, exclude_order_id=order_id)
+
+    def _is_battery_usable(b: Battery) -> bool:
+        if b.id in reserved_info_map:
+            return False
+        pct = int(b.charge_level_pct if b.charge_level_pct is not None else 100)
+        if pct >= 100:
+            return True
+        cap = float(b.capacity_wh or 0.0)
+        avail_e = cap * (pct / 100.0)
+        if required_direct_energy_wh is not None:
+            return (avail_e * 0.8 >= required_direct_energy_wh)
+        return False
+
+    def _is_battery_visible(b: Battery) -> bool:
+        pct = int(b.charge_level_pct if b.charge_level_pct is not None else 100)
+        if pct >= 100:
+            return True
+        cap = float(b.capacity_wh or 0.0)
+        avail_e = cap * (pct / 100.0)
+        if required_direct_energy_wh is not None and (avail_e * 0.8 >= required_direct_energy_wh):
+            return True
+        if b.drone_id == drone.id or b.id in reserved_info_map:
+            return True
+        return False
 
     bats_stmt = select(Battery).where(
         Battery.status == batteries_status.ACTIVE,
@@ -855,17 +972,18 @@ async def get_eligible_batteries_for_order(
         b for b in (await db.execute(bats_stmt)).scalars().all()
         if ((b.current_hub_id == hub.id and b.drone_id is None) or b.drone_id == drone.id)
         and (not compat_models or (b.battery_model and b.battery_model in compat_models))
+        and _is_battery_visible(b)
     ]
     bats.sort(
         key=lambda b: (
-            0 if b.id not in reserved_info_map else 1,
-            0 if (b.drone_id == drone.id and (b.charge_level_pct or 0) >= 100) else (1 if (b.charge_level_pct or 0) >= 100 else 2),
+            0 if _is_battery_usable(b) else 1,
+            0 if (b.drone_id == drone.id and _is_battery_usable(b)) else 1,
             -(b.charge_level_pct or 0),
             -float(b.capacity_wh or 0.0),
             b.id,
         )
     )
-    default_bat = next((b for b in bats if b.id not in reserved_info_map and (b.charge_level_pct or 0) >= 100), None)
+    default_bat = next((b for b in bats if _is_battery_usable(b)), None)
 
     return EligibleBatteriesResponse(
         order_id=order.id,
@@ -876,7 +994,7 @@ async def get_eligible_batteries_for_order(
         drone_model=drone.model,
         compatible_battery_models=compat_models,
         default_battery_id=default_bat.id if default_bat else None,
-        batteries=[_build_battery_eligible_schema(b, drone.id, reserved_info_map) for b in bats],
+        batteries=[_build_battery_eligible_schema(b, drone.id, reserved_info_map, required_direct_energy_wh) for b in bats],
     )
 
 

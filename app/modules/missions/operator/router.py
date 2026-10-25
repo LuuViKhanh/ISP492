@@ -1276,21 +1276,33 @@ async def check_relay_hub_battery_availability(
             )
         ]
 
-        # Sắp xếp ưu tiên:
-        # 1. Viên pin có năng lượng thực tế đủ an toàn cho chặng kế tiếp (available_energy_wh * 0.8 >= next_leg_energy)
-        # 2. Năng lượng thực tế (Wh) từ database cao nhất
-        # 3. Mức sạc (%) từ database cao nhất
-        # 4. Dung lượng danh định (capacity_wh) từ database cao nhất
-        # 5. ID tăng dần
-        hub_bats.sort(
-            key=lambda b: (
-                0 if (_compute_battery_energy_wh(b, drone_capacity_wh)[2] * 0.8 >= next_leg_energy) else 1,
-                -(_compute_battery_energy_wh(b, drone_capacity_wh)[2]),
-                -(b.charge_level_pct or 0),
-                -float(b.capacity_wh or 0.0),
-                b.id,
-            )
-        )
+        # Sắp xếp ưu tiên: Thuật toán Best-Fit (Vừa đủ năng lượng cho chặng kế tiếp)
+        # 1. Nhóm 0: Viên pin có năng lượng thực tế đủ an toàn cho chặng kế tiếp (b_energy_wh * 0.8 >= next_leg_energy)
+        #    -> Sắp xếp TĂNG DẦN theo năng lượng Wh để chọn viên pin "vừa đủ năng lượng an toàn",
+        #       bảo tồn các viên pin 100% dung lượng lớn cho các nhiệm vụ đường dài khác.
+        # 2. Nhóm 1: Viên pin KHÔNG đủ an toàn cho chặng kế tiếp
+        #    -> Fallback sắp xếp GIẢM DẦN theo năng lượng Wh (chọn pin cao nhất hiện có).
+        def _relay_battery_sort_key(b):
+            b_energy_wh = _compute_battery_energy_wh(b, drone_capacity_wh)[2]
+            is_sufficient = (b_energy_wh * 0.8 >= next_leg_energy)
+            if is_sufficient:
+                return (
+                    0,
+                    b_energy_wh,                # Năng lượng thực tế nhỏ nhất nhưng đủ an toàn
+                    (b.charge_level_pct or 0),
+                    float(b.capacity_wh or 0.0),
+                    b.id,
+                )
+            else:
+                return (
+                    1,
+                    -b_energy_wh,               # Fallback: năng lượng lớn nhất
+                    -(b.charge_level_pct or 0),
+                    -float(b.capacity_wh or 0.0),
+                    b.id,
+                )
+
+        hub_bats.sort(key=_relay_battery_sort_key)
 
         raw_ready_count = len(hub_bats)
         held_by_others = held_count_by_hub.get(hub_id, 0)

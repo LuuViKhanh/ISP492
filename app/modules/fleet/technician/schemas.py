@@ -53,6 +53,7 @@ class BatteryResponse(BaseModel):
     battery_model: Optional[str] = None
     last_charged_at: Optional[datetime] = None
     estimated_minutes_remaining: Optional[int] = None
+    available_status: Optional[str] = None       # In Use | Ready | Charging | Replaced
     # Vòng đời pin (tính on-the-fly, không lưu DB)
     lifecycle_status: Optional[str] = None       # Active | Expired
     days_until_expiry: Optional[int] = None      # số ngày còn lại đến khi hết vòng đời (730 ngày)
