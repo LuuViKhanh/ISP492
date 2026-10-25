@@ -751,12 +751,14 @@ async def get_hub_batteries(
     )
     batteries = result.scalars().all()
 
-    # Import helper tính vòng đời pin (on-the-fly, không lưu DB)
-    from app.modules.fleet.models import compute_battery_lifecycle
+    # Import helper tính vòng đời & trạng thái khả dụng pin (on-the-fly, không lưu DB)
+    from app.modules.fleet.models import compute_battery_lifecycle, compute_battery_available_status
 
     response = []
     for b in batteries:
-        mins = get_estimated_charging_minutes(b.charge_level_pct) if b.status == "Charging" or (b.charge_level_pct and b.charge_level_pct < 100 and b.drone_id is None) else 0
+        avail_status = compute_battery_available_status(b)
+        avail_str = avail_status.value if hasattr(avail_status, "value") else str(avail_status)
+        mins = get_estimated_charging_minutes(b.charge_level_pct) if avail_str == "Charging" else 0
         lifecycle_status, days_until_expiry = compute_battery_lifecycle(b)
         response.append({
             "id": b.id,
@@ -771,6 +773,7 @@ async def get_hub_batteries(
             "update_at": b.update_at,
             "last_charged_at": b.last_charged_at,
             "estimated_minutes_remaining": mins,
+            "available_status": avail_str,
             "lifecycle_status": lifecycle_status.value if hasattr(lifecycle_status, "value") else str(lifecycle_status),
             "days_until_expiry": days_until_expiry,
         })
