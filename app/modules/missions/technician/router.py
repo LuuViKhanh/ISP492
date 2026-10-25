@@ -710,7 +710,7 @@ from app.modules.fleet.technician.router import (
 @missions_router.get("/{mission_id}/audit-trail", summary="Audit Trail - Lịch sử timeline của đơn hàng")
 async def get_order_audit_trail(
     mission_id: str,
-    user: CurrentUser = Depends(allow_technician),
+    user: CurrentUser = Depends(allow_admin_or_operator),  # ← Admin/Operator để audit
     db: AsyncSession = Depends(get_async_db),
 ):
     """
@@ -863,7 +863,7 @@ async def get_order_audit_trail(
 async def get_sla_report(
     start_date: str,  # "2026-10-01"
     end_date: str,    # "2026-10-31"
-    user: CurrentUser = Depends(allow_technician),
+    user: CurrentUser = Depends(allow_admin_or_operator),  # ← Admin/Operator để audit
     db: AsyncSession = Depends(get_async_db),
 ):
     """
