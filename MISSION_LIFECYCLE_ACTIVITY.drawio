@@ -1,0 +1,277 @@
+<mxfile host="app.diagrams.net" modified="2026-10-18T13:00:00.000Z" agent="Mozilla/5.0" etag="diagram-clean" version="24.0.0" type="device">
+  <diagram id="activity-mission-lifecycle" name="Mission Flight Activity Diagram">
+    <mxGraphModel dx="1600" dy="1200" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- SWIMLANES -->
+        <mxCell id="swimlane-tech" value="Technician" style="swimlane;startSize=40;horizontal=1;strokeColor=#333333;fillColor=#E8F4F8;fontSize=12;fontStyle=bold" vertex="1" parent="1">
+          <mxGeometry y="0" width="1600" height="280" as="geometry" />
+        </mxCell>
+
+        <mxCell id="swimlane-system" value="System (Simulator)" style="swimlane;startSize=40;horizontal=1;strokeColor=#333333;fillColor=#F8E8E8;fontSize=12;fontStyle=bold" vertex="1" parent="1">
+          <mxGeometry y="280" width="1600" height="680" as="geometry" />
+        </mxCell>
+
+        <mxCell id="swimlane-thirdparty" value="Database" style="swimlane;startSize=40;horizontal=1;strokeColor=#333333;fillColor=#E8F8E8;fontSize=12;fontStyle=bold" vertex="1" parent="1">
+          <mxGeometry y="960" width="1600" height="240" as="geometry" />
+        </mxCell>
+
+        <!-- ========== START ========== -->
+        <mxCell id="start" value="" style="ellipse;whiteSpace=wrap;html=1;fillColor=#000000;strokeColor=#000000;strokeWidth=2;aspect=fixed" vertex="1" parent="swimlane-tech">
+          <mxGeometry x="40" y="110" width="30" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- A1: Dispatch drone -->
+        <mxCell id="a1" value="Dispatch drone" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="swimlane-tech">
+          <mxGeometry x="110" y="100" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="start" target="a1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- A2: Wait for drone to land -->
+        <mxCell id="a2" value="Wait for drone to land at hub" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="swimlane-tech">
+          <mxGeometry x="450" y="100" width="140" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- A3: Check incident alert -->
+        <mxCell id="a3" value="Incident alert?" style="rhombus;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="swimlane-tech">
+          <mxGeometry x="680" y="95" width="100" height="60" as="geometry" />
+        
+
+        </mxCell>
+
+        <!-- S1: Start simulation -->
+        <mxCell id="s1" value="Start mission simulation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="swimlane-system">
+          <mxGeometry x="110" y="350" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="a1" target="s1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="170" y="150" as="sourcePoint" />
+            <mxPoint x="180" y="350" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- S2: Load route waypoints -->
+        <mxCell id="s2" value="Load route waypoints" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="swimlane-system">
+          <mxGeometry x="290" y="350" width="130" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="s1" target="s2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- S3: Get battery info -->
+        <mxCell id="s3" value="Get battery capacity &amp; charge level" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="swimlane-system">
+          <mxGeometry x="460" y="350" width="150" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="s2" target="s3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- S4: Loop - Fly each segment -->
+        <mxCell id="s4" value="For each waypoint on route:" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=bold" vertex="1" parent="swimlane-system">
+          <mxGeometry x="650" y="350" width="130" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="s3" target="s4">
+          <mxGeometry relative="1" as="geometry" />
+        
+        </mxCell>
+
+        <!-- S5: Update position &amp; sensors -->
+        <mxCell id="s5" value="Update position, altitude, speed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="swimlane-system">
+          <mxGeometry x="830" y="350" width="150" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="s4" target="s5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- S6: Consume battery -->
+        <mxCell id="s6" value="Consume battery" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="swimlane-system">
+          <mxGeometry x="1020" y="350" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="s5" target="s6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- S7: Decision - Incident? -->
+        <mxCell id="s7" value="Incident occurs?" style="rhombus;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="swimlane-system">
+          <mxGeometry x="1180" y="330" width="110" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="s6" target="s7">
+          <mxGeometry relative="1" as="geometry" />
+        
+        </mxCell>
+
+        <!-- PATH: NO - Continue flying -->
+        <mxCell id="e9" edge="1" parent="1" source="s7" target="s4">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1180" y="375" as="sourcePoint" />
+            <mxPoint x="780" y="400" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="1120" y="480" />
+              <mxPoint x="780" y="480" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        
+        <!-- NO label -->
+        <mxCell id="label-no" value="No" style="text;html=1;fontSize=10;fillColor=none;align=center" vertex="1" parent="1">
+          <mxGeometry x="1100" y="450" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- === INCIDENT PATH (YES) === -->
+
+        <!-- S8: Create incident record -->
+        <mxCell id="s8" value="Create incident record" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=italic" vertex="1" parent="swimlane-system">
+          <mxGeometry x="1330" y="480" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="s7" target="s8">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1290" y="375" as="sourcePoint" />
+            <mxPoint x="1400" y="480" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- YES label -->
+        <mxCell id="label-yes" value="Yes" style="text;html=1;fontSize=10;fillColor=none;align=center;fontStyle=bold" vertex="1" parent="1">
+          <mxGeometry x="1300" y="420" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- S9: Return to origin hub -->
+        <mxCell id="s9" value="Return to origin hub" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=italic" vertex="1" parent="swimlane-system">
+          <mxGeometry x="1330" y="570" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="1" source="s8" target="s9">
+          <mxGeometry relative="1" as="geometry" />
+        
+        </mxCell>
+
+        <!-- S10: End incident -->
+        <mxCell id="s10" value="End flight" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=italic" vertex="1" parent="swimlane-system">
+          <mxGeometry x="1330" y="660" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="1" source="s9" target="s10">
+          <mxGeometry relative="1" as="geometry" />
+        
+        </mxCell>
+
+        <!-- === NORMAL COMPLETION === -->
+
+        <!-- S11: Fly to destination -->
+        <mxCell id="s11" value="Fly to destination" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="swimlane-system">
+          <mxGeometry x="280" y="550" width="130" height="50" as="geometry" />
+        </mxCell>
+        
+        <!-- Arrow from loop to S11 (normal completion) -->
+        <mxCell id="e13" edge="1" parent="1" source="s4" target="s11">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="680" y="375" as="sourcePoint" />
+            <mxPoint x="345" y="550" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="345" y="500" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- S12: Drone arrives -->
+        <mxCell id="s12" value="Drone arrives at destination" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="swimlane-system">
+          <mxGeometry x="460" y="550" width="150" height="50" as="geometry" />
+        
+        </mxCell>
+        <mxCell id="e14" edge="1" parent="1" source="s11" target="s12">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- A4: Technician receives drone -->
+        <mxCell id="a4" value="Receive &amp; inspect drone" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="swimlane-tech">
+          <mxGeometry x="460" y="100" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="e15" edge="1" parent="1" source="s12" target="a4">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="535" y="550" as="sourcePoint" />
+            <mxPoint x="530" y="150" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Decision: Incident alert? -->
+        <mxCell id="e16" edge="1" parent="1" source="a4" target="a3">
+          <mxGeometry relative="1" as="geometry" />
+        
+        
+
+        </mxCell>
+
+        <!-- YES: Incident handler -->
+        <mxCell id="a5" value="Handle incident" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=italic" vertex="1" parent="swimlane-tech">
+          <mxGeometry x="850" y="100" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="e17" edge="1" parent="1" source="a3" target="a5">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="780" y="125" as="sourcePoint" />
+            <mxPoint x="850" y="125" as="targetPoint" />
+          </mxGeometry>
+        
+        </mxCell>
+
+        <!-- YES label -->
+        <mxCell id="label-yes-tech" value="Yes" style="text;html=1;fontSize=10;fillColor=none;align=center;fontStyle=bold" vertex="1" parent="1">
+          <mxGeometry x="810" y="110" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- NO: Confirm delivery -->
+        <mxCell id="a6" value="Confirm delivery" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="swimlane-tech">
+          <mxGeometry x="1020" y="100" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="e18" edge="1" parent="1" source="a3" target="a6">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="780" y="110" as="sourcePoint" />
+            <mxPoint x="1020" y="125" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="900" y="50" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- NO label -->
+        <mxCell id="label-no-tech" value="No" style="text;html=1;fontSize=10;fillColor=none;align=center" vertex="1" parent="1">
+          <mxGeometry x="900" y="70" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- END: Mission complete -->
+        <mxCell id="end" value="" style="ellipse;whiteSpace=wrap;html=1;fillColor=#000000;strokeColor=#000000;strokeWidth=2;aspect=fixed" vertex="1" parent="swimlane-tech">
+          <mxGeometry x="1215" y="110" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="e19" edge="1" parent="1" source="a6" target="end">
+          <mxGeometry relative="1" as="geometry" />
+        
+        
+        </mxCell>
+
+        <!-- DB: Record telemetry -->
+        <mxCell id="db1" value="Record telemetry data" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="swimlane-thirdparty">
+          <mxGeometry x="780" y="1000" width="140" height="50" as="geometry" />
+        </mxCell>
+        <element id="e20" edge="1" parent="1" source="s5" target="db1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="905" y="400" as="sourcePoint" />
+            <mxPoint x="850" y="1000" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- DB: Record incident -->
+        <mxCell id="db2" value="Record incident" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=italic" vertex="1" parent="swimlane-thirdparty">
+          <mxGeometry x="1330" y="1000" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="e21" edge="1" parent="1" source="s8" target="db2">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1400" y="530" as="sourcePoint" />
+            <mxPoint x="1400" y="1000" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
