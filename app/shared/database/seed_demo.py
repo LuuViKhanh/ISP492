@@ -53,26 +53,30 @@ PWD_DEMO = hash_password("123")
 
 # ── Hub data chuẩn phường mới TP.HCM ──────────────────────────────
 HUBS = [
-    (1,  "HUB-Q1",  "Hub Quận 1 — Bến Thành",            "1 Lê Lợi, Phường Bến Thành, Quận 1, TP.HCM",          10.772310, 106.698270),
-    (2,  "HUB-Q3",  "Hub Quận 3 — Võ Văn Tần",            "125 Võ Văn Tần, Phường 6, Quận 3, TP.HCM",            10.777220, 106.686770),
-    (3,  "HUB-Q7",  "Hub Quận 7 — Phú Mỹ Hưng",           "10 Đại lộ Nguyễn Văn Linh, Phường Tân Phong, Quận 7, TP.HCM", 10.729410, 106.718390),
-    (4,  "HUB-TD",  "Hub Thủ Đức — Võ Văn Ngân",          "371 Võ Văn Ngân, Phường Linh Chiểu, TP. Thủ Đức, TP.HCM", 10.850120, 106.772310),
-    (5,  "HUB-GV",  "Hub Gò Vấp — Nguyễn Oanh",           "200 Nguyễn Oanh, Phường 7, Quận Gò Vấp, TP.HCM",     10.838120, 106.675310),
-    (6,  "HUB-BTH", "Hub Bình Thạnh — Ung Văn Khiêm",     "100 Ung Văn Khiêm, Phường 25, Quận Bình Thạnh, TP.HCM", 10.812260, 106.711020),
-    (7,  "HUB-TB",  "Hub Tân Bình — Cộng Hòa",            "15 Cộng Hòa, Phường 4, Quận Tân Bình, TP.HCM",       10.801430, 106.652190),
-    (8,  "HUB-BT",  "Hub Bình Tân — Kinh Dương Vương",    "450 Kinh Dương Vương, Phường An Lạc, Quận Bình Tân, TP.HCM", 10.745530, 106.613420),
-    (9,  "HUB-NB",  "Hub Nhà Bè — Huỳnh Tấn Phát",       "1000 Huỳnh Tấn Phát, Thị trấn Nhà Bè, Huyện Nhà Bè, TP.HCM", 10.682040, 106.735410),
-    (10, "HUB-TP",  "Hub Tân Phú — Lũy Bán Bích",        "300 Lũy Bán Bích, Phường Hòa Thạnh, Quận Tân Phú, TP.HCM", 10.790020, 106.628010),
+    (1,  "HUB-BT1", "Hub Bến Thành",     "1 Lê Lợi, Phường Bến Thành, TP.HCM",                               10.772310, 106.698270),
+    (2,  "HUB-VTS", "Hub Võ Văn Tần",    "125 Võ Văn Tần, Phường Võ Thị Sáu, TP.HCM",                        10.777220, 106.686770),
+    (3,  "HUB-TP",  "Hub Tân Phong",     "10 Đại lộ Nguyễn Văn Linh, Phường Tân Phong, TP.HCM",              10.729410, 106.718390),
+    (4,  "HUB-LC",  "Hub Linh Chiểu",    "371 Võ Văn Ngân, Phường Linh Chiểu, TP.HCM",                       10.850120, 106.772310),
+    (5,  "HUB-NO",  "Hub Nguyễn Oanh",   "200 Nguyễn Oanh, Phường 17, Quận Gò Vấp, TP.HCM",                 10.838120, 106.675310),
+    (6,  "HUB-UVK", "Hub Ung Văn Khiêm", "100 Ung Văn Khiêm, Phường 25, Quận Bình Thạnh, TP.HCM",           10.812260, 106.711020),
+    (7,  "HUB-CH",  "Hub Cộng Hòa",      "15 Cộng Hòa, Phường 4, Quận Tân Bình, TP.HCM",                    10.801430, 106.652190),
+    (8,  "HUB-AL",  "Hub An Lạc",        "450 Kinh Dương Vương, Phường An Lạc, Quận Bình Tân, TP.HCM",       10.745530, 106.613420),
+    (9,  "HUB-NB",  "Hub Nhà Bè",        "1000 Huỳnh Tấn Phát, Phường Nhà Bè, TP.HCM",                      10.682040, 106.735410),
+    (10, "HUB-HT",  "Hub Hòa Thạnh",     "300 Lũy Bán Bích, Phường Hòa Thạnh, Quận Tân Phú, TP.HCM",       10.790020, 106.628010),
 ]
 
-# email Technician chuẩn mới: tech.{code_lower}@droneoptai.com
-# code: q1, q3, q7, td, gv, bth, tb, bt, nb, tp
+# email Technician theo phường thực tế (sau sáp nhập quận TP.HCM 2025)
 TECH_MAP = {
-    hub_id: {
-        "email": f"tech.{code.lower().replace('hub-','')}@droneoptai.com",
-        "full_name": f"Kỹ thuật viên — {name}",
-    }
-    for hub_id, code, name, *_ in HUBS
+    1:  {"email": "tech.benthanh@droneoptai.com",   "full_name": "Kỹ thuật viên — Phường Bến Thành"},
+    2:  {"email": "tech.vothansu@droneoptai.com",    "full_name": "Kỹ thuật viên — Phường Võ Thị Sáu"},
+    3:  {"email": "tech.tanphong@droneoptai.com",    "full_name": "Kỹ thuật viên — Phường Tân Phong"},
+    4:  {"email": "tech.linhchieu@droneoptai.com",   "full_name": "Kỹ thuật viên — Phường Linh Chiểu"},
+    5:  {"email": "tech.nguyenoanh@droneoptai.com",  "full_name": "Kỹ thuật viên — Phường 17, Gò Vấp"},
+    6:  {"email": "tech.ungvankhiem@droneoptai.com", "full_name": "Kỹ thuật viên — Phường 25, Bình Thạnh"},
+    7:  {"email": "tech.conghoa@droneoptai.com",     "full_name": "Kỹ thuật viên — Phường 4, Tân Bình"},
+    8:  {"email": "tech.anlac@droneoptai.com",       "full_name": "Kỹ thuật viên — Phường An Lạc"},
+    9:  {"email": "tech.nhabe@droneoptai.com",       "full_name": "Kỹ thuật viên — Phường Nhà Bè"},
+    10: {"email": "tech.hoathanh@droneoptai.com",    "full_name": "Kỹ thuật viên — Phường Hòa Thạnh"},
 }
 
 
