@@ -1,0 +1,373 @@
+<mxfile host="app.diagrams.net" modified="2026-10-18T11:00:00.000Z" agent="Mozilla/5.0" etag="diagram1" version="24.0.0" type="device">
+  <diagram id="activity-mission" name="Activity: Mission Flight &amp; Emergency">
+    <mxGraphModel dx="1400" dy="2200" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="2200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ========== SWIMLANES ========== -->
+        <!-- Swimlane: Technician -->
+        <mxCell id="sl-tech" value="👨‍💼 Technician" style="swimlane;startSize=40;horizontal=0;strokeColor=#333333;fillColor=#E8F4F8;fontSize=13;fontStyle=bold" vertex="1" parent="1">
+          <mxGeometry y="0" width="150" height="2200" as="geometry" />
+        </mxCell>
+
+        <!-- Swimlane: Simulator -->
+        <mxCell id="sl-sim" value="🔄 Simulator (Server)" style="swimlane;startSize=40;horizontal=0;strokeColor=#333333;fillColor=#F8E8E8;fontSize=13;fontStyle=bold" vertex="1" parent="1">
+          <mxGeometry x="150" y="0" width="400" height="2200" as="geometry" />
+        </mxCell>
+
+        <!-- Swimlane: Database -->
+        <mxCell id="sl-db" value="💾 Database" style="swimlane;startSize=40;horizontal=0;strokeColor=#333333;fillColor=#E8F8E8;fontSize=13;fontStyle=bold" vertex="1" parent="1">
+          <mxGeometry x="550" y="0" width="350" height="2200" as="geometry" />
+        </mxCell>
+
+        <!-- Swimlane: System -->
+        <mxCell id="sl-sys" value="🔔 System/Operators" style="swimlane;startSize=40;horizontal=0;strokeColor=#333333;fillColor=#F8F8E8;fontSize=13;fontStyle=bold" vertex="1" parent="1">
+          <mxGeometry x="900" y="0" width="300" height="2200" as="geometry" />
+        </mxCell>
+
+        <!-- ========== FLOW: NORMAL PATH ========== -->
+
+        <!-- START -->
+        <mxCell id="start" value="START" style="ellipse;whiteSpace=wrap;html=1;fillColor=#90EE90;strokeColor=#000000;strokeWidth=2" vertex="1" parent="sl-tech">
+          <mxGeometry x="20" y="50" width="110" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- A1: Click Dispatch -->
+        <mxCell id="a1" value="Click Dispatch Button" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE4B5;strokeColor=#FF8C00;strokeWidth=2;fontSize=11" vertex="1" parent="sl-tech">
+          <mxGeometry x="20" y="150" width="110" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="start" target="a1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- S1: API Call -->
+        <mxCell id="s1" value="POST /dispatch&#10;mission_id" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6E6FA;strokeColor=#4B0082;strokeWidth=2;fontSize=10" vertex="1" parent="sl-sim">
+          <mxGeometry x="180" y="150" width="140" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="a1" target="s1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- S2: Async Task -->
+        <mxCell id="s2" value="asyncio.create_task(&#10;simulate_mission_flight)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFB6C1;strokeColor=#C71585;strokeWidth=2;fontSize=10" vertex="1" parent="sl-sim">
+          <mxGeometry x="180" y="260" width="140" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="s1" target="s2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- D1: Get Mission + Leg -->
+        <mxCell id="d1" value="Get Mission WHERE&#10;status=FLYING &amp;&#10;MissionLeg IN_PROGRESS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#B0E0E6;strokeColor=#4682B4;strokeWidth=2;fontSize=10" vertex="1" parent="sl-db">
+          <mxGeometry x="580" y="260" width="140" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="s2" target="d1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="320" y="295" as="sourcePoint" />
+            <mxPoint x="550" y="295" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- S3: Extract Hub Info -->
+        <mxCell id="s3" value="Extract from_hub &amp;&#10;to_hub coordinates" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#87CEEB;strokeColor=#4682B4;strokeWidth=2;fontSize=10" vertex="1" parent="sl-sim">
+          <mxGeometry x="180" y="380" width="140" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="d1" target="s3">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="580" y="295" as="sourcePoint" />
+            <mxPoint x="320" y="415" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- S4: Interpolate Waypoints -->
+        <mxCell id="s4" value="Interpolate 20 waypoints&#10;between from_hub → to_hub&#10;(haversine distance)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFA500;strokeColor=#FF4500;strokeWidth=2;fontSize=10" vertex="1" parent="sl-sim">
+          <mxGeometry x="180" y="500" width="140" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="s3" target="s4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- D2: Get Battery Info -->
+        <mxCell id="d2" value="SELECT Battery:&#10;• capacity_wh&#10;• charge_level_pct" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#B0E0E6;strokeColor=#4682B4;strokeWidth=2;fontSize=9" vertex="1" parent="sl-db">
+          <mxGeometry x="580" y="500" width="140" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="s4" target="d2">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="320" y="540" as="sourcePoint" />
+            <mxPoint x="550" y="540" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- S5: LOOP Start -->
+        <mxCell id="s5" value="FOR each waypoint&#10;in interpolated_path:" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DDA0DD;strokeColor=#8B008B;strokeWidth=2;fontSize=10;fontStyle=bold" vertex="1" parent="sl-sim">
+          <mxGeometry x="180" y="630" width="140" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="d2" target="s5">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="580" y="540" as="sourcePoint" />
+            <mxPoint x="320" y="665" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- S6: Sleep Interval -->
+        <mxCell id="s6" value="await asyncio.sleep&#10;(INTERVAL_SEC = 3)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFDAB9;strokeColor=#FF6347;strokeWidth=2;fontSize=10" vertex="1" parent="sl-sim">
+          <mxGeometry x="180" y="750" width="140" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" edge="1" parent="1" source="s5" target="s6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- S7: Calculate Sensor Values -->
+        <mxCell id="s7" value="Calculate Sensor Values:&#10;• altitude, speed, wind&#10;• battery_volt&#10;• energy consumption" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#87CEEB;strokeColor=#4682B4;strokeWidth=2;fontSize=9" vertex="1" parent="sl-sim">
+          <mxGeometry x="180" y="870" width="140" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="s6" target="s7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- D3: Fetch Weather + Telemetry -->
+        <mxCell id="d3" value="1. Fetch Weather&#10;2. INSERT TelemetryLog&#10;3. UPDATE Battery/Drone&#10;charge_level_pct" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#98FB98;strokeColor=#228B22;strokeWidth=2;fontSize=9" vertex="1" parent="sl-db">
+          <mxGeometry x="580" y="870" width="140" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="1" source="s7" target="d3">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="320" y="910" as="sourcePoint" />
+            <mxPoint x="550" y="910" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ========== DECISION: INCIDENT? ========== -->
+
+        <!-- S8: Decision Diamond -->
+        <mxCell id="s8" value="Incident?&#10;random() &lt;&#10;probability" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFD700;strokeColor=#FF8C00;strokeWidth=2.5;fontSize=11" vertex="1" parent="sl-sim">
+          <mxGeometry x="200" y="1010" width="100" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="1" source="d3" target="s8">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="580" y="910" as="sourcePoint" />
+            <mxPoint x="280" y="1010" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ========== PATH NO: Loop Back ========== -->
+
+        <!-- NO Arrow back to loop -->
+        <mxCell id="e13" edge="1" parent="1" source="s8" target="s5">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="200" y="1060" as="sourcePoint" />
+            <mxPoint x="200" y="665" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="120" y="1060" />
+              <mxPoint x="120" y="665" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- NO Label -->
+        <mxCell id="label-no" value="NO" style="text;html=1;fontSize=12;fontStyle=bold;fillColor=none;align=center" vertex="1" parent="1">
+          <mxGeometry x="130" y="1040" width="40" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- ========== PATH YES: INCIDENT HANDLING ========== -->
+
+        <!-- S9: Create Incident -->
+        <mxCell id="s9" value="1. CREATE Incident&#10;2. MaintenanceAlert&#10;3. Set status =&#10;INCIDENT_RETURN" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFB6C1;strokeColor=#DC143C;strokeWidth=2.5;fontSize=9;fontStyle=bold" vertex="1" parent="sl-sim">
+          <mxGeometry x="180" y="1150" width="140" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="e14" edge="1" parent="1" source="s8" target="s9">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="280" y="1110" as="sourcePoint" />
+            <mxPoint x="280" y="1150" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- YES Label -->
+        <mxCell id="label-yes" value="YES" style="text;html=1;fontSize=12;fontStyle=bold;fillColor=none;align=center" vertex="1" parent="1">
+          <mxGeometry x="290" y="1110" width="40" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- D4: Update Mission -->
+        <mxCell id="d4" value="UPDATE Mission:&#10;• status = INCIDENT_RETURN&#10;• handling_status =&#10;INCOMING" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFB6C1;strokeColor=#DC143C;strokeWidth=2;fontSize=9" vertex="1" parent="sl-db">
+          <mxGeometry x="580" y="1150" width="140" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="e15" edge="1" parent="1" source="s9" target="d4">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="320" y="1190" as="sourcePoint" />
+            <mxPoint x="550" y="1190" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- SYS1: Send Notification to Operators -->
+        <mxCell id="sys1" value="📢 SEND Notification&#10;to Operators:&#10;⚠️  Mission {id}&#10;Incident at ({lat},{lng})" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFB6C1;strokeColor=#DC143C;strokeWidth=2;fontSize=9" vertex="1" parent="sl-sys">
+          <mxGeometry x="920" y="1150" width="130" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="e16" edge="1" parent="1" source="d4" target="sys1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="720" y="1190" as="sourcePoint" />
+            <mxPoint x="900" y="1190" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- S10: Interpolate Return Path -->
+        <mxCell id="s10" value="Interpolate Return Path:&#10;incident_point&#10;→ from_hub" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFB6C1;strokeColor=#DC143C;strokeWidth=2;fontSize=10" vertex="1" parent="sl-sim">
+          <mxGeometry x="180" y="1290" width="140" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="e17" edge="1" parent="1" source="s9" target="s10">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="280" y="1230" as="sourcePoint" />
+            <mxPoint x="280" y="1290" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- S11: Fly Return Path -->
+        <mxCell id="s11" value="FOR each waypoint&#10;in return_path:&#10;• Sleep 3s&#10;• Calc sensors&#10;• Insert telemetry&#10;• Update battery %" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFB6C1;strokeColor=#DC143C;strokeWidth=2;fontSize=9" vertex="1" parent="sl-sim">
+          <mxGeometry x="180" y="1410" width="140" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="e18" edge="1" parent="1" source="s10" target="s11">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- D5: Drone Landed at from_hub -->
+        <mxCell id="d5" value="UPDATE Drone:&#10;• current_hub_id =&#10;from_hub.id&#10;• handling_status =&#10;CANNOT_CONTINUE" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFB6C1;strokeColor=#DC143C;strokeWidth=2;fontSize=9" vertex="1" parent="sl-db">
+          <mxGeometry x="580" y="1410" width="140" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="e19" edge="1" parent="1" source="s11" target="d5">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="320" y="1455" as="sourcePoint" />
+            <mxPoint x="550" y="1455" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- END: Incident -->
+        <mxCell id="end-incident" value="END: Incident Handler&#10;Technician Inspects Drone" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFB6C1;strokeColor=#DC143C;strokeWidth=2;fontSize=10;fontStyle=bold" vertex="1" parent="sl-sim">
+          <mxGeometry x="180" y="1560" width="140" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="e20" edge="1" parent="1" source="d5" target="end-incident">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="580" y="1455" as="sourcePoint" />
+            <mxPoint x="320" y="1595" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ========== NORMAL COMPLETION (NO INCIDENT) ========== -->
+
+        <!-- End of Loop - All Waypoints -->
+        <mxCell id="s12" value="All Waypoints Done" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#87CEEB;strokeColor=#4682B4;strokeWidth=2;fontSize=10" vertex="1" parent="sl-sim">
+          <mxGeometry x="180" y="1740" width="140" height="60" as="geometry" />
+        </mxCell>
+        <!-- Loop back arrow (from NO path) connects here -->
+        <mxCell id="e21" edge="1" parent="1" source="s5" target="s12">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="250" y="700" as="sourcePoint" />
+            <mxPoint x="250" y="1740" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="350" y="1770" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- D6: Drone Landed at to_hub -->
+        <mxCell id="d6" value="UPDATE Drone:&#10;current_hub_id =&#10;to_hub.id" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#B0E0E6;strokeColor=#4682B4;strokeWidth=2;fontSize=10" vertex="1" parent="sl-db">
+          <mxGeometry x="580" y="1740" width="140" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="e22" edge="1" parent="1" source="s12" target="d6">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="320" y="1770" as="sourcePoint" />
+            <mxPoint x="550" y="1770" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- S13: Decision - More Legs? -->
+        <mxCell id="s13" value="Any PENDING&#10;Legs?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFD700;strokeColor=#FF8C00;strokeWidth=2;fontSize=11" vertex="1" parent="sl-sim">
+          <mxGeometry x="200" y="1870" width="100" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="e23" edge="1" parent="1" source="d6" target="s13">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="580" y="1770" as="sourcePoint" />
+            <mxPoint x="300" y="1920" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- YES: More Legs - Set AT_HUB and notify Technician -->
+        <mxCell id="s14" value="Set handling_status = AT_HUB&#10;Technician sees: Ready to&#10;swap battery &amp; dispatch next" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#87CEEB;strokeColor=#4682B4;strokeWidth=2;fontSize=9" vertex="1" parent="sl-sim">
+          <mxGeometry x="180" y="2000" width="140" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="e24" edge="1" parent="1" source="s13" target="s14">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="250" y="1970" as="sourcePoint" />
+            <mxPoint x="250" y="2000" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- YES Label -->
+        <mxCell id="label-yes2" value="YES" style="text;html=1;fontSize=11;fontStyle=bold;fillColor=none" vertex="1" parent="1">
+          <mxGeometry x="260" y="1970" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- NO: Mission Complete -->
+        <mxCell id="end-complete" value="END: Mission Complete&#10;(all legs done)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#90EE90;strokeColor=#000;strokeWidth=2;fontSize=10;fontStyle=bold" vertex="1" parent="sl-sim">
+          <mxGeometry x="180" y="2000" width="140" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- NO Path to Complete -->
+        <mxCell id="e25" edge="1" parent="1" source="s13" target="end-complete">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="200" y="1970" as="sourcePoint" />
+            <mxPoint x="250" y="2000" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="140" y="1970" />
+              <mxPoint x="140" y="2040" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- NO Label -->
+        <mxCell id="label-no2" value="NO" style="text;html=1;fontSize=11;fontStyle=bold;fillColor=none" vertex="1" parent="1">
+          <mxGeometry x="140" y="1975" width="30" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- ========== LEGEND ========== -->
+        <mxCell id="legend-bg" value="" style="rectangle;fillColor=none;strokeColor=#ccc;strokeWidth=1;dashed=1" vertex="1" parent="1">
+          <mxGeometry x="30" y="2100" width="1000" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="legend-title" value="LEGEND:" style="text;html=1;fontSize=12;fontStyle=bold;fillColor=none" vertex="1" parent="1">
+          <mxGeometry x="40" y="2105" width="60" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="leg1" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#87CEEB;strokeColor=#4682B4;strokeWidth=2" vertex="1" parent="1">
+          <mxGeometry x="120" y="2110" width="40" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="leg1-label" value="Normal Activity" style="text;html=1;fontSize=9;fillColor=none" vertex="1" parent="1">
+          <mxGeometry x="170" y="2110" width="80" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="leg2" value="" style="rhombus;fillColor=#FFD700;strokeColor=#FF8C00;strokeWidth=2" vertex="1" parent="1">
+          <mxGeometry x="290" y="2115" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="leg2-label" value="Decision (Yes/No)" style="text;html=1;fontSize=9;fillColor=none" vertex="1" parent="1">
+          <mxGeometry x="330" y="2110" width="80" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="leg3" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFB6C1;strokeColor=#DC143C;strokeWidth=2" vertex="1" parent="1">
+          <mxGeometry x="450" y="2110" width="40" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="leg3-label" value="Incident Path" style="text;html=1;fontSize=9;fillColor=none" vertex="1" parent="1">
+          <mxGeometry x="500" y="2110" width="80" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="leg4" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#B0E0E6;strokeColor=#4682B4;strokeWidth=2" vertex="1" parent="1">
+          <mxGeometry x="610" y="2110" width="40" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="leg4-label" value="Database Operation" style="text;html=1;fontSize=9;fillColor=none" vertex="1" parent="1">
+          <mxGeometry x="660" y="2110" width="100" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="leg5-label" value="Loop back to next iteration" style="text;html=1;fontSize=9;fillColor=none" vertex="1" parent="1">
+          <mxGeometry x="790" y="2110" width="120" height="30" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
