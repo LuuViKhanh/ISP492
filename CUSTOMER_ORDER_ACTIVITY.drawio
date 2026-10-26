@@ -1,4 +1,4 @@
-<mxfile host="app.diagrams.net" modified="2026-10-18T17:00:00.000Z" agent="Mozilla/5.0" version="24.0.0" type="device">
+<mxfile host="app.diagrams.net" modified="2026-10-18T17:45:00.000Z" agent="Mozilla/5.0" version="24.0.0" type="device">
   <diagram id="customer-order-activity" name="Customer Order Delivery Activity Diagram">
     <mxGraphModel dx="1200" dy="1700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1200" pageHeight="1700" math="0" shadow="0">
       <root>
@@ -11,26 +11,19 @@
         </mxCell>
 
         <!-- HEADER ROW -->
-        <mxCell id="header-bg" value="" style="rectangle;fillColor=#EEEEEE;strokeColor=#333333;strokeWidth=2" vertex="1" parent="1">
-          <mxGeometry x="0" y="50" width="1200" height="40" as="geometry" />
-        </mxCell>
-
-        <!-- Header: Customer -->
         <mxCell id="header1" value="Customer" style="rectangle;fillColor=#EEEEEE;strokeColor=#333333;strokeWidth=2;fontSize=12;fontStyle=bold;align=center" vertex="1" parent="1">
           <mxGeometry x="0" y="50" width="300" height="40" as="geometry" />
         </mxCell>
 
-        <!-- Header: System -->
         <mxCell id="header2" value="System" style="rectangle;fillColor=#EEEEEE;strokeColor=#333333;strokeWidth=2;fontSize=12;fontStyle=bold;align=center" vertex="1" parent="1">
           <mxGeometry x="300" y="50" width="450" height="40" as="geometry" />
         </mxCell>
 
-        <!-- Header: Payment Gateway -->
         <mxCell id="header3" value="Payment Gateway" style="rectangle;fillColor=#EEEEEE;strokeColor=#333333;strokeWidth=2;fontSize=12;fontStyle=bold;align=center" vertex="1" parent="1">
           <mxGeometry x="750" y="50" width="450" height="40" as="geometry" />
         </mxCell>
 
-        <!-- Vertical separator lines -->
+        <!-- Vertical separator -->
         <mxCell id="sep1" value="" style="line;strokeColor=#333333;strokeWidth=2" vertex="1" parent="1">
           <mxGeometry x="300" y="50" width="1" height="1650" as="geometry" />
         </mxCell>
@@ -49,134 +42,125 @@
           <mxGeometry x="125" y="120" width="20" height="20" as="geometry" />
         </mxCell>
 
-        <!-- C1: Browse packages -->
+        <!-- C1 -->
         <mxCell id="c1" value="Browse packages" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="50" y="170" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge1" edge="1" parent="1" source="start" target="c1">
+        <mxCell id="e1" edge="1" parent="1" source="start" target="c1">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- C2: Select package & destination -->
-        <mxCell id="c2" value="Select package &amp; destination" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
+        <!-- C2 -->
+        <mxCell id="c2" value="Select package and destination" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="50" y="260" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge2" edge="1" parent="1" source="c1" target="c2">
+        <mxCell id="e2" edge="1" parent="1" source="c1" target="c2">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- S1: Create order -->
+        <!-- S1 -->
         <mxCell id="s1" value="Create order" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="375" y="260" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge3" edge="1" parent="1" source="c2" target="s1">
+        <mxCell id="e3" edge="1" parent="1" source="c2" target="s1">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="200" y="285" as="sourcePoint" />
             <mxPoint x="375" y="285" as="targetPoint" />
           </mxGeometry>
         </mxCell>
 
-        <!-- C3: View payment details -->
+        <!-- C3 -->
         <mxCell id="c3" value="View payment details" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="50" y="350" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge4" edge="1" parent="1" source="s1" target="c3">
+        <mxCell id="e4" edge="1" parent="1" source="s1" target="c3">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="375" y="285" as="sourcePoint" />
             <mxPoint x="200" y="375" as="targetPoint" />
           </mxGeometry>
         </mxCell>
 
-        <!-- C4: Enter payment method -->
+        <!-- C4 -->
         <mxCell id="c4" value="Enter payment method" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="50" y="440" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge5" edge="1" parent="1" source="c3" target="c4">
+        <mxCell id="e5" edge="1" parent="1" source="c3" target="c4">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- C5: Cancel or Confirm decision -->
-        <mxCell id="c5" value="Cancel or&#10;Confirm?" style="rhombus;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=10" vertex="1" parent="1">
+        <!-- Decision D1 -->
+        <mxCell id="d1" value="Cancel or Confirm?" style="rhombus;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="75" y="540" width="100" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="edge6" edge="1" parent="1" source="c4" target="c5">
+        <mxCell id="e6" edge="1" parent="1" source="c4" target="d1">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- CANCEL path -->
-        <mxCell id="cancel-end" value="" style="ellipse;whiteSpace=wrap;html=1;fillColor=#000000;strokeColor=#000000;strokeWidth=2;aspect=fixed" vertex="1" parent="1">
+        <!-- Cancel end -->
+        <mxCell id="end-cancel" value="" style="ellipse;whiteSpace=wrap;html=1;fillColor=#000000;strokeColor=#000000;strokeWidth=2;aspect=fixed" vertex="1" parent="1">
           <mxGeometry x="20" y="560" width="20" height="20" as="geometry" />
         </mxCell>
-        <mxCell id="edge7" edge="1" parent="1" source="c5" target="cancel-end">
+        <mxCell id="e7" edge="1" parent="1" source="d1" target="end-cancel">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="75" y="580" as="sourcePoint" />
             <mxPoint x="40" y="570" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="label_cancel" value="Cancel" style="text;html=1;fontSize=10;align=center" vertex="1" parent="1">
-          <mxGeometry x="30" y="540" width="40" height="20" as="geometry" />
-        </mxCell>
 
-        <!-- S2: Submit payment -->
+        <!-- S2 -->
         <mxCell id="s2" value="Submit payment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="375" y="560" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge8" edge="1" parent="1" source="c5" target="s2">
+        <mxCell id="e8" edge="1" parent="1" source="d1" target="s2">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="175" y="580" as="sourcePoint" />
             <mxPoint x="375" y="585" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="label_confirm" value="Confirm" style="text;html=1;fontSize=10;align=center;fontStyle=bold" vertex="1" parent="1">
-          <mxGeometry x="260" y="550" width="50" height="20" as="geometry" />
-        </mxCell>
 
-        <!-- P1: Verify payment -->
+        <!-- P1 -->
         <mxCell id="p1" value="Verify payment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="825" y="560" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge9" edge="1" parent="1" source="s2" target="p1">
+        <mxCell id="e9" edge="1" parent="1" source="s2" target="p1">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="525" y="585" as="sourcePoint" />
             <mxPoint x="825" y="585" as="targetPoint" />
           </mxGeometry>
         </mxCell>
 
-        <!-- P2: Decision - Payment OK? -->
+        <!-- Decision P2 -->
         <mxCell id="p2" value="Payment OK?" style="rhombus;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="850" y="660" width="100" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="edge10" edge="1" parent="1" source="p1" target="p2">
+        <mxCell id="e10" edge="1" parent="1" source="p1" target="p2">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- NO - Payment failed -->
+        <!-- P3 -->
         <mxCell id="p3" value="Payment failed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="825" y="800" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge11" edge="1" parent="1" source="p2" target="p3">
+        <mxCell id="e11" edge="1" parent="1" source="p2" target="p3">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="850" y="740" as="sourcePoint" />
             <mxPoint x="900" y="800" as="targetPoint" />
           </mxGeometry>
-        </Cell>
-        <mxCell id="label_no" value="No" style="text;html=1;fontSize=10;align=center" vertex="1" parent="1">
-          <mxGeometry x="810" y="760" width="30" height="20" as="geometry" />
         </mxCell>
 
-        <!-- C6: Retry payment -->
-        <mxCell id="c6" value="Retry payment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
+        <!-- C5 -->
+        <mxCell id="c5" value="Retry payment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="50" y="800" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge12" edge="1" parent="1" source="p3" target="c6">
+        <mxCell id="e12" edge="1" parent="1" source="p3" target="c5">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="825" y="825" as="sourcePoint" />
             <mxPoint x="200" y="825" as="targetPoint" />
           </mxGeometry>
         </mxCell>
 
-        <!-- Loop back to c4 -->
-        <mxCell id="edge13" edge="1" parent="1" source="c6" target="c4">
+        <!-- Loop back -->
+        <mxCell id="e13" edge="1" parent="1" source="c5" target="c4">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="125" y="800" as="sourcePoint" />
             <mxPoint x="125" y="490" as="targetPoint" />
@@ -188,88 +172,82 @@
           </mxGeometry>
         </mxCell>
 
-        <!-- YES - Payment success -->
-        <mxCell id="s3" value="Update order status&#10;to PAID" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
+        <!-- S3 -->
+        <mxCell id="s3" value="Update order to PAID" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="375" y="680" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge14" edge="1" parent="1" source="p2" target="s3">
+        <mxCell id="e14" edge="1" parent="1" source="p2" target="s3">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="850" y="700" as="sourcePoint" />
             <mxPoint x="525" y="705" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="label_yes" value="Yes" style="text;html=1;fontSize=10;align=center;fontStyle=bold" vertex="1" parent="1">
-          <mxGeometry x="770" y="670" width="30" height="20" as="geometry" />
-        </mxCell>
 
-        <!-- C7: Payment confirmed -->
-        <mxCell id="c7" value="See: Payment confirmed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
+        <!-- C6 -->
+        <mxCell id="c6" value="See payment confirmed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="50" y="890" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge15" edge="1" parent="1" source="s3" target="c7">
+        <mxCell id="e15" edge="1" parent="1" source="s3" target="c6">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="375" y="705" as="sourcePoint" />
             <mxPoint x="200" y="915" as="targetPoint" />
           </mxGeometry>
         </mxCell>
 
-        <!-- S4: Create mission -->
-        <mxCell id="s4" value="Create mission &amp;&#10;assign drone" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=10" vertex="1" parent="1">
+        <!-- S4 -->
+        <mxCell id="s4" value="Create mission and assign drone" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=10" vertex="1" parent="1">
           <mxGeometry x="375" y="890" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge16" edge="1" parent="1" source="c7" target="s4">
+        <mxCell id="e16" edge="1" parent="1" source="c6" target="s4">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- C8: Wait for delivery -->
-        <mxCell id="c8" value="Wait for delivery" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
+        <!-- C7 -->
+        <mxCell id="c7" value="Wait for delivery" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="50" y="990" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge17" edge="1" parent="1" source="s4" target="c8">
+        <mxCell id="e17" edge="1" parent="1" source="s4" target="c7">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="375" y="915" as="sourcePoint" />
             <mxPoint x="200" y="1015" as="targetPoint" />
           </mxGeometry>
         </mxCell>
 
-        <!-- S5: Drone in flight -->
+        <!-- S5 -->
         <mxCell id="s5" value="Drone in flight" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="375" y="990" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge18" edge="1" parent="1" source="s4" target="s5">
+        <mxCell id="e18" edge="1" parent="1" source="s4" target="s5">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="450" y="940" as="sourcePoint" />
             <mxPoint x="450" y="990" as="targetPoint" />
           </mxGeometry>
         </mxCell>
 
-        <!-- S6: Decision - Incident? -->
-        <mxCell id="s6" value="Incident?" style="rhombus;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
+        <!-- Decision D2 -->
+        <mxCell id="d2" value="Incident?" style="rhombus;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="400" y="1090" width="100" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="edge19" edge="1" parent="1" source="s5" target="s6">
+        <mxCell id="e19" edge="1" parent="1" source="s5" target="d2">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- YES - Incident -->
-        <mxCell id="s7" value="Notify customer&#10;of incident" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=10;fontStyle=italic" vertex="1" parent="1">
+        <!-- S6 -->
+        <mxCell id="s6" value="Notify customer of incident" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=italic" vertex="1" parent="1">
           <mxGeometry x="375" y="1220" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge20" edge="1" parent="1" source="s6" target="s7">
+        <mxCell id="e20" edge="1" parent="1" source="d2" target="s6">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="450" y="1170" as="sourcePoint" />
             <mxPoint x="450" y="1220" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="label_yes2" value="Yes" style="text;html=1;fontSize=10;align=center;fontStyle=bold" vertex="1" parent="1">
-          <mxGeometry x="460" y="1180" width="30" height="20" as="geometry" />
-        </mxCell>
 
-        <!-- C9: Receive package -->
-        <mxCell id="c9" value="Receive package" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
+        <!-- C8 -->
+        <mxCell id="c8" value="Receive package" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="50" y="1310" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge21" edge="1" parent="1" source="s5" target="c9">
+        <mxCell id="e21" edge="1" parent="1" source="s5" target="c8">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="375" y="1015" as="sourcePoint" />
             <mxPoint x="200" y="1335" as="targetPoint" />
@@ -281,27 +259,22 @@
           </mxGeometry>
         </mxCell>
 
-        <!-- NO label -->
-        <mxCell id="label_no2" value="No" style="text;html=1;fontSize=10;align=center" vertex="1" parent="1">
-          <mxGeometry x="330" y="1130" width="30" height="20" as="geometry" />
-        </mxCell>
-
-        <!-- S8: Delivery complete -->
-        <mxCell id="s8" value="Mark delivery&#10;completed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=10" vertex="1" parent="1">
+        <!-- S7 -->
+        <mxCell id="s7" value="Mark delivery completed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="375" y="1310" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge22" edge="1" parent="1" source="c9" target="s8">
+        <mxCell id="e22" edge="1" parent="1" source="c8" target="s7">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="200" y="1335" as="sourcePoint" />
             <mxPoint x="375" y="1335" as="targetPoint" />
           </mxGeometry>
-        </Cell>
+        </mxCell>
 
-        <!-- C10: Confirm delivery -->
-        <mxCell id="c10" value="Confirm delivery" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
+        <!-- C9 -->
+        <mxCell id="c9" value="Confirm delivery" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
           <mxGeometry x="50" y="1410" width="150" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="edge23" edge="1" parent="1" source="s8" target="c10">
+        <mxCell id="e23" edge="1" parent="1" source="s7" target="c9">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="375" y="1335" as="sourcePoint" />
             <mxPoint x="200" y="1435" as="targetPoint" />
@@ -312,7 +285,7 @@
         <mxCell id="end" value="" style="ellipse;whiteSpace=wrap;html=1;fillColor=#000000;strokeColor=#000000;strokeWidth=2;aspect=fixed" vertex="1" parent="1">
           <mxGeometry x="125" y="1510" width="20" height="20" as="geometry" />
         </mxCell>
-        <mxCell id="edge24" edge="1" parent="1" source="c10" target="end">
+        <mxCell id="e24" edge="1" parent="1" source="c9" target="end">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
