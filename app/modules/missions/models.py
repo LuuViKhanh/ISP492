@@ -188,6 +188,8 @@ class Incident(Base):
     )
     reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     requires_technical_inspection: Mapped[bool] = mapped_column(default=False)
+    compensation_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    compensation_note: Mapped[str | None] = mapped_column(String, nullable=True)
 
 class Order(Base):
     __tablename__ = "orders"
