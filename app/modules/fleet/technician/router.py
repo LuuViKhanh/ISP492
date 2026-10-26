@@ -437,6 +437,24 @@ async def confirm_arrival(
                         hub_name=hub_name,
                         frontend_url=settings.FRONTEND_URL,
                     )
+
+                # ── Notify Customer: drone đã tới Hub đích ───────────────────
+                if order_obj.customer_id:
+                    from app.modules.system.models import Notification as _Notif, NotificationType as _NT
+                    db.add(_Notif(
+                        user_id=order_obj.customer_id,
+                        title="🚁 Drone đã tới Hub — Hàng của bạn đã về!",
+                        message=(
+                            f"Đơn hàng #{order_obj.id} của bạn đã được drone vận chuyển tới "
+                            f"{hub_name or 'Hub đích'}. "
+                            f"Vui lòng tới nhận hàng sớm nhất có thể. "
+                            f"Hàng sẽ được lưu tối đa 3 ngày."
+                        ),
+                        notifications_type=_NT.MISSION_STATUS,
+                        reference_id=f"DRONE_ARRIVED_{mission.id}",
+                        mission_id=str(mission.id),
+                        created_at=now,
+                    ))
     except Exception as e:
         print(f"[EMAIL] Lỗi DELIVERED_TO_HUB: {e}")
 

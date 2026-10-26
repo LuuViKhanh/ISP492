@@ -310,6 +310,34 @@ async def create_order(
     db.add(new_order)
     await db.commit()
     await db.refresh(new_order)
+
+    # ── Notify tất cả Operators về đơn hàng mới ─────────────────────────────
+    try:
+        from app.modules.auth.models import User as _User, ROLE_NAME_TO_ID as _ROLE_MAP
+        from app.modules.system.models import Notification as _Notif, NotificationType as _NT
+        from app.shared.roles import UserRole as _Role
+        _op_role_id = _ROLE_MAP.get(_Role.OPERATOR)
+        if _op_role_id:
+            _ops = (await db.execute(select(_User.id).where(_User.role_id == _op_role_id))).scalars().all()
+            _mode_str = body.delivery_mode.value if hasattr(body.delivery_mode, "value") else str(body.delivery_mode)
+            for _op_id in _ops:
+                db.add(_Notif(
+                    user_id=_op_id,
+                    title=f"📦 Đơn hàng mới #{new_order.id}",
+                    message=(
+                        f"Khách hàng vừa đặt đơn #{new_order.id} "
+                        f"({_mode_str}, {body.payload_kg} kg). "
+                        f"ETA: {window_end.strftime('%H:%M %d/%m') if window_end else 'N/A'}. "
+                        f"Đơn đang chờ khách mang hàng đến Hub."
+                    ),
+                    notifications_type=_NT.MISSION_STATUS,
+                    reference_id=f"NEW_ORDER_{new_order.id}",
+                    created_at=now,
+                ))
+            await db.commit()
+    except Exception as _e:
+        print(f"[NOTIFY] Lỗi gửi thông báo đơn mới: {_e}")
+
     return OrderCreateResponse(
         id=new_order.id,
         status=new_order.status,
