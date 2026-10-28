@@ -1,66 +1,56 @@
-<mxfile host="app.diagrams.net" modified="2026-10-18T16:00:00.000Z" agent="Mozilla/5.0" version="24.0.0" type="device">
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0">
   <diagram id="mission-activity-vertical" name="Mission Flight Activity Diagram">
-    <mxGraphModel dx="1200" dy="1700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1200" pageHeight="1700" math="0" shadow="0">
+    <mxGraphModel dx="2729" dy="2388" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1200" pageHeight="1700" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-
-        <!-- TITLE -->
-        <mxCell id="title" value="Mission Flight Activity Map" style="text;html=1;fontSize=18;fontStyle=bold;align=center;fillColor=none" vertex="1" parent="1">
-          <mxGeometry x="0" y="10" width="1200" height="30" as="geometry" />
+        <mxCell id="hL17R4mCji1Cn5lghgTQ-12" parent="1" style="ellipse;whiteSpace=wrap;html=1;shapeInside=1;aspect=fixed;" value="" vertex="1">
+          <mxGeometry height="80" width="80" x="95" y="1640" as="geometry" />
         </mxCell>
-
-        <!-- HEADER ROW -->
-        <!-- Header background -->
-        <mxCell id="header-bg" value="" style="rectangle;fillColor=#EEEEEE;strokeColor=#333333;strokeWidth=2" vertex="1" parent="1">
-          <mxGeometry x="0" y="50" width="1200" height="40" as="geometry" />
+        <mxCell id="hL17R4mCji1Cn5lghgTQ-11" parent="1" style="ellipse;whiteSpace=wrap;html=1;shapeInside=1;aspect=fixed;" value="" vertex="1">
+          <mxGeometry height="80" width="80" x="85" y="1610" as="geometry" />
         </mxCell>
-
-        <!-- Header: Technician -->
-        <mxCell id="header1" value="Technician" style="rectangle;fillColor=#EEEEEE;strokeColor=#333333;strokeWidth=2;fontSize=12;fontStyle=bold;align=center" vertex="1" parent="1">
-          <mxGeometry x="0" y="50" width="300" height="40" as="geometry" />
+        <mxCell id="hL17R4mCji1Cn5lghgTQ-4" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="" vertex="1">
+          <mxGeometry height="60" width="1200" y="-10" as="geometry" />
         </mxCell>
-
-        <!-- Header: System -->
-        <mxCell id="header2" value="System" style="rectangle;fillColor=#EEEEEE;strokeColor=#333333;strokeWidth=2;fontSize=12;fontStyle=bold;align=center" vertex="1" parent="1">
-          <mxGeometry x="300" y="50" width="450" height="40" as="geometry" />
+        <mxCell id="hL17R4mCji1Cn5lghgTQ-1" parent="1" style="ellipse;whiteSpace=wrap;html=1;shapeInside=1;aspect=fixed;" value="" vertex="1">
+          <mxGeometry height="30" width="30" x="110" y="1625" as="geometry" />
         </mxCell>
-
-        <!-- Header: Database -->
-        <mxCell id="header3" value="Database" style="rectangle;fillColor=#EEEEEE;strokeColor=#333333;strokeWidth=2;fontSize=12;fontStyle=bold;align=center" vertex="1" parent="1">
-          <mxGeometry x="750" y="50" width="450" height="40" as="geometry" />
+        <mxCell id="title" parent="1" style="text;html=1;fontSize=18;fontStyle=bold;align=center;fillColor=none" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;Mission Flight Activity Map&lt;/b&gt;&lt;/font&gt;" vertex="1">
+          <mxGeometry height="30" width="1200" as="geometry" />
         </mxCell>
-
-        <!-- Vertical separator lines -->
-        <mxCell id="sep1" value="" style="line;strokeColor=#333333;strokeWidth=2" vertex="1" parent="1">
-          <mxGeometry x="300" y="50" width="1" height="1650" as="geometry" />
+        <mxCell id="header-bg" parent="1" style="rectangle;fillColor=#EEEEEE;strokeColor=#333333;strokeWidth=2" value="" vertex="1">
+          <mxGeometry height="40" width="1200" y="50" as="geometry" />
         </mxCell>
-
-        <mxCell id="sep2" value="" style="line;strokeColor=#333333;strokeWidth=2" vertex="1" parent="1">
-          <mxGeometry x="750" y="50" width="1" height="1650" as="geometry" />
+        <mxCell id="header1" parent="1" style="rectangle;fillColor=#EEEEEE;strokeColor=#333333;strokeWidth=2;fontSize=12;fontStyle=bold;align=center" value="" vertex="1">
+          <mxGeometry height="1690" width="300" y="50" as="geometry" />
         </mxCell>
-
-        <!-- Horizontal separator -->
-        <mxCell id="sep3" value="" style="line;strokeColor=#333333;strokeWidth=2" vertex="1" parent="1">
-          <mxGeometry x="0" y="90" width="1200" height="1" as="geometry" />
+        <mxCell id="header2" parent="1" style="rectangle;fillColor=#EEEEEE;strokeColor=#333333;strokeWidth=2;fontSize=12;fontStyle=bold;align=center" value="" vertex="1">
+          <mxGeometry height="1690" width="450" x="300" y="50" as="geometry" />
         </mxCell>
-
-        <!-- START -->
-        <mxCell id="start" value="" style="ellipse;whiteSpace=wrap;html=1;fillColor=#000000;strokeColor=#000000;strokeWidth=2;aspect=fixed" vertex="1" parent="1">
-          <mxGeometry x="125" y="120" width="20" height="20" as="geometry" />
+        <mxCell id="header3" parent="1" style="rectangle;fillColor=#EEEEEE;strokeColor=#333333;strokeWidth=2;fontSize=12;fontStyle=bold;align=center" value="" vertex="1">
+          <mxGeometry height="1690" width="450" x="750" y="50" as="geometry" />
         </mxCell>
-
-        <!-- A1: Dispatch drone -->
-        <mxCell id="a1" value="Dispatch drone" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
-          <mxGeometry x="50" y="170" width="150" height="50" as="geometry" />
+        <mxCell id="sep1" parent="1" style="line;strokeColor=#333333;strokeWidth=2" value="" vertex="1">
+          <mxGeometry height="1650" width="1" x="300" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="sep2" parent="1" style="line;strokeColor=#333333;strokeWidth=2" value="" vertex="1">
+          <mxGeometry height="1650" width="1" x="750" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="sep3" parent="1" style="line;strokeColor=#333333;strokeWidth=2" value="" vertex="1">
+          <mxGeometry height="1" width="1200" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="start" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#000000;strokeColor=#000000;strokeWidth=2;aspect=fixed" value="" vertex="1">
+          <mxGeometry height="20" width="20" x="115" y="121" as="geometry" />
+        </mxCell>
+        <mxCell id="a1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" value="Dispatch drone" vertex="1">
+          <mxGeometry height="50" width="150" x="50" y="170" as="geometry" />
         </mxCell>
         <mxCell id="edge1" edge="1" parent="1" source="start" target="a1">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
-        <!-- S1: Start simulation -->
-        <mxCell id="s1" value="Start mission simulation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
-          <mxGeometry x="375" y="170" width="150" height="50" as="geometry" />
+        <mxCell id="s1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" value="Start mission&amp;nbsp;" vertex="1">
+          <mxGeometry height="50" width="150" x="375" y="170" as="geometry" />
         </mxCell>
         <mxCell id="edge2" edge="1" parent="1" source="a1" target="s1">
           <mxGeometry relative="1" as="geometry">
@@ -68,50 +58,38 @@
             <mxPoint x="375" y="195" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-
-        <!-- S2: Load waypoints -->
-        <mxCell id="s2" value="Load route waypoints" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
-          <mxGeometry x="375" y="260" width="150" height="50" as="geometry" />
+        <mxCell id="s2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" value="Load route waypoints" vertex="1">
+          <mxGeometry height="50" width="150" x="375" y="260" as="geometry" />
         </mxCell>
         <mxCell id="edge3" edge="1" parent="1" source="s1" target="s2">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
-        <!-- S3: Get battery -->
-        <mxCell id="s3" value="Get battery capacity" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
-          <mxGeometry x="375" y="350" width="150" height="50" as="geometry" />
+        <mxCell id="s3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" value="Get battery capacity" vertex="1">
+          <mxGeometry height="50" width="150" x="375" y="350" as="geometry" />
         </mxCell>
         <mxCell id="edge4" edge="1" parent="1" source="s2" target="s3">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
-        <!-- S4: FOR Loop -->
-        <mxCell id="s4" value="For each waypoint:" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=bold" vertex="1" parent="1">
-          <mxGeometry x="375" y="440" width="150" height="50" as="geometry" />
+        <mxCell id="s4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=bold" value="For each waypoint:" vertex="1">
+          <mxGeometry height="50" width="150" x="375" y="440" as="geometry" />
         </mxCell>
         <mxCell id="edge5" edge="1" parent="1" source="s3" target="s4">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
-        <!-- S5: Update position -->
-        <mxCell id="s5" value="Update position, altitude, speed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=10" vertex="1" parent="1">
-          <mxGeometry x="375" y="530" width="150" height="50" as="geometry" />
+        <mxCell id="s5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=10" value="Update position, altitude, speed" vertex="1">
+          <mxGeometry height="50" width="150" x="375" y="530" as="geometry" />
         </mxCell>
         <mxCell id="edge6" edge="1" parent="1" source="s4" target="s5">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
-        <!-- S6: Consume battery -->
-        <mxCell id="s6" value="Consume battery" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
-          <mxGeometry x="375" y="620" width="150" height="50" as="geometry" />
+        <mxCell id="s6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" value="Consume battery" vertex="1">
+          <mxGeometry height="50" width="150" x="375" y="620" as="geometry" />
         </mxCell>
         <mxCell id="edge7" edge="1" parent="1" source="s5" target="s6">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
-        <!-- DB1: Record telemetry -->
-        <mxCell id="db1" value="Record telemetry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
-          <mxGeometry x="825" y="530" width="150" height="50" as="geometry" />
+        <mxCell id="db1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" value="Record telemetry" vertex="1">
+          <mxGeometry height="50" width="150" x="825" y="530" as="geometry" />
         </mxCell>
         <mxCell id="edge8" edge="1" parent="1" source="s5" target="db1">
           <mxGeometry relative="1" as="geometry">
@@ -119,36 +97,30 @@
             <mxPoint x="825" y="555" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-
-        <!-- S7: Decision - Incident? -->
-        <mxCell id="s7" value="Incident occurs?" style="rhombus;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
-          <mxGeometry x="400" y="720" width="100" height="80" as="geometry" />
+        <mxCell id="s7" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" value="Incident occurs?" vertex="1">
+          <mxGeometry height="80" width="100" x="400" y="720" as="geometry" />
         </mxCell>
         <mxCell id="edge9" edge="1" parent="1" source="s6" target="s7">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
-        <!-- NO - Loop back -->
         <mxCell id="edge10" edge="1" parent="1" source="s7" target="s4">
-          <mxGeometry relative="1" as="geometry">
-            <mxPoint x="400" y="760" as="sourcePoint" />
-            <mxPoint x="450" y="490" as="targetPoint" />
+          <mxGeometry relative="1" x="0.0667" as="geometry">
             <Array as="points">
-              <mxPoint x="300" y="760" />
-              <mxPoint x="300" y="465" />
+              <mxPoint x="340" y="760" />
+              <mxPoint x="340" y="610" />
+              <mxPoint x="340" y="540" />
+              <mxPoint x="340" y="465" />
               <mxPoint x="375" y="465" />
             </Array>
+            <mxPoint x="400" y="760" as="sourcePoint" />
+            <mxPoint x="450" y="490" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="label_no" value="No" style="text;html=1;fontSize=10;align=center" vertex="1" parent="1">
-          <mxGeometry x="320" y="610" width="30" height="20" as="geometry" />
+        <mxCell id="label_no" parent="1" style="text;html=1;fontSize=10;align=center" value="No" vertex="1">
+          <mxGeometry height="20" width="30" x="345" y="590" as="geometry" />
         </mxCell>
-
-        <!-- === INCIDENT PATH === -->
-
-        <!-- S8: Create incident -->
-        <mxCell id="s8" value="Create incident record" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=italic" vertex="1" parent="1">
-          <mxGeometry x="375" y="850" width="150" height="50" as="geometry" />
+        <mxCell id="s8" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=italic" value="Create incident record" vertex="1">
+          <mxGeometry height="50" width="150" x="375" y="850" as="geometry" />
         </mxCell>
         <mxCell id="edge11" edge="1" parent="1" source="s7" target="s8">
           <mxGeometry relative="1" as="geometry">
@@ -156,13 +128,11 @@
             <mxPoint x="450" y="850" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="label_yes" value="Yes" style="text;html=1;fontSize=10;align=center;fontStyle=bold" vertex="1" parent="1">
-          <mxGeometry x="460" y="815" width="30" height="20" as="geometry" />
+        <mxCell id="label_yes" parent="1" style="text;html=1;fontSize=10;align=center;fontStyle=bold" value="Yes" vertex="1">
+          <mxGeometry height="20" width="30" x="460" y="815" as="geometry" />
         </mxCell>
-
-        <!-- DB2: Record incident -->
-        <mxCell id="db2" value="Record incident" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=italic" vertex="1" parent="1">
-          <mxGeometry x="825" y="850" width="150" height="50" as="geometry" />
+        <mxCell id="db2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=italic" value="Record incident" vertex="1">
+          <mxGeometry height="50" width="150" x="825" y="850" as="geometry" />
         </mxCell>
         <mxCell id="edge12" edge="1" parent="1" source="s8" target="db2">
           <mxGeometry relative="1" as="geometry">
@@ -170,52 +140,44 @@
             <mxPoint x="825" y="875" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-
-        <!-- S9: Return to hub -->
-        <mxCell id="s9" value="Return to origin hub" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=italic" vertex="1" parent="1">
-          <mxGeometry x="375" y="940" width="150" height="50" as="geometry" />
+        <mxCell id="s9" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=italic" value="Return to origin hub" vertex="1">
+          <mxGeometry height="50" width="150" x="375" y="940" as="geometry" />
         </mxCell>
         <mxCell id="edge13" edge="1" parent="1" source="s8" target="s9">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
-        <!-- S10: End incident -->
-        <mxCell id="s10" value="End flight" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=italic" vertex="1" parent="1">
-          <mxGeometry x="375" y="1030" width="150" height="50" as="geometry" />
+        <mxCell id="hL17R4mCji1Cn5lghgTQ-24" edge="1" parent="1" source="s10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;defaultLabelBackgroundColor=page;" target="hL17R4mCji1Cn5lghgTQ-20">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s10" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=italic" value="End flight" vertex="1">
+          <mxGeometry height="50" width="150" x="375" y="1030" as="geometry" />
         </mxCell>
         <mxCell id="edge14" edge="1" parent="1" source="s9" target="s10">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
-        <!-- === NORMAL PATH === -->
-
-        <!-- S11: Fly to destination -->
-        <mxCell id="s11" value="Fly to destination" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
-          <mxGeometry x="375" y="1140" width="150" height="50" as="geometry" />
+        <mxCell id="s11" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" value="Fly to destination" vertex="1">
+          <mxGeometry height="50" width="150" x="375" y="1140" as="geometry" />
         </mxCell>
         <mxCell id="edge15" edge="1" parent="1" source="s4" target="s11">
-          <mxGeometry relative="1" as="geometry">
-            <mxPoint x="450" y="490" as="sourcePoint" />
-            <mxPoint x="450" y="1140" as="targetPoint" />
+          <mxGeometry relative="1" x="0.1422" as="geometry">
             <Array as="points">
-              <mxPoint x="620" y="850" />
-              <mxPoint x="620" y="1165" />
+              <mxPoint x="680" y="470" />
+              <mxPoint x="680" y="680" />
+              <mxPoint x="680" y="1165" />
               <mxPoint x="525" y="1165" />
             </Array>
+            <mxPoint x="450" y="490" as="sourcePoint" />
+            <mxPoint x="450" y="1140" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-
-        <!-- S12: Drone arrives -->
-        <mxCell id="s12" value="Drone arrives" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
-          <mxGeometry x="375" y="1230" width="150" height="50" as="geometry" />
+        <mxCell id="s12" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" value="Drone arrives" vertex="1">
+          <mxGeometry height="50" width="150" x="375" y="1230" as="geometry" />
         </mxCell>
         <mxCell id="edge16" edge="1" parent="1" source="s11" target="s12">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
-        <!-- A2: Receive drone -->
-        <mxCell id="a2" value="Receive &amp; inspect" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
-          <mxGeometry x="50" y="1230" width="150" height="50" as="geometry" />
+        <mxCell id="a2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" value="Receive &amp; inspect" vertex="1">
+          <mxGeometry height="50" width="150" x="50" y="1230" as="geometry" />
         </mxCell>
         <mxCell id="edge17" edge="1" parent="1" source="s12" target="a2">
           <mxGeometry relative="1" as="geometry">
@@ -223,18 +185,14 @@
             <mxPoint x="200" y="1255" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-
-        <!-- A3: Incident alert decision -->
-        <mxCell id="a3" value="Incident alert?" style="rhombus;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
-          <mxGeometry x="75" y="1320" width="100" height="80" as="geometry" />
+        <mxCell id="a3" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" value="Incident alert?" vertex="1">
+          <mxGeometry height="80" width="100" x="75" y="1320" as="geometry" />
         </mxCell>
         <mxCell id="edge18" edge="1" parent="1" source="a2" target="a3">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
-        <!-- YES: Handle incident -->
-        <mxCell id="a4" value="Handle incident" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=italic" vertex="1" parent="1">
-          <mxGeometry x="50" y="1440" width="150" height="50" as="geometry" />
+        <mxCell id="a4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11;fontStyle=italic" value="Handle incident" vertex="1">
+          <mxGeometry height="50" width="150" x="50" y="1440" as="geometry" />
         </mxCell>
         <mxCell id="edge19" edge="1" parent="1" source="a3" target="a4">
           <mxGeometry relative="1" as="geometry">
@@ -242,36 +200,54 @@
             <mxPoint x="125" y="1440" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="label_yes2" value="Yes" style="text;html=1;fontSize=10;align=center;fontStyle=bold" vertex="1" parent="1">
-          <mxGeometry x="135" y="1405" width="30" height="20" as="geometry" />
+        <mxCell id="label_yes2" parent="1" style="text;html=1;fontSize=10;align=center;fontStyle=bold" value="Yes" vertex="1">
+          <mxGeometry height="20" width="30" x="135" y="1405" as="geometry" />
         </mxCell>
-
-        <!-- NO: Confirm delivery -->
-        <mxCell id="a5" value="Confirm delivery" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" vertex="1" parent="1">
-          <mxGeometry x="50" y="1540" width="150" height="50" as="geometry" />
+        <mxCell id="a5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;fontSize=11" value="Confirm delivery" vertex="1">
+          <mxGeometry height="50" width="150" x="50" y="1540" as="geometry" />
         </mxCell>
         <mxCell id="edge20" edge="1" parent="1" source="a3" target="a5">
           <mxGeometry relative="1" as="geometry">
-            <mxPoint x="75" y="1360" as="sourcePoint" />
-            <mxPoint x="125" y="1540" as="targetPoint" />
             <Array as="points">
               <mxPoint x="20" y="1360" />
               <mxPoint x="20" y="1565" />
             </Array>
+            <mxPoint x="75" y="1360" as="sourcePoint" />
+            <mxPoint x="125" y="1540" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="label_no2" value="No" style="text;html=1;fontSize=10;align=center" vertex="1" parent="1">
-          <mxGeometry x="25" y="1440" width="30" height="20" as="geometry" />
+        <mxCell id="label_no2" parent="1" style="text;html=1;fontSize=10;align=center" value="No" vertex="1">
+          <mxGeometry height="20" width="30" x="20" y="1500" as="geometry" />
         </mxCell>
-
-        <!-- END -->
-        <mxCell id="end" value="" style="ellipse;whiteSpace=wrap;html=1;fillColor=#000000;strokeColor=#000000;strokeWidth=2;aspect=fixed" vertex="1" parent="1">
-          <mxGeometry x="125" y="1630" width="20" height="20" as="geometry" />
+        <mxCell id="edge21" edge="1" parent="1" source="a5">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="125" y="1640" as="targetPoint" />
+          </mxGeometry>
         </mxCell>
-        <mxCell id="edge21" edge="1" parent="1" source="a5" target="end">
+        <mxCell id="hL17R4mCji1Cn5lghgTQ-6" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="&lt;span style=&quot;white-space: nowrap;&quot;&gt;&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;b&gt;Technician&lt;/b&gt;&lt;/font&gt;&lt;/span&gt;" vertex="1">
+          <mxGeometry height="30" width="60" x="115" y="55" as="geometry" />
+        </mxCell>
+        <mxCell id="hL17R4mCji1Cn5lghgTQ-7" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="&lt;span style=&quot;white-space: nowrap;&quot;&gt;&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;b&gt;System&lt;/b&gt;&lt;/font&gt;&lt;/span&gt;" vertex="1">
+          <mxGeometry height="30" width="60" x="495" y="55" as="geometry" />
+        </mxCell>
+        <mxCell id="hL17R4mCji1Cn5lghgTQ-9" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="&lt;span style=&quot;white-space: nowrap;&quot;&gt;&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;b&gt;Database&lt;/b&gt;&lt;/font&gt;&lt;/span&gt;" vertex="1">
+          <mxGeometry height="30" width="60" x="945" y="55" as="geometry" />
+        </mxCell>
+        <mxCell id="hL17R4mCji1Cn5lghgTQ-14" parent="1" style="ellipse;whiteSpace=wrap;html=1;shapeInside=1;aspect=fixed;" value="" vertex="1">
+          <mxGeometry height="50" width="50" x="100" y="1640" as="geometry" />
+        </mxCell>
+        <mxCell id="hL17R4mCji1Cn5lghgTQ-15" parent="1" style="ellipse;whiteSpace=wrap;html=1;shapeInside=1;aspect=fixed;fillColor=#000000;" value="" vertex="1">
+          <mxGeometry height="30" width="30" x="110" y="1650" as="geometry" />
+        </mxCell>
+        <mxCell id="hL17R4mCji1Cn5lghgTQ-16" edge="1" parent="1" source="hL17R4mCji1Cn5lghgTQ-15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;innerLoopWaypoints=1;exitX=0;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=1;entryDx=0;entryDy=0;defaultLabelBackgroundColor=page;" target="hL17R4mCji1Cn5lghgTQ-15">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
+        <mxCell id="hL17R4mCji1Cn5lghgTQ-20" parent="1" style="ellipse;whiteSpace=wrap;html=1;shapeInside=1;aspect=fixed;" value="" vertex="1">
+          <mxGeometry height="50" width="50" x="600" y="1030" as="geometry" />
+        </mxCell>
+        <mxCell id="hL17R4mCji1Cn5lghgTQ-21" parent="1" style="ellipse;whiteSpace=wrap;html=1;shapeInside=1;aspect=fixed;fillColor=#000000;" value="" vertex="1">
+          <mxGeometry height="40" width="40" x="605" y="1035" as="geometry" />
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>
