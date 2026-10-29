@@ -695,6 +695,241 @@ from app.modules.fleet.technician.router import (
 )
 
 
+from app.modules.fleet.technician.router import (
+    ConfirmArrivalRequest,
+    SwapBatteryRequest,
+    confirm_arrival as _fleet_confirm_arrival,
+    confirm_relay_arrival as _fleet_confirm_relay_arrival,
+    swap_battery_at_relay as _fleet_swap_battery_at_relay,
+    dispatch_drone as _fleet_dispatch_drone,
+)
+
+
+# ── Audit Trail & Order Timeline ──────────────────────────────────────────────
+
+@missions_router.get("/{mission_id}/audit-trail", summary="Audit Trail - Lịch sử timeline của đơn hàng")
+async def get_order_audit_trail(
+    mission_id: str,
+    user: CurrentUser = Depends(allow_admin_or_operator),  # ← Admin/Operator để audit
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Lấy lịch sử timeline của 1 mission/order cho audit:
+    - Khi nào tạo đơn (created_at)
+    - Khi nào thanh toán (paid_at)
+    - Khi nào nhận tại hub (origin_received_at)
+    - Khi nào dispatch (mission.departed_at)
+    - Khi nào đáp hub đích (mission.arrived_at)
+    - Khi nào khách confirm nhận (arrival_confirmed_at)
+    - Khi nào bảo trì (work_order.resolved_at)
+    
+    Trả về dữ liệu để audit và kiểm tra tuân thủ SLA.
+    """
+    from app.modules.missions.models import Order as OrderModel, MissionLeg
+    from app.modules.fleet.models import WorkOrder as WO
+    
+    mission = await db.get(Mission, mission_id)
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    
+    # Lấy Order
+    order = None
+    if mission.order_id:
+        order_res = await db.execute(
+            select(OrderModel).where(OrderModel.id == mission.order_id)
+        )
+        order = order_res.scalar_one_or_none()
+    
+    # Lấy Mission Legs
+    legs_res = await db.execute(
+        select(MissionLeg).where(MissionLeg.mission_id == mission_id).order_by(MissionLeg.sequence_no)
+    )
+    legs = legs_res.scalars().all()
+    
+    # Lấy Work Orders (maintenance)
+    wo_res = await db.execute(
+        select(WO).where(WO.drone_id == mission.drone_id).order_by(WO.resolved_at.desc().nullslast())
+    )
+    work_orders = wo_res.scalars().all()
+    
+    # Build timeline
+    timeline = []
+    
+    if order:
+        if order.created_at:
+            timeline.append({
+                "timestamp": order.created_at,
+                "event": "Order Created",
+                "status": order.status.value if order.status else None,
+                "actor": "Customer"
+            })
+        
+        if order.paid_at:
+            timeline.append({
+                "timestamp": order.paid_at,
+                "event": "Payment Confirmed",
+                "payment_status": order.payment_status.value if order.payment_status else None,
+                "actor": "Payment System"
+            })
+        
+        if order.origin_received_at:
+            timeline.append({
+                "timestamp": order.origin_received_at,
+                "event": "Package Received at Origin Hub",
+                "received_by": order.origin_received_by,
+                "hub_id": order.origin_hub_id,
+                "actor": "Technician"
+            })
+    
+    if mission.departed_at:
+        timeline.append({
+            "timestamp": mission.departed_at,
+            "event": "Drone Dispatched",
+            "mission_status": mission.status.value if mission.status else None,
+            "drone_id": mission.drone_id,
+            "leg_count": len(legs),
+            "actor": "Technician"
+        })
+    
+    # Legs timeline
+    for leg in legs:
+        if leg.started_at:
+            timeline.append({
+                "timestamp": leg.started_at,
+                "event": f"Leg {leg.sequence_no} Started",
+                "from_hub_id": leg.from_hub_id,
+                "to_hub_id": leg.to_hub_id,
+                "sequence_no": leg.sequence_no,
+                "actor": "Drone"
+            })
+        
+        if leg.completed_at:
+            timeline.append({
+                "timestamp": leg.completed_at,
+                "event": f"Leg {leg.sequence_no} Completed",
+                "sequence_no": leg.sequence_no,
+                "actor": "Drone"
+            })
+    
+    if mission.arrived_at:
+        timeline.append({
+            "timestamp": mission.arrived_at,
+            "event": "Drone Arrived at Destination Hub",
+            "hub_id": mission.destination_hub_id,
+            "actor": "Drone"
+        })
+    
+    if mission.arrival_confirmed_at:
+        timeline.append({
+            "timestamp": mission.arrival_confirmed_at,
+            "event": "Customer Confirmed Pickup",
+            "confirmed_by": mission.arrival_confirmed_by,
+            "actor": "Customer"
+        })
+    
+    # Work orders
+    for wo in work_orders[:5]:  # Show last 5
+        if wo.resolved_at:
+            timeline.append({
+                "timestamp": wo.resolved_at,
+                "event": "Maintenance Completed",
+                "work_order_id": wo.id,
+                "issue": wo.issue_description,
+                "action": wo.action_taken,
+                "actor": "Technician"
+            })
+    
+    # Sort by timestamp
+    timeline = sorted(timeline, key=lambda x: x.get("timestamp") or datetime.min)
+    
+    return {
+        "mission_id": mission_id,
+        "order_id": mission.order_id,
+        "drone_id": mission.drone_id,
+        "timeline": timeline,
+        "summary": {
+            "total_events": len(timeline),
+            "first_event": timeline[0].get("timestamp") if timeline else None,
+            "last_event": timeline[-1].get("timestamp") if timeline else None,
+            "total_duration": (
+                (timeline[-1].get("timestamp") - timeline[0].get("timestamp")).total_seconds() / 3600
+                if timeline and len(timeline) > 1 else None
+            ),  # in hours
+        }
+    }
+
+
+@missions_router.get("/audit/sla-report", summary="SLA Report - Báo cáo tuân thủ SLA")
+async def get_sla_report(
+    start_date: str,  # "2026-10-01"
+    end_date: str,    # "2026-10-31"
+    user: CurrentUser = Depends(allow_admin_or_operator),  # ← Admin/Operator để audit
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Báo cáo audit SLA cho khoảng thời gian:
+    - Tổng số đơn hàng
+    - Số đơn hoàn thành đúng hạn
+    - Số đơn trễ
+    - Thời gian trung bình từ đơn đặt → giao thành công
+    - Drone uptime %
+    - Maintenance history
+    """
+    from datetime import datetime
+    from app.modules.missions.models import Order as OrderModel
+    
+    try:
+        start = datetime.fromisoformat(start_date)
+        end = datetime.fromisoformat(end_date)
+    except:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    
+    # Lấy orders trong khoảng thời gian
+    orders_res = await db.execute(
+        select(OrderModel).where(
+            and_(
+                OrderModel.created_at >= start,
+                OrderModel.created_at <= end,
+                OrderModel.status.in_([
+                    OrderStatus.DELIVERED_TO_HUB,
+                    OrderStatus.CANCELLED
+                ])
+            )
+        )
+    )
+    orders = orders_res.scalars().all()
+    
+    # Tính toán metrics
+    total = len(orders)
+    completed = len([o for o in orders if o.status == OrderStatus.DELIVERED_TO_HUB and o.destination_received_at])
+    on_time = 0
+    durations = []
+    
+    for order in orders:
+        if order.created_at and order.destination_received_at:
+            duration = (order.destination_received_at - order.created_at).total_seconds() / 3600
+            durations.append(duration)
+            
+            # Assume SLA = 24 hours
+            if duration <= 24:
+                on_time += 1
+    
+    avg_duration = sum(durations) / len(durations) if durations else 0
+    sla_compliance = (on_time / total * 100) if total > 0 else 0
+    
+    return {
+        "period": f"{start_date} to {end_date}",
+        "metrics": {
+            "total_orders": total,
+            "completed_orders": completed,
+            "cancelled_orders": len([o for o in orders if o.status == OrderStatus.CANCELLED]),
+            "on_time_orders": on_time,
+            "sla_compliance_percent": round(sla_compliance, 2),
+            "avg_delivery_hours": round(avg_duration, 2),
+        }
+    }
+
+
 @missions_router.post("/{mission_id}/confirm-arrival", summary="Confirm drone đáp hub đích (hoàn tất mission)")
 async def technician_mission_confirm_arrival(
     mission_id: str,

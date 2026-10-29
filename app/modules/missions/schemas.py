@@ -147,6 +147,7 @@ class MissionResponse(BaseModel):
     route_path_string: Optional[str] = None
     arrival_confirmed_by: Optional[str] = None
     arrival_confirmed_at: Optional[datetime] = None
+    leg_destination_type: Optional[str] = None  # "destination" hoặc "connection"
     # Thông tin tuyến đường đã lên lịch (đồng bộ với POST /operator/missions/mission-planning/analyze)
     routeId: Optional[str] = None
     route_string: Optional[str] = None

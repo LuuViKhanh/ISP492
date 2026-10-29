@@ -23,7 +23,8 @@ from app.modules.fleet.technician.schemas import (
     WorkOrderLogResponse, MaintenanceAlertResponse,
     MaintenanceScheduleResponse, MaintenanceScheduleCreate,
     IncomingMissionResponse, BatteryResponse, BatteryUseRequest,
-    HubSupplyCreate, HubSupplyUpdate, HubSupplyResponse
+    HubSupplyCreate, HubSupplyUpdate, HubSupplyResponse,
+    SupplyRequestCreate, SupplyRequestApprove, SupplyRequestReject, SupplyRequestConfirmReceipt
 )
 from app.modules.missions.models import Mission, MissionStatus, HandlingStatus, Incident, IncidentStatus
 from app.core.config import settings
@@ -344,9 +345,11 @@ async def confirm_arrival(
     # ── 1. Cập nhật Mission (rời danh sách Transit đang hoạt động sang History) ──
     if not mission.arrived_at:
         mission.arrived_at = now       # trigger pickup reminder countdown (3 ngày chờ KH lấy hàng)
-    if not mission.arrival_confirmed_at:
-        mission.arrival_confirmed_at = now   # ghi nhận thời điểm Technician confirm drone đáp hub
-    mission.arrival_confirmed_by = str(user.id)
+    # Lưu ý: KHÔNG set arrival_confirmed_at ở đây — trường đó dành riêng cho
+    # /confirm-pickup (xác nhận KH đã tới nhận hàng). Nếu set ở đây, gói hàng sẽ
+    # bị loại khỏi danh sách /confirmations (trang delivery chờ KH nhận) và
+    # pickup_reminder_watcher sẽ không nhắc KH tới nhận. Thời điểm drone đáp
+    # đã được ghi bởi `arrived_at` ở trên.
     if mission.status != MissionStatus.MISSION_COMPLETED:
         mission.status = MissionStatus.COMPLETED
     mission.end_time = mission.end_time or now
@@ -555,6 +558,139 @@ async def get_drone_profile(
     return drone_dict
 
 
+@router.get("/drones/{drone_id}/flight-history", response_model=list, summary="Lịch bay của drone")
+async def get_drone_flight_history(
+    drone_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Lấy lịch bay của drone (Flight History).
+    
+    - TECHNICIAN: chỉ xem drone tại hub của mình
+    - Trả về danh sách missions, sorted by arrived_at DESC (gần nhất trước)
+    - Mỗi mission có field `is_relay_mission` để phân biệt chuyến bay thường vs chuyến bay trung gian
+    """
+    from app.modules.missions.models import Mission, Order as OrderModel, MissionLeg
+    
+    # Kiểm tra drone có tại hub của technician không
+    drone = await db.get(Drone, drone_id)
+    if not drone:
+        raise HTTPException(status_code=404, detail="Drone not found")
+    if user.hub_id and drone.current_hub_id != int(user.hub_id):
+        raise HTTPException(status_code=403, detail="Drone không ở Hub của bạn")
+    
+    # Lấy flight history
+    query = (
+        select(
+            Mission.id.label("mission_id"),
+            Mission.status.label("mission_status"),
+            Mission.started_at,
+            Mission.arrived_at,
+            Mission.battery_id,
+            OrderModel.id.label("order_id"),
+            OrderModel.order_code,
+        )
+        .outerjoin(OrderModel, Mission.order_id == OrderModel.id)
+        .where(
+            Mission.drone_id == drone_id,
+            Mission.status == MissionStatus.COMPLETED
+        )
+        .order_by(Mission.arrived_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    
+    result = await db.execute(query)
+    flights = []
+    for row in result.fetchall():
+        duration_min = None
+        if row.started_at and row.arrived_at:
+            duration = row.arrived_at - row.started_at
+            duration_min = int(duration.total_seconds() / 60)
+        
+        # Kiểm tra số lượng legs để xác định chuyến bay trung gian
+        legs_count_res = await db.execute(
+            select(MissionLeg).where(MissionLeg.mission_id == row.mission_id)
+        )
+        legs_count = len(legs_count_res.scalars().all())
+        is_relay_mission = legs_count > 1  # Nếu > 1 leg → là chuyến bay trung gian
+        
+        flights.append({
+            "mission_id": row.mission_id,
+            "order_id": row.order_id,
+            "order_code": row.order_code,
+            "started_at": row.started_at,
+            "arrived_at": row.arrived_at,
+            "duration_minutes": duration_min,
+            "battery_id": row.battery_id,
+            "is_relay_mission": is_relay_mission,
+            "legs_count": legs_count,
+        })
+    
+    return flights
+
+
+@router.get("/drones/{drone_id}/maintenance-history", response_model=list, summary="Lịch bảo trì của drone")
+async def get_drone_maintenance_history(
+    drone_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Lấy lịch bảo trì của drone (Maintenance History).
+    
+    - TECHNICIAN: chỉ xem drone tại hub của mình
+    - Trả về danh sách work orders + maintenance records, sorted by resolved_at DESC (gần nhất trước)
+    """
+    from app.modules.fleet.models import MaintenanceRecord
+    
+    # Kiểm tra drone có tại hub của technician không
+    drone = await db.get(Drone, drone_id)
+    if not drone:
+        raise HTTPException(status_code=404, detail="Drone not found")
+    if user.hub_id and drone.current_hub_id != int(user.hub_id):
+        raise HTTPException(status_code=403, detail="Drone không ở Hub của bạn")
+    
+    # Lấy maintenance history
+    query = (
+        select(
+            WorkOrder.id.label("work_order_id"),
+            WorkOrder.status,
+            WorkOrder.issue_description,
+            WorkOrder.action_taken,
+            WorkOrder.resolved_at,
+            MaintenanceRecord.id.label("record_id"),
+            MaintenanceRecord.maintenance_type,
+            MaintenanceRecord.description.label("record_description"),
+        )
+        .outerjoin(MaintenanceRecord, MaintenanceRecord.work_order_id == WorkOrder.id)
+        .where(WorkOrder.drone_id == drone_id)
+        .order_by(WorkOrder.resolved_at.desc().nullslast())
+        .limit(limit)
+        .offset(offset)
+    )
+    
+    result = await db.execute(query)
+    maintenance_records = []
+    for row in result.fetchall():
+        maintenance_records.append({
+            "work_order_id": row.work_order_id,
+            "status": row.status.value if row.status else None,
+            "issue_description": row.issue_description,
+            "action_taken": row.action_taken,
+            "resolved_at": row.resolved_at,
+            "maintenance_type": row.maintenance_type,
+            "record_description": row.record_description,
+        })
+    
+    return maintenance_records
+
+
 @router.patch("/drones/{drone_id}/status", response_model=DroneProfileResponse)
 async def update_drone_status(
     drone_id: str,
@@ -565,6 +701,22 @@ async def update_drone_status(
     drone = await db.get(Drone, drone_id)
     if not drone:
         raise HTTPException(status_code=404, detail="Drone not found")
+    
+    # Nếu cố gắng update status từ MAINTENANCE thành AVAILABLE → kiểm tra có alert pending không
+    if drone.status == DroneStatus.MAINTENANCE and body.status == DroneStatus.AVAILABLE:
+        pending_alerts_result = await db.execute(
+            select(MaintenanceAlert).where(
+                MaintenanceAlert.drone_id == drone_id,
+                MaintenanceAlert.work_order_id == None,  # alert chưa được xử lý (chưa có work order)
+                MaintenanceAlert.status == "Pending"
+            ).limit(1)
+        )
+        if pending_alerts_result.scalars().first():
+            raise HTTPException(
+                status_code=400,
+                detail="Không thể chuyển drone về Available khi còn Maintenance Alert Pending chưa xử lý. Vui lòng giải quyết alert trước."
+            )
+    
     drone.status = body.status
     await db.commit()
     await db.refresh(drone)
@@ -850,12 +1002,19 @@ async def list_maintenance_alerts(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Chỉ trả alerts chưa được xử lý (chưa có work order)."""
-    result = await db.execute(
+    """Chỉ trả alerts chưa được xử lý (chưa có work order) tại hub của technician."""
+    query = (
         select(MaintenanceAlert)
+        .outerjoin(Drone, MaintenanceAlert.drone_id == Drone.id)
         .where(MaintenanceAlert.work_order_id == None)
         .order_by(MaintenanceAlert.id.desc())
     )
+    
+    # TECHNICIAN chỉ thấy alert của drone tại hub mình
+    if user.hub_id and str(user.hub_id).isdigit():
+        query = query.where(Drone.current_hub_id == int(user.hub_id))
+    
+    result = await db.execute(query)
     return result.scalars().all()
 
 
@@ -864,12 +1023,19 @@ async def list_maintenance_alerts_history(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Trả alerts đã được xử lý (đã có work order)."""
-    result = await db.execute(
+    """Trả alerts đã được xử lý (đã có work order) tại hub của technician."""
+    query = (
         select(MaintenanceAlert)
+        .outerjoin(Drone, MaintenanceAlert.drone_id == Drone.id)
         .where(MaintenanceAlert.work_order_id != None)
         .order_by(MaintenanceAlert.id.desc())
     )
+    
+    # TECHNICIAN chỉ thấy alert của drone tại hub mình
+    if user.hub_id and str(user.hub_id).isdigit():
+        query = query.where(Drone.current_hub_id == int(user.hub_id))
+    
+    result = await db.execute(query)
     return result.scalars().all()
 
 
@@ -1009,6 +1175,12 @@ async def create_work_order(
     db.add(wo)
     await db.flush()  # lấy wo.id trước khi commit
 
+    # Cập nhật drone sang MAINTENANCE khi tạo work order (drone đi bảo trì)
+    if body.drone_id:
+        drone = await db.get(Drone, body.drone_id)
+        if drone:
+            drone.status = DroneStatus.MAINTENANCE
+
     # Nếu tạo từ một alert → gắn work_order_id vào alert, chuyển alert sang history
     if body.alert_id:
         alert = await db.get(MaintenanceAlert, body.alert_id)
@@ -1083,15 +1255,38 @@ async def update_inspection(
     old_status = wo.status.value
     wo.action_taken = body.action_taken
     wo.status = body.status
+    now = get_vn_naive_datetime()
+    
     if body.status == WorkOrderStatus.COMPLETED:
-        wo.resolved_at = get_vn_naive_datetime()
+        wo.resolved_at = now
+        
+        # ── Fix: Cập nhật maintenance schedule khi work order hoàn thành ──
+        # Nếu work order được tạo từ 1 maintenance alert có schedule_id
+        # → Cập nhật next_inspection_at để lịch bảo trì tiếp theo là +interval_days
+        if wo.maintenance_schedule_id:
+            schedule = await db.get(MaintenanceSchedule, wo.maintenance_schedule_id)
+            if schedule and schedule.interval_days:
+                schedule.last_inspection_at = now
+                schedule.next_inspection_at = now + timedelta(days=schedule.interval_days)
+                print(f"[MAINTENANCE] Schedule #{schedule.id} updated: next inspection {schedule.next_inspection_at}")
+        
+        # ── Tự động acknowledge maintenance alert liên quan ──
+        # Tìm alert gắn với work order này (nếu có) và chuyển sang Acknowledged
+        if wo.alert_id:
+            alert = await db.get(MaintenanceAlert, wo.alert_id)
+            if alert and alert.status == "Pending":
+                alert.status = "Acknowledged"
+                alert.acknowledged_by = user.id
+                alert.acknowledged_at = now
+                print(f"[MAINTENANCE] Alert #{alert.id} acknowledged by technician {user.id}")
+    
     log = WorkOrderLog(
         work_order_id=wo.id,
         action="inspection_update",
         from_status=old_status,
         to_status=body.status.value,
         changed_by=user.id,
-        created_at=get_vn_naive_datetime(),
+        created_at=now,
     )
     db.add(log)
     await db.commit()
@@ -1602,6 +1797,19 @@ async def dispatch_drone(
         mission.start_time = now
     if not mission.departed_at:
         mission.departed_at = now
+    
+    # ── Set leg_destination_type: destination vs connection ──
+    # Nếu leg tiếp theo không phải leg cuối cùng → connection (relay hub)
+    # Nếu leg tiếp theo là leg cuối cùng → destination (đích cuối)
+    total_legs_res = await db.execute(
+        select(MissionLeg).where(MissionLeg.mission_id == mission.id)
+    )
+    total_legs = len(total_legs_res.scalars().all())
+    
+    if next_leg.sequence_no < total_legs:
+        mission.leg_destination_type = "connection"  # Bay đến relay hub
+    else:
+        mission.leg_destination_type = "destination"  # Bay đến destination cuối
     mission.handling_status = HandlingStatus.INCOMING
 
     # Nếu Order đang ở AT_HUB, chuyển sang IN_DELIVERY khi drone cất cánh
@@ -1882,3 +2090,325 @@ async def delete_hub_supply(
 
     await db.delete(supply)
     await db.commit()
+
+
+# ==================== SUPPLY REQUEST ENDPOINTS ====================
+
+@router.post("/supplies/requests", summary="Technician: Yêu cầu cấp phát vật tư")
+async def create_supply_request(
+    body: SupplyRequestCreate,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Technician gửi yêu cầu cấp phát vật tư."""
+    from datetime import datetime
+    from app.modules.fleet.models import SupplyRequest, SupplyRequestStatus
+    import json
+    
+    if not user.hub_id:
+        raise HTTPException(status_code=400, detail="Technician không có hub_id")
+    
+    now = datetime.utcnow()
+    items_json = json.dumps([item.dict() for item in body.items])
+    
+    supply_req = SupplyRequest(
+        technician_id=str(user.id),
+        hub_id=int(user.hub_id),
+        status=SupplyRequestStatus.PENDING,
+        items=items_json,
+        reason=body.reason,
+        requested_at=now
+    )
+    
+    db.add(supply_req)
+    await db.commit()
+    await db.refresh(supply_req)
+    
+    return {
+        "message": "Yêu cầu cấp phát vật tư đã được gửi",
+        "id": supply_req.id,
+        "status": supply_req.status.value
+    }
+
+
+@router.get("/supplies/requests", summary="Technician: Xem danh sách yêu cầu của mình")
+async def get_my_supply_requests(
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Technician xem danh sách yêu cầu cấp phát của mình."""
+    from sqlalchemy import select
+    from app.modules.fleet.models import SupplyRequest
+    
+    result = await db.execute(
+        select(SupplyRequest).where(SupplyRequest.technician_id == str(user.id)).order_by(SupplyRequest.requested_at.desc())
+    )
+    requests = result.scalars().all()
+    
+    return {
+        "total": len(requests),
+        "requests": [
+            {
+                "id": req.id,
+                "hub_id": req.hub_id,
+                "status": req.status.value if hasattr(req.status, "value") else req.status,
+                "items": req.items,
+                "reason": req.reason,
+                "requested_at": req.requested_at.isoformat() if req.requested_at else None,
+                "approved_at": req.approved_at.isoformat() if req.approved_at else None,
+                "received_at": req.received_at.isoformat() if req.received_at else None
+            }
+            for req in requests
+        ]
+    }
+
+
+@router.post("/admin/supplies/requests/{request_id}/approve", summary="Admin: Duyệt yêu cầu cấp phát")
+async def approve_supply_request(
+    request_id: int,
+    body: SupplyRequestApprove,
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Admin duyệt yêu cầu cấp phát vật tư."""
+    from datetime import datetime
+    from app.modules.fleet.models import SupplyRequest, SupplyRequestStatus
+    
+    supply_req = await db.get(SupplyRequest, request_id)
+    if not supply_req:
+        raise HTTPException(status_code=404, detail="Yêu cầu không tồn tại")
+    
+    if supply_req.status != SupplyRequestStatus.PENDING:
+        raise HTTPException(status_code=400, detail=f"Không thể duyệt yêu cầu có status: {supply_req.status.value}")
+    
+    supply_req.status = SupplyRequestStatus.APPROVED
+    supply_req.approved_at = datetime.utcnow()
+    supply_req.approved_by = str(user.id)
+    supply_req.admin_notes = body.admin_notes
+    
+    await db.commit()
+    await db.refresh(supply_req)
+    
+    return {
+        "message": "Yêu cầu đã được duyệt",
+        "id": supply_req.id,
+        "status": supply_req.status.value
+    }
+
+
+@router.post("/admin/supplies/requests/{request_id}/reject", summary="Admin: Từ chối yêu cầu cấp phát")
+async def reject_supply_request(
+    request_id: int,
+    body: SupplyRequestReject,
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Admin từ chối yêu cầu cấp phát vật tư."""
+    from datetime import datetime
+    from app.modules.fleet.models import SupplyRequest, SupplyRequestStatus
+    
+    supply_req = await db.get(SupplyRequest, request_id)
+    if not supply_req:
+        raise HTTPException(status_code=404, detail="Yêu cầu không tồn tại")
+    
+    if supply_req.status != SupplyRequestStatus.PENDING:
+        raise HTTPException(status_code=400, detail=f"Không thể từ chối yêu cầu có status: {supply_req.status.value}")
+    
+    supply_req.status = SupplyRequestStatus.REJECTED
+    supply_req.rejected_at = datetime.utcnow()
+    supply_req.rejected_by = str(user.id)
+    supply_req.admin_notes = body.admin_notes
+    
+    await db.commit()
+    await db.refresh(supply_req)
+    
+    return {
+        "message": "Yêu cầu đã bị từ chối",
+        "id": supply_req.id,
+        "status": supply_req.status.value
+    }
+
+
+@router.get("/admin/supplies/requests", summary="Admin: Xem tất cả yêu cầu cấp phát")
+async def list_all_supply_requests(
+    status: str = None,
+    hub_id: int = None,
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Admin xem tất cả yêu cầu cấp phát vật tư (có thể lọc theo status hoặc hub_id)."""
+    from sqlalchemy import select
+    from app.modules.fleet.models import SupplyRequest
+    
+    query = select(SupplyRequest)
+    
+    if status:
+        query = query.where(SupplyRequest.status == status)
+    if hub_id:
+        query = query.where(SupplyRequest.hub_id == hub_id)
+    
+    result = await db.execute(query.order_by(SupplyRequest.requested_at.desc()))
+    requests = result.scalars().all()
+    
+    return {
+        "total": len(requests),
+        "requests": [
+            {
+                "id": req.id,
+                "technician_id": req.technician_id,
+                "hub_id": req.hub_id,
+                "status": req.status.value if hasattr(req.status, "value") else req.status,
+                "items": req.items,
+                "reason": req.reason,
+                "requested_at": req.requested_at.isoformat() if req.requested_at else None,
+                "approved_at": req.approved_at.isoformat() if req.approved_at else None,
+                "approved_by": req.approved_by,
+                "rejected_at": req.rejected_at.isoformat() if req.rejected_at else None,
+                "rejected_by": req.rejected_by
+            }
+            for req in requests
+        ]
+    }
+
+
+@router.post("/supplies/requests/{request_id}/confirm-receipt", summary="Technician: Xác nhận nhập hàng")
+async def confirm_supply_receipt(
+    request_id: int,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Technician xác nhận đã nhập hàng vào hub + cập nhật hub_supplies."""
+    from datetime import datetime
+    from app.modules.fleet.models import SupplyRequest, SupplyRequestStatus, HubSupply
+    import json
+    
+    supply_req = await db.get(SupplyRequest, request_id)
+    if not supply_req:
+        raise HTTPException(status_code=404, detail="Yêu cầu không tồn tại")
+    
+    if supply_req.status != SupplyRequestStatus.APPROVED:
+        raise HTTPException(status_code=400, detail=f"Chỉ có thể confirm receipt khi status = Approved")
+    
+    # Parse items JSON
+    items_list = json.loads(supply_req.items)
+    
+    # Cập nhật hub_supplies
+    for item in items_list:
+        item_name = item.get("item_name")
+        quantity = item.get("quantity", 0)
+        
+        # Tìm supply hiện tại
+        from sqlalchemy import select
+        existing_supply = await db.execute(
+            select(HubSupply).where(
+                (HubSupply.hub_id == supply_req.hub_id) & 
+                (HubSupply.item_name == item_name)
+            )
+        )
+        existing_supply = existing_supply.scalar_one_or_none()
+        
+        if existing_supply:
+            # Tăng số lượng
+            existing_supply.quantity += quantity
+            existing_supply.updated_at = datetime.utcnow()
+        else:
+            # Tạo mới
+            new_supply = HubSupply(
+                hub_id=supply_req.hub_id,
+                item_name=item_name,
+                quantity=quantity,
+                unit=item.get("unit"),
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            db.add(new_supply)
+    
+    # Cập nhật supply request
+    supply_req.status = SupplyRequestStatus.RECEIVED
+    supply_req.received_at = datetime.utcnow()
+    supply_req.received_by = str(user.id)
+    
+    await db.commit()
+    await db.refresh(supply_req)
+    
+    return {
+        "message": "Nhập hàng thành công, hub_supplies đã được cập nhật",
+        "id": supply_req.id,
+        "status": supply_req.status.value
+    }
+
+
+@router.get("/supplies/requests/{request_id}/audit-trail", summary="Supply Request Audit Trail")
+async def get_supply_request_audit_trail(
+    request_id: int,
+    user: CurrentUser = Depends(allow_admin_or_operator),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Lấy audit trail của 1 supply request."""
+    from app.modules.fleet.models import SupplyRequest
+    import json
+    
+    supply_req = await db.get(SupplyRequest, request_id)
+    if not supply_req:
+        raise HTTPException(status_code=404, detail="Yêu cầu không tồn tại")
+    
+    # Build timeline
+    timeline = []
+    
+    if supply_req.requested_at:
+        timeline.append({
+            "timestamp": supply_req.requested_at,
+            "event": "Supply Request Created",
+            "status": supply_req.status.value if hasattr(supply_req.status, "value") else supply_req.status,
+            "items": json.loads(supply_req.items),
+            "reason": supply_req.reason,
+            "actor": "Technician",
+            "actor_id": supply_req.technician_id
+        })
+    
+    if supply_req.approved_at:
+        timeline.append({
+            "timestamp": supply_req.approved_at,
+            "event": "Supply Request Approved",
+            "status": supply_req.status.value if hasattr(supply_req.status, "value") else supply_req.status,
+            "admin_notes": supply_req.admin_notes,
+            "actor": "Admin",
+            "actor_id": supply_req.approved_by
+        })
+    
+    if supply_req.rejected_at:
+        timeline.append({
+            "timestamp": supply_req.rejected_at,
+            "event": "Supply Request Rejected",
+            "status": supply_req.status.value if hasattr(supply_req.status, "value") else supply_req.status,
+            "admin_notes": supply_req.admin_notes,
+            "actor": "Admin",
+            "actor_id": supply_req.rejected_by
+        })
+    
+    if supply_req.received_at:
+        timeline.append({
+            "timestamp": supply_req.received_at,
+            "event": "Supply Request Received & Hub Supplies Updated",
+            "status": supply_req.status.value if hasattr(supply_req.status, "value") else supply_req.status,
+            "items": json.loads(supply_req.items),
+            "actor": "Technician",
+            "actor_id": supply_req.received_by
+        })
+    
+    return {
+        "request_id": supply_req.id,
+        "technician_id": supply_req.technician_id,
+        "hub_id": supply_req.hub_id,
+        "current_status": supply_req.status.value if hasattr(supply_req.status, "value") else supply_req.status,
+        "timeline": timeline,
+        "summary": {
+            "total_events": len(timeline),
+            "first_event": timeline[0].get("timestamp") if timeline else None,
+            "last_event": timeline[-1].get("timestamp") if timeline else None,
+            "duration_days": (
+                (timeline[-1].get("timestamp") - timeline[0].get("timestamp")).days
+                if timeline and len(timeline) > 1 else None
+            )
+        }
+    }
