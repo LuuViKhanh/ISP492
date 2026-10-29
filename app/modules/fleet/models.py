@@ -1,6 +1,6 @@
 import enum
 from datetime import datetime
-from sqlalchemy import BigInteger, Integer, Float, String, Text, DateTime, Boolean, ForeignKey, Enum as SAEnum
+from sqlalchemy import BigInteger, Integer, Float, String, Text, DateTime, Boolean, ForeignKey, Enum as SAEnum, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.db import Base
 
@@ -245,65 +245,80 @@ class MaintenanceSchedule(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
-# ==================== SUPPLIES (Vật tư tại Hub) ====================
-class HubSupply(Base):
-    """Bảng quản lý vật tư tiêu hao (cánh quạt, thiết bị sửa chữa, ...) tại mỗi Hub.
+# ==================== PARTS MANAGEMENT (Quản lý vật tư - Parts) ====================
 
-    Theo dõi số lượng tồn kho theo loại vật tư tại từng hub —
-    KHÔNG định danh từng đơn vị vật tư (không serial number).
+class PartCategoryType(str, enum.Enum):
+    """Loại danh mục vật tư."""
+    PROPELLER = "Propeller"           # Cánh quạt
+    BATTERY = "Battery"               # Pin
+    MOTOR = "Motor"                   # Động cơ
+    FRAME = "Frame"                   # Khung
+    CAMERA = "Camera"                 # Camera
+    LANDING_GEAR = "Landing Gear"     # Bánh đạp
+    GIMBAL = "Gimbal"                 # Gimbal
+    CHARGER = "Charger"               # Sạc
+    MAINTENANCE_KIT = "Maintenance Kit"  # Bộ dụng cụ sửa chữa
+    OTHER = "Other"                   # Khác
 
-    Ví dụ:
-        Hub Quận 1:
-        - Cánh quạt DJI Matrice 100: 12 cái
-        - Cánh quạt Aurellia X6: 8 cái
-        - Bộ dụng cụ sửa chữa: 2 bộ
-    """
-    __tablename__ = "hub_supplies"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    hub_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("hubs.id"), nullable=True, index=True)
-    item_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    unit: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+class PartsRequestStatus(str, enum.Enum):
+    """Trạng thái yêu cầu vật tư từ Technician."""
+    PENDING = "Pending"                # Technician gửi yêu cầu, chờ Admin duyệt
+    APPROVED = "Approved"              # Admin duyệt, sắp xếp mua hàng
+    REJECTED = "Rejected"              # Admin từ chối
+    FULFILLED = "Fulfilled"            # Vật tư đã được nhập vào hub
+
+
+class PartCategory(Base):
+    """Danh mục loại vật tư - định nghĩa từng loại part (vd: Propeller DJI Matrice, Battery 5000mAh)."""
+    __tablename__ = "part_categories"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)  # vd: "DJI Matrice 100 Propeller"
+    category_type: Mapped[PartCategoryType] = mapped_column(
+        SAEnum(PartCategoryType, name="part_category_type_enum", create_type=False, values_callable=lambda x: [e.value for e in x]),
+        nullable=False
+    )
+    compatible_drone_models: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # vd: ["DJI Matrice 100", "Aurellia X6"]
+    unit_cost: Mapped[float | None] = mapped_column(Float, nullable=True)  # Giá per unit (VND)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class SupplyRequestStatus(str, enum.Enum):
-    """Trạng thái yêu cầu cấp phát vật tư."""
-    PENDING = "Pending"      # Technician gửi yêu cầu, chờ Admin duyệt
-    APPROVED = "Approved"    # Admin duyệt, sắp xếp mua hàng
-    REJECTED = "Rejected"    # Admin từ chối
-    RECEIVED = "Received"    # Technician nhập hàng vào hub
+class PartsRequest(Base):
+    """Yêu cầu cấp phát vật tư từ Technician - sử dụng PartCategory thay vì item_name."""
+    __tablename__ = "parts_requests"
 
-
-class SupplyRequest(Base):
-    """Bảng yêu cầu cấp phát vật tư từ Technician."""
-    __tablename__ = "supply_requests"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    technician_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    requested_by: Mapped[str] = mapped_column(String, nullable=False, index=True)  # Technician ID
     hub_id: Mapped[int] = mapped_column(Integer, ForeignKey("hubs.id"), nullable=False, index=True)
-    status: Mapped[SupplyRequestStatus] = mapped_column(
-        SAEnum(SupplyRequestStatus, name="supply_request_status", create_type=False, values_callable=lambda x: [e.value for e in x]),
+    drone_id: Mapped[str | None] = mapped_column(String(50), nullable=True)  # Drone that needs the part (optional)
+    part_category_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("part_categories.id"), nullable=False, index=True)
+    quantity_needed: Mapped[int] = mapped_column(Integer, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)  # Reason or additional details
+    photo_urls: Mapped[list | None] = mapped_column(JSON, nullable=True)  # Array of photo URLs
+    status: Mapped[PartsRequestStatus] = mapped_column(
+        SAEnum(PartsRequestStatus, name="parts_request_status_enum", create_type=False, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
-        default=SupplyRequestStatus.PENDING,
+        default=PartsRequestStatus.PENDING,
         index=True
     )
-    
-    # ── Items (JSON) ────────────────────────────────────────────────────
-    # Format: [{"item_name": "...", "quantity": 10, "unit": "cái"}, ...]
-    items: Mapped[str] = mapped_column(Text, nullable=False)  # JSON
-    
-    # ── Notes ────────────────────────────────────────────────────
-    reason: Mapped[str | None] = mapped_column(Text, nullable=True)  # Lý do yêu cầu
-    admin_notes: Mapped[str | None] = mapped_column(Text, nullable=True)  # Ghi chú từ Admin (lúc approve/reject)
-    
-    # ── Timestamps ────────────────────────────────────────────────────
-    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    approved_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    rejected_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    received_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String, nullable=True)  # Admin ID who reviewed
+    admin_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    actual_cost: Mapped[float | None] = mapped_column(Float, nullable=True)  # Actual cost when approved/fulfilled (VND)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class HubInventory(Base):
+    """Tồn kho vật tư tại mỗi Hub - số lượng theo PartCategory."""
+    __tablename__ = "hub_inventories"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    hub_id: Mapped[int] = mapped_column(Integer, ForeignKey("hubs.id"), nullable=False, index=True)
+    part_category_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("part_categories.id"), nullable=False, index=True)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # Số lượng hiện tại
+    min_stock_threshold: Mapped[int] = mapped_column(Integer, nullable=False, default=5)  # Mức tồn kho tối thiểu (alert nếu < mức này)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

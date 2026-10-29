@@ -13,7 +13,7 @@ from app.modules.auth.models import User
 from app.modules.fleet.models import (
     Drone, Battery, WorkOrder, WorkOrderStatus, batteries_status,
     MaintenanceRecord, MaintenanceInspectionItem, WorkOrderLog, MaintenanceAlert, MaintenanceSchedule,
-    HubSupply
+    PartCategory, PartsRequest, PartsRequestStatus, HubInventory, PartCategoryType
 )
 from app.modules.system.models import Hub
 from app.modules.fleet.schemas import WorkOrderCreate, WorkOrderUpdate, InspectionUpdate, WorkOrderResponse
@@ -23,8 +23,9 @@ from app.modules.fleet.technician.schemas import (
     WorkOrderLogResponse, MaintenanceAlertResponse,
     MaintenanceScheduleResponse, MaintenanceScheduleCreate,
     IncomingMissionResponse, BatteryResponse, BatteryUseRequest,
-    HubSupplyCreate, HubSupplyUpdate, HubSupplyResponse,
-    SupplyRequestCreate, SupplyRequestApprove, SupplyRequestReject, SupplyRequestConfirmReceipt
+    PartCategoryCreate, PartCategoryUpdate, PartCategoryResponse,
+    PartsRequestCreate, PartsRequestApprove, PartsRequestReject, PartsRequestResponse,
+    HubInventoryCreate, HubInventoryUpdate, HubInventoryResponse, HubInventoryDetailedResponse
 )
 from app.modules.missions.models import Mission, MissionStatus, HandlingStatus, Incident, IncidentStatus
 from app.core.config import settings
@@ -32,9 +33,11 @@ from app.core.config import settings
 router = APIRouter(prefix="/technician/fleet", tags=["Fleet"])
 
 allow_technician = RoleChecker([UserRole.TECHNICIAN, UserRole.ADMIN])
+allow_admin = RoleChecker([UserRole.ADMIN])
+allow_admin_or_operator = RoleChecker([UserRole.ADMIN, UserRole.OPERATOR])
 
 
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel
 
 
@@ -1929,486 +1932,608 @@ async def worker_battery_overdue_alerts(
     }
 
 
-# ── Hub Supplies (Quản lý vật tư tại Hub) ──────────────────────────────────────
+# ── Parts Management (Quản lý vật tư tại Hub) ──────────────────────────────────────
 #
-# Quản lý vật tư tiêu hao (cánh quạt, thiết bị sửa chữa, ...) theo số lượng tại mỗi Hub.
-# Không định danh từng đơn vị vật tư (không serial number) — chỉ theo dõi số lượng tồn kho.
+# Quản lý vật tư theo danh mục loại (PartCategory) và tồn kho tại mỗi Hub (HubInventory).
+# Yêu cầu cấp phát vật tư từ Technician (PartsRequest).
 #
 # Phân quyền:
-# - TECHNICIAN: chỉ quản lý vật tư tại Hub của mình (lọc theo user.hub_id).
-# - ADMIN: có thể quản lý vật tư tại mọi Hub (truyền hub_id qua body/query).
+# - TECHNICIAN: quản lý tồn kho tại Hub của mình, yêu cầu cấp phát vật tư.
+# - ADMIN: quản lý danh mục vật tư (PartCategory), duyệt yêu cầu cấp phát.
 
-@router.get("/supplies", response_model=list[HubSupplyResponse], summary="Danh sách vật tư tại Hub")
-async def list_hub_supplies(
-    hub_id: Optional[int] = None,
+# ==================== PART CATEGORY ENDPOINTS (Admin Only) ====================
+
+@router.get("/part-categories", response_model=List[PartCategoryResponse], summary="Lấy danh sách danh mục vật tư")
+async def list_part_categories(
+    is_active: Optional[bool] = None,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Lấy danh sách vật tư tại Hub.
-    - TECHNICIAN: tự động lọc theo Hub của technician (bỏ qua tham số hub_id).
-    - ADMIN: có thể truyền `?hub_id=` để lọc theo Hub cụ thể, không truyền thì trả tất cả.
+    Lấy danh sách danh mục vật tư (tất cả hoặc chỉ active).
+    - TECHNICIAN & ADMIN: có thể xem.
+    - Query param `is_active=true|false` để lọc.
     """
-    query = select(HubSupply).order_by(HubSupply.id)
+    query = select(PartCategory).order_by(PartCategory.id)
 
-    # TECHNICIAN chỉ xem vật tư tại Hub của mình
-    if user.role == UserRole.TECHNICIAN:
-        if not user.hub_id:
-            return []
-        query = query.where(HubSupply.hub_id == int(user.hub_id))
-    elif hub_id is not None:
-        # ADMIN có thể lọc theo hub_id
-        query = query.where(HubSupply.hub_id == hub_id)
+    if is_active is not None:
+        query = query.where(PartCategory.is_active == is_active)
 
     result = await db.execute(query)
     return result.scalars().all()
 
 
-@router.post("/supplies", response_model=HubSupplyResponse, status_code=201, summary="Thêm vật tư vào Hub")
-async def create_hub_supply(
-    body: HubSupplyCreate,
+@router.get("/part-categories/{category_id}", response_model=PartCategoryResponse, summary="Lấy chi tiết danh mục vật tư")
+async def get_part_category(
+    category_id: int,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Lấy chi tiết danh mục vật tư theo ID."""
+    category = await db.get(PartCategory, category_id)
+    if not category:
+        raise HTTPException(status_code=404, detail="Part category not found")
+    return category
+
+
+@router.post("/part-categories", response_model=PartCategoryResponse, status_code=201, summary="Tạo danh mục vật tư")
+async def create_part_category(
+    body: PartCategoryCreate,
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    ADMIN ONLY: Tạo danh mục vật tư mới.
+    """
+    now = get_vn_naive_datetime()
+    
+    # Check if name already exists
+    existing = await db.execute(
+        select(PartCategory).where(PartCategory.name == body.name)
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Part category name already exists")
+
+    category = PartCategory(
+        name=body.name,
+        category_type=body.category_type,
+        compatible_drone_models=body.compatible_drone_models,
+        unit_cost=body.unit_cost,
+        description=body.description,
+        is_active=body.is_active,
+        created_at=now,
+    )
+    db.add(category)
+    await db.commit()
+    await db.refresh(category)
+    return category
+
+
+@router.put("/part-categories/{category_id}", response_model=PartCategoryResponse, summary="Cập nhật danh mục vật tư")
+async def update_part_category(
+    category_id: int,
+    body: PartCategoryUpdate,
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    ADMIN ONLY: Cập nhật danh mục vật tư (partial update).
+    """
+    category = await db.get(PartCategory, category_id)
+    if not category:
+        raise HTTPException(status_code=404, detail="Part category not found")
+
+    # Check name uniqueness if updating
+    if body.name is not None and body.name != category.name:
+        existing = await db.execute(
+            select(PartCategory).where(PartCategory.name == body.name)
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Part category name already exists")
+        category.name = body.name
+
+    if body.category_type is not None:
+        category.category_type = body.category_type
+    if body.compatible_drone_models is not None:
+        category.compatible_drone_models = body.compatible_drone_models
+    if body.unit_cost is not None:
+        category.unit_cost = body.unit_cost
+    if body.description is not None:
+        category.description = body.description
+    if body.is_active is not None:
+        category.is_active = body.is_active
+
+    await db.commit()
+    await db.refresh(category)
+    return category
+
+
+@router.delete("/part-categories/{category_id}", status_code=204, summary="Xóa danh mục vật tư")
+async def delete_part_category(
+    category_id: int,
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    ADMIN ONLY: Xóa danh mục vật tư (thường là soft delete bằng set is_active=False).
+    Hard delete nếu chưa có parts request nào liên quan.
+    """
+    category = await db.get(PartCategory, category_id)
+    if not category:
+        raise HTTPException(status_code=404, detail="Part category not found")
+
+    # Check if there are related parts requests
+    related_requests = await db.execute(
+        select(PartsRequest).where(PartsRequest.part_category_id == category_id).limit(1)
+    )
+    if related_requests.scalar_one_or_none():
+        # Soft delete: set is_active = False
+        category.is_active = False
+        await db.commit()
+    else:
+        # Hard delete if no related requests
+        await db.delete(category)
+        await db.commit()
+
+
+# ==================== HUB INVENTORY ENDPOINTS ====================
+
+@router.get("/hub-inventories", response_model=List[HubInventoryResponse], summary="Lấy danh sách tồn kho vật tư tại Hub")
+async def list_hub_inventories(
+    hub_id: Optional[int] = None,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Tạo bản ghi vật tư mới tại Hub.
-    - TECHNICIAN: hub_id tự động lấy từ user.hub_id (bỏ qua body.hub_id).
-    - ADMIN: dùng body.hub_id để chỉ định Hub.
+    Lấy danh sách tồn kho vật tư tại Hub.
+    - TECHNICIAN: tự động lọc theo Hub của technician (bỏ qua tham số hub_id).
+    - ADMIN: có thể truyền `?hub_id=` để lọc theo Hub cụ thể, không truyền thì trả tất cả.
+    """
+    query = select(HubInventory).order_by(HubInventory.id)
+
+    # TECHNICIAN chỉ xem tồn kho tại Hub của mình
+    if user.role == UserRole.TECHNICIAN:
+        if not user.hub_id:
+            return []
+        query = query.where(HubInventory.hub_id == int(user.hub_id))
+    elif hub_id is not None:
+        # ADMIN có thể lọc theo hub_id
+        query = query.where(HubInventory.hub_id == hub_id)
+
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+@router.get("/hub-inventories/{inventory_id}", response_model=HubInventoryDetailedResponse, summary="Lấy chi tiết tồn kho")
+async def get_hub_inventory(
+    inventory_id: int,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Lấy chi tiết tồn kho vật tư (bao gồm thông tin loại vật tư).
+    - TECHNICIAN: chỉ xem tồn kho tại Hub của mình.
+    """
+    inventory = await db.get(HubInventory, inventory_id)
+    if not inventory:
+        raise HTTPException(status_code=404, detail="Hub inventory not found")
+
+    # Check permission
+    if user.role == UserRole.TECHNICIAN:
+        if not user.hub_id or inventory.hub_id != int(user.hub_id):
+            raise HTTPException(status_code=403, detail="Tồn kho không thuộc Hub của bạn")
+
+    # Get part category
+    part_category = await db.get(PartCategory, inventory.part_category_id)
+    if not part_category:
+        raise HTTPException(status_code=404, detail="Part category not found")
+
+    return {
+        "id": inventory.id,
+        "hub_id": inventory.hub_id,
+        "part_category": part_category,
+        "quantity": inventory.quantity,
+        "min_stock_threshold": inventory.min_stock_threshold,
+        "is_low_stock": inventory.quantity < inventory.min_stock_threshold,
+        "updated_at": inventory.updated_at,
+    }
+
+
+@router.post("/hub-inventories", response_model=HubInventoryResponse, status_code=201, summary="Tạo tồn kho vật tư")
+async def create_hub_inventory(
+    body: HubInventoryCreate,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Tạo bản ghi tồn kho vật tư mới tại Hub.
+    - TECHNICIAN: hub_id tự động lấy từ user.hub_id.
+    - ADMIN: có thể tạo cho hub bất kỳ (nếu truyền hub_id trong headers hoặc gán qua admin interface khác).
     """
     now = get_vn_naive_datetime()
 
-    # TECHNICIAN chỉ thêm vật tư vào Hub của mình
+    # TECHNICIAN: tự động sử dụng hub của mình
     if user.role == UserRole.TECHNICIAN:
         if not user.hub_id:
-            raise HTTPException(status_code=400, detail="Technician chưa được gán Hub nào.")
+            raise HTTPException(status_code=400, detail="Technician chưa được gán Hub nào")
         target_hub_id = int(user.hub_id)
     else:
-        if not body.hub_id:
-            raise HTTPException(status_code=400, detail="hub_id là bắt buộc khi Admin tạo vật tư.")
-        target_hub_id = body.hub_id
+        # ADMIN: có thể được gán hub nào đó thông qua request context hoặc default
+        target_hub_id = user.hub_id if (user.hub_id and str(user.hub_id).isdigit()) else None
+        if not target_hub_id:
+            raise HTTPException(status_code=400, detail="Hub ID không được xác định")
 
-    # Kiểm tra Hub tồn tại
+    # Verify hub exists
     hub = await db.get(Hub, target_hub_id)
     if not hub:
-        raise HTTPException(status_code=404, detail=f"Hub #{target_hub_id} không tồn tại.")
+        raise HTTPException(status_code=404, detail=f"Hub #{target_hub_id} không tồn tại")
 
-    supply = HubSupply(
+    # Verify part category exists
+    part_category = await db.get(PartCategory, body.part_category_id)
+    if not part_category:
+        raise HTTPException(status_code=404, detail=f"Part category #{body.part_category_id} không tồn tại")
+
+    # Check if inventory already exists for this hub + part
+    existing = await db.execute(
+        select(HubInventory).where(
+            (HubInventory.hub_id == target_hub_id) &
+            (HubInventory.part_category_id == body.part_category_id)
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tồn kho này đã tồn tại cho Hub #{target_hub_id} và Part Category #{body.part_category_id}"
+        )
+
+    inventory = HubInventory(
         hub_id=target_hub_id,
-        item_name=body.item_name,
+        part_category_id=body.part_category_id,
         quantity=body.quantity,
-        unit=body.unit,
-        created_at=now,
+        min_stock_threshold=body.min_stock_threshold,
         updated_at=now,
     )
-    db.add(supply)
+    db.add(inventory)
     await db.commit()
-    await db.refresh(supply)
-    return supply
+    await db.refresh(inventory)
+    return inventory
 
 
-@router.put("/supplies/{supply_id}", response_model=HubSupplyResponse, summary="Cập nhật vật tư")
-async def update_hub_supply(
-    supply_id: int,
-    body: HubSupplyUpdate,
+@router.put("/hub-inventories/{inventory_id}", response_model=HubInventoryResponse, summary="Cập nhật tồn kho")
+async def update_hub_inventory(
+    inventory_id: int,
+    body: HubInventoryUpdate,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Cập nhật thông tin vật tư (item_name, quantity, unit).
-    - TECHNICIAN: chỉ cập nhật vật tư tại Hub của mình.
+    Cập nhật tồn kho vật tư (quantity, min_stock_threshold).
+    - TECHNICIAN: chỉ cập nhật tồn kho tại Hub của mình.
     - ADMIN: cập nhật bất kỳ.
     """
-    supply = await db.get(HubSupply, supply_id)
-    if not supply:
-        raise HTTPException(status_code=404, detail="Supply not found")
+    inventory = await db.get(HubInventory, inventory_id)
+    if not inventory:
+        raise HTTPException(status_code=404, detail="Hub inventory not found")
 
-    # TECHNICIAN chỉ sửa vật tư tại Hub của mình
+    # Permission check
     if user.role == UserRole.TECHNICIAN:
-        if not user.hub_id or supply.hub_id != int(user.hub_id):
-            raise HTTPException(status_code=403, detail="Vật tư không thuộc Hub của bạn.")
+        if not user.hub_id or inventory.hub_id != int(user.hub_id):
+            raise HTTPException(status_code=403, detail="Tồn kho không thuộc Hub của bạn")
 
-    if body.item_name is not None:
-        supply.item_name = body.item_name
     if body.quantity is not None:
-        supply.quantity = body.quantity
-    if body.unit is not None:
-        supply.unit = body.unit
-    supply.updated_at = get_vn_naive_datetime()
+        inventory.quantity = body.quantity
+    if body.min_stock_threshold is not None:
+        inventory.min_stock_threshold = body.min_stock_threshold
 
+    inventory.updated_at = get_vn_naive_datetime()
     await db.commit()
-    await db.refresh(supply)
-    return supply
+    await db.refresh(inventory)
+    return inventory
 
 
-@router.patch("/supplies/{supply_id}/adjust", response_model=HubSupplyResponse, summary="Điều chỉnh số lượng vật tư (tăng/giảm)")
-async def adjust_hub_supply_quantity(
-    supply_id: int,
+@router.patch("/hub-inventories/{inventory_id}/adjust", response_model=HubInventoryResponse, summary="Điều chỉnh số lượng tồn kho")
+async def adjust_hub_inventory_quantity(
+    inventory_id: int,
     delta: int,
+    reason: Optional[str] = None,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Điều chỉnh số lượng vật tư theo delta (có thể âm để trừ tồn kho).
-    Vd: PATCH /supplies/1/adjust?delta=-2 → trừ 2 cái khỏi tồn kho.
+    Điều chỉnh số lượng tồn kho theo delta (có thể âm để trừ tồn kho).
+    VD: PATCH /hub-inventories/1/adjust?delta=-2&reason=used_for_repair
+    
+    - delta: số lượng thay đổi (âm để trừ, dương để cộng)
+    - reason: lý do điều chỉnh (optional, vd: "used_for_repair", "inventory_correction")
     """
-    supply = await db.get(HubSupply, supply_id)
-    if not supply:
-        raise HTTPException(status_code=404, detail="Supply not found")
+    inventory = await db.get(HubInventory, inventory_id)
+    if not inventory:
+        raise HTTPException(status_code=404, detail="Hub inventory not found")
 
+    # Permission check
     if user.role == UserRole.TECHNICIAN:
-        if not user.hub_id or supply.hub_id != int(user.hub_id):
-            raise HTTPException(status_code=403, detail="Vật tư không thuộc Hub của bạn.")
+        if not user.hub_id or inventory.hub_id != int(user.hub_id):
+            raise HTTPException(status_code=403, detail="Tồn kho không thuộc Hub của bạn")
 
-    new_qty = (supply.quantity or 0) + delta
+    new_qty = inventory.quantity + delta
     if new_qty < 0:
         raise HTTPException(
             status_code=400,
-            detail=f"Số lượng điều chỉnh không hợp lệ: {supply.quantity} + ({delta}) = {new_qty} < 0."
+            detail=f"Số lượng điều chỉnh không hợp lệ: {inventory.quantity} + ({delta}) = {new_qty} < 0"
         )
-    supply.quantity = new_qty
-    supply.updated_at = get_vn_naive_datetime()
+
+    inventory.quantity = new_qty
+    inventory.updated_at = get_vn_naive_datetime()
 
     await db.commit()
-    await db.refresh(supply)
-    return supply
+    await db.refresh(inventory)
+    return inventory
 
 
-@router.delete("/supplies/{supply_id}", status_code=204, summary="Xóa vật tư khỏi Hub")
-async def delete_hub_supply(
-    supply_id: int,
+@router.delete("/hub-inventories/{inventory_id}", status_code=204, summary="Xóa tồn kho")
+async def delete_hub_inventory(
+    inventory_id: int,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Xóa bản ghi vật tư (thường dùng khi loại vật tư không còn sử dụng)."""
-    supply = await db.get(HubSupply, supply_id)
-    if not supply:
-        raise HTTPException(status_code=404, detail="Supply not found")
+    """
+    Xóa bản ghi tồn kho (thường khi loại vật tư không còn sử dụng tại hub này).
+    - TECHNICIAN: chỉ xóa tồn kho tại Hub của mình.
+    - ADMIN: xóa bất kỳ.
+    """
+    inventory = await db.get(HubInventory, inventory_id)
+    if not inventory:
+        raise HTTPException(status_code=404, detail="Hub inventory not found")
 
+    # Permission check
     if user.role == UserRole.TECHNICIAN:
-        if not user.hub_id or supply.hub_id != int(user.hub_id):
-            raise HTTPException(status_code=403, detail="Vật tư không thuộc Hub của bạn.")
+        if not user.hub_id or inventory.hub_id != int(user.hub_id):
+            raise HTTPException(status_code=403, detail="Tồn kho không thuộc Hub của bạn")
 
-    await db.delete(supply)
+    await db.delete(inventory)
     await db.commit()
 
 
-# ==================== SUPPLY REQUEST ENDPOINTS ====================
+# ==================== PARTS REQUEST ENDPOINTS ====================
 
-@router.post("/supplies/requests", summary="Technician: Yêu cầu cấp phát vật tư")
-async def create_supply_request(
-    body: SupplyRequestCreate,
+@router.post("/parts-requests", response_model=PartsRequestResponse, status_code=201, summary="Technician: Yêu cầu cấp phát vật tư")
+async def create_parts_request(
+    body: PartsRequestCreate,
     user: CurrentUser = Depends(allow_technician),
-    db: AsyncSession = Depends(get_async_db)
+    db: AsyncSession = Depends(get_async_db),
 ):
-    """Technician gửi yêu cầu cấp phát vật tư."""
-    from datetime import datetime
-    from app.modules.fleet.models import SupplyRequest, SupplyRequestStatus
-    import json
-    
+    """
+    Technician gửi yêu cầu cấp phát vật tư.
+    - Tự động lấy technician_id từ user.id.
+    - Tự động lấy hub_id từ user.hub_id.
+    """
     if not user.hub_id:
-        raise HTTPException(status_code=400, detail="Technician không có hub_id")
-    
-    now = datetime.utcnow()
-    items_json = json.dumps([item.dict() for item in body.items])
-    
-    supply_req = SupplyRequest(
-        technician_id=str(user.id),
+        raise HTTPException(status_code=400, detail="Technician chưa được gán Hub nào")
+
+    # Verify part category exists
+    part_category = await db.get(PartCategory, body.part_category_id)
+    if not part_category:
+        raise HTTPException(status_code=404, detail=f"Part category #{body.part_category_id} không tồn tại")
+
+    now = get_vn_naive_datetime()
+
+    parts_request = PartsRequest(
+        requested_by=str(user.id),
         hub_id=int(user.hub_id),
-        status=SupplyRequestStatus.PENDING,
-        items=items_json,
-        reason=body.reason,
-        requested_at=now
+        drone_id=body.drone_id,
+        part_category_id=body.part_category_id,
+        quantity_needed=body.quantity_needed,
+        description=body.description,
+        photo_urls=body.photo_urls,
+        status=PartsRequestStatus.PENDING,
+        created_at=now,
     )
-    
-    db.add(supply_req)
+    db.add(parts_request)
     await db.commit()
-    await db.refresh(supply_req)
-    
-    return {
-        "message": "Yêu cầu cấp phát vật tư đã được gửi",
-        "id": supply_req.id,
-        "status": supply_req.status.value
-    }
+    await db.refresh(parts_request)
+    return parts_request
 
 
-@router.get("/supplies/requests", summary="Technician: Xem danh sách yêu cầu của mình")
-async def get_my_supply_requests(
+@router.get("/parts-requests/my", response_model=List[PartsRequestResponse], summary="Technician: Xem yêu cầu của mình")
+async def get_my_parts_requests(
+    status: Optional[str] = None,
     user: CurrentUser = Depends(allow_technician),
-    db: AsyncSession = Depends(get_async_db)
+    db: AsyncSession = Depends(get_async_db),
 ):
-    """Technician xem danh sách yêu cầu cấp phát của mình."""
-    from sqlalchemy import select
-    from app.modules.fleet.models import SupplyRequest
-    
-    result = await db.execute(
-        select(SupplyRequest).where(SupplyRequest.technician_id == str(user.id)).order_by(SupplyRequest.requested_at.desc())
+    """
+    Technician xem danh sách yêu cầu cấp phát của mình.
+    - Query param `status=pending|approved|rejected|fulfilled` để lọc.
+    """
+    query = (
+        select(PartsRequest)
+        .where(PartsRequest.requested_by == str(user.id))
+        .order_by(PartsRequest.created_at.desc())
     )
-    requests = result.scalars().all()
-    
-    return {
-        "total": len(requests),
-        "requests": [
-            {
-                "id": req.id,
-                "hub_id": req.hub_id,
-                "status": req.status.value if hasattr(req.status, "value") else req.status,
-                "items": req.items,
-                "reason": req.reason,
-                "requested_at": req.requested_at.isoformat() if req.requested_at else None,
-                "approved_at": req.approved_at.isoformat() if req.approved_at else None,
-                "received_at": req.received_at.isoformat() if req.received_at else None
-            }
-            for req in requests
-        ]
-    }
 
-
-@router.post("/admin/supplies/requests/{request_id}/approve", summary="Admin: Duyệt yêu cầu cấp phát")
-async def approve_supply_request(
-    request_id: int,
-    body: SupplyRequestApprove,
-    user: CurrentUser = Depends(allow_admin),
-    db: AsyncSession = Depends(get_async_db)
-):
-    """Admin duyệt yêu cầu cấp phát vật tư."""
-    from datetime import datetime
-    from app.modules.fleet.models import SupplyRequest, SupplyRequestStatus
-    
-    supply_req = await db.get(SupplyRequest, request_id)
-    if not supply_req:
-        raise HTTPException(status_code=404, detail="Yêu cầu không tồn tại")
-    
-    if supply_req.status != SupplyRequestStatus.PENDING:
-        raise HTTPException(status_code=400, detail=f"Không thể duyệt yêu cầu có status: {supply_req.status.value}")
-    
-    supply_req.status = SupplyRequestStatus.APPROVED
-    supply_req.approved_at = datetime.utcnow()
-    supply_req.approved_by = str(user.id)
-    supply_req.admin_notes = body.admin_notes
-    
-    await db.commit()
-    await db.refresh(supply_req)
-    
-    return {
-        "message": "Yêu cầu đã được duyệt",
-        "id": supply_req.id,
-        "status": supply_req.status.value
-    }
-
-
-@router.post("/admin/supplies/requests/{request_id}/reject", summary="Admin: Từ chối yêu cầu cấp phát")
-async def reject_supply_request(
-    request_id: int,
-    body: SupplyRequestReject,
-    user: CurrentUser = Depends(allow_admin),
-    db: AsyncSession = Depends(get_async_db)
-):
-    """Admin từ chối yêu cầu cấp phát vật tư."""
-    from datetime import datetime
-    from app.modules.fleet.models import SupplyRequest, SupplyRequestStatus
-    
-    supply_req = await db.get(SupplyRequest, request_id)
-    if not supply_req:
-        raise HTTPException(status_code=404, detail="Yêu cầu không tồn tại")
-    
-    if supply_req.status != SupplyRequestStatus.PENDING:
-        raise HTTPException(status_code=400, detail=f"Không thể từ chối yêu cầu có status: {supply_req.status.value}")
-    
-    supply_req.status = SupplyRequestStatus.REJECTED
-    supply_req.rejected_at = datetime.utcnow()
-    supply_req.rejected_by = str(user.id)
-    supply_req.admin_notes = body.admin_notes
-    
-    await db.commit()
-    await db.refresh(supply_req)
-    
-    return {
-        "message": "Yêu cầu đã bị từ chối",
-        "id": supply_req.id,
-        "status": supply_req.status.value
-    }
-
-
-@router.get("/admin/supplies/requests", summary="Admin: Xem tất cả yêu cầu cấp phát")
-async def list_all_supply_requests(
-    status: str = None,
-    hub_id: int = None,
-    user: CurrentUser = Depends(allow_admin),
-    db: AsyncSession = Depends(get_async_db)
-):
-    """Admin xem tất cả yêu cầu cấp phát vật tư (có thể lọc theo status hoặc hub_id)."""
-    from sqlalchemy import select
-    from app.modules.fleet.models import SupplyRequest
-    
-    query = select(SupplyRequest)
-    
     if status:
-        query = query.where(SupplyRequest.status == status)
-    if hub_id:
-        query = query.where(SupplyRequest.hub_id == hub_id)
-    
-    result = await db.execute(query.order_by(SupplyRequest.requested_at.desc()))
-    requests = result.scalars().all()
-    
-    return {
-        "total": len(requests),
-        "requests": [
-            {
-                "id": req.id,
-                "technician_id": req.technician_id,
-                "hub_id": req.hub_id,
-                "status": req.status.value if hasattr(req.status, "value") else req.status,
-                "items": req.items,
-                "reason": req.reason,
-                "requested_at": req.requested_at.isoformat() if req.requested_at else None,
-                "approved_at": req.approved_at.isoformat() if req.approved_at else None,
-                "approved_by": req.approved_by,
-                "rejected_at": req.rejected_at.isoformat() if req.rejected_at else None,
-                "rejected_by": req.rejected_by
-            }
-            for req in requests
-        ]
-    }
+        try:
+            status_enum = PartsRequestStatus(status)
+            query = query.where(PartsRequest.status == status_enum)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
+
+    result = await db.execute(query)
+    return result.scalars().all()
 
 
-@router.post("/supplies/requests/{request_id}/confirm-receipt", summary="Technician: Xác nhận nhập hàng")
-async def confirm_supply_receipt(
+@router.get("/parts-requests", response_model=List[PartsRequestResponse], summary="Admin: Xem tất cả yêu cầu cấp phát")
+async def list_all_parts_requests(
+    hub_id: Optional[int] = None,
+    status: Optional[str] = None,
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    ADMIN ONLY: Xem tất cả yêu cầu cấp phát vật tư (có thể lọc theo hub_id hoặc status).
+    """
+    query = select(PartsRequest).order_by(PartsRequest.created_at.desc())
+
+    if hub_id is not None:
+        query = query.where(PartsRequest.hub_id == hub_id)
+
+    if status:
+        try:
+            status_enum = PartsRequestStatus(status)
+            query = query.where(PartsRequest.status == status_enum)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
+
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+@router.get("/parts-requests/{request_id}", response_model=PartsRequestResponse, summary="Lấy chi tiết yêu cầu cấp phát")
+async def get_parts_request(
     request_id: int,
     user: CurrentUser = Depends(allow_technician),
-    db: AsyncSession = Depends(get_async_db)
+    db: AsyncSession = Depends(get_async_db),
 ):
-    """Technician xác nhận đã nhập hàng vào hub + cập nhật hub_supplies."""
-    from datetime import datetime
-    from app.modules.fleet.models import SupplyRequest, SupplyRequestStatus, HubSupply
-    import json
-    
-    supply_req = await db.get(SupplyRequest, request_id)
-    if not supply_req:
-        raise HTTPException(status_code=404, detail="Yêu cầu không tồn tại")
-    
-    if supply_req.status != SupplyRequestStatus.APPROVED:
-        raise HTTPException(status_code=400, detail=f"Chỉ có thể confirm receipt khi status = Approved")
-    
-    # Parse items JSON
-    items_list = json.loads(supply_req.items)
-    
-    # Cập nhật hub_supplies
-    for item in items_list:
-        item_name = item.get("item_name")
-        quantity = item.get("quantity", 0)
-        
-        # Tìm supply hiện tại
-        from sqlalchemy import select
-        existing_supply = await db.execute(
-            select(HubSupply).where(
-                (HubSupply.hub_id == supply_req.hub_id) & 
-                (HubSupply.item_name == item_name)
-            )
-        )
-        existing_supply = existing_supply.scalar_one_or_none()
-        
-        if existing_supply:
-            # Tăng số lượng
-            existing_supply.quantity += quantity
-            existing_supply.updated_at = datetime.utcnow()
-        else:
-            # Tạo mới
-            new_supply = HubSupply(
-                hub_id=supply_req.hub_id,
-                item_name=item_name,
-                quantity=quantity,
-                unit=item.get("unit"),
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
-            )
-            db.add(new_supply)
-    
-    # Cập nhật supply request
-    supply_req.status = SupplyRequestStatus.RECEIVED
-    supply_req.received_at = datetime.utcnow()
-    supply_req.received_by = str(user.id)
-    
-    await db.commit()
-    await db.refresh(supply_req)
-    
-    return {
-        "message": "Nhập hàng thành công, hub_supplies đã được cập nhật",
-        "id": supply_req.id,
-        "status": supply_req.status.value
-    }
+    """Lấy chi tiết yêu cầu cấp phát (technician chỉ xem của mình, admin xem tất cả)."""
+    parts_request = await db.get(PartsRequest, request_id)
+    if not parts_request:
+        raise HTTPException(status_code=404, detail="Parts request not found")
+
+    # Permission check
+    if user.role == UserRole.TECHNICIAN:
+        if str(parts_request.requested_by) != str(user.id):
+            raise HTTPException(status_code=403, detail="Bạn không có quyền xem yêu cầu này")
+
+    return parts_request
 
 
-@router.get("/supplies/requests/{request_id}/audit-trail", summary="Supply Request Audit Trail")
-async def get_supply_request_audit_trail(
+@router.post("/parts-requests/{request_id}/approve", response_model=PartsRequestResponse, summary="Admin: Duyệt yêu cầu cấp phát")
+async def approve_parts_request(
     request_id: int,
-    user: CurrentUser = Depends(allow_admin_or_operator),
-    db: AsyncSession = Depends(get_async_db)
+    body: PartsRequestApprove,
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db),
 ):
-    """Lấy audit trail của 1 supply request."""
-    from app.modules.fleet.models import SupplyRequest
-    import json
-    
-    supply_req = await db.get(SupplyRequest, request_id)
-    if not supply_req:
-        raise HTTPException(status_code=404, detail="Yêu cầu không tồn tại")
-    
-    # Build timeline
-    timeline = []
-    
-    if supply_req.requested_at:
-        timeline.append({
-            "timestamp": supply_req.requested_at,
-            "event": "Supply Request Created",
-            "status": supply_req.status.value if hasattr(supply_req.status, "value") else supply_req.status,
-            "items": json.loads(supply_req.items),
-            "reason": supply_req.reason,
-            "actor": "Technician",
-            "actor_id": supply_req.technician_id
-        })
-    
-    if supply_req.approved_at:
-        timeline.append({
-            "timestamp": supply_req.approved_at,
-            "event": "Supply Request Approved",
-            "status": supply_req.status.value if hasattr(supply_req.status, "value") else supply_req.status,
-            "admin_notes": supply_req.admin_notes,
-            "actor": "Admin",
-            "actor_id": supply_req.approved_by
-        })
-    
-    if supply_req.rejected_at:
-        timeline.append({
-            "timestamp": supply_req.rejected_at,
-            "event": "Supply Request Rejected",
-            "status": supply_req.status.value if hasattr(supply_req.status, "value") else supply_req.status,
-            "admin_notes": supply_req.admin_notes,
-            "actor": "Admin",
-            "actor_id": supply_req.rejected_by
-        })
-    
-    if supply_req.received_at:
-        timeline.append({
-            "timestamp": supply_req.received_at,
-            "event": "Supply Request Received & Hub Supplies Updated",
-            "status": supply_req.status.value if hasattr(supply_req.status, "value") else supply_req.status,
-            "items": json.loads(supply_req.items),
-            "actor": "Technician",
-            "actor_id": supply_req.received_by
-        })
-    
-    return {
-        "request_id": supply_req.id,
-        "technician_id": supply_req.technician_id,
-        "hub_id": supply_req.hub_id,
-        "current_status": supply_req.status.value if hasattr(supply_req.status, "value") else supply_req.status,
-        "timeline": timeline,
-        "summary": {
-            "total_events": len(timeline),
-            "first_event": timeline[0].get("timestamp") if timeline else None,
-            "last_event": timeline[-1].get("timestamp") if timeline else None,
-            "duration_days": (
-                (timeline[-1].get("timestamp") - timeline[0].get("timestamp")).days
-                if timeline and len(timeline) > 1 else None
-            )
-        }
-    }
+    """
+    ADMIN ONLY: Duyệt yêu cầu cấp phát vật tư.
+    - Chuyển status từ PENDING → APPROVED.
+    - Lưu reviewed_by, admin_note, reviewed_at, actual_cost.
+    """
+    parts_request = await db.get(PartsRequest, request_id)
+    if not parts_request:
+        raise HTTPException(status_code=404, detail="Parts request not found")
+
+    if parts_request.status != PartsRequestStatus.PENDING:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Chỉ có thể duyệt yêu cầu ở trạng thái PENDING, hiện tại là {parts_request.status.value}"
+        )
+
+    now = get_vn_naive_datetime()
+    parts_request.status = PartsRequestStatus.APPROVED
+    parts_request.reviewed_by = str(user.id)
+    parts_request.admin_note = body.admin_note
+    parts_request.reviewed_at = now
+
+    # Calculate actual cost if available
+    part_category = await db.get(PartCategory, parts_request.part_category_id)
+    if part_category and part_category.unit_cost:
+        parts_request.actual_cost = part_category.unit_cost * parts_request.quantity_needed
+
+    await db.commit()
+    await db.refresh(parts_request)
+    return parts_request
+
+
+@router.post("/parts-requests/{request_id}/reject", response_model=PartsRequestResponse, summary="Admin: Từ chối yêu cầu cấp phát")
+async def reject_parts_request(
+    request_id: int,
+    body: PartsRequestReject,
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    ADMIN ONLY: Từ chối yêu cầu cấp phát vật tư.
+    - Chuyển status từ PENDING → REJECTED.
+    - Lưu reviewed_by, admin_note, reviewed_at.
+    """
+    parts_request = await db.get(PartsRequest, request_id)
+    if not parts_request:
+        raise HTTPException(status_code=404, detail="Parts request not found")
+
+    if parts_request.status != PartsRequestStatus.PENDING:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Chỉ có thể từ chối yêu cầu ở trạng thái PENDING, hiện tại là {parts_request.status.value}"
+        )
+
+    now = get_vn_naive_datetime()
+    parts_request.status = PartsRequestStatus.REJECTED
+    parts_request.reviewed_by = str(user.id)
+    parts_request.admin_note = body.admin_note
+    parts_request.reviewed_at = now
+
+    await db.commit()
+    await db.refresh(parts_request)
+    return parts_request
+
+
+@router.post("/parts-requests/{request_id}/fulfill", response_model=PartsRequestResponse, summary="Admin/Technician: Xác nhận nhập hàng & cập nhật tồn kho")
+async def fulfill_parts_request(
+    request_id: int,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Xác nhận nhập hàng & tự động cập nhật tồn kho HubInventory.
+    - ADMIN hoặc TECHNICIAN (tại hub của mình) có thể fulfill.
+    - Chuyển status từ APPROVED → FULFILLED.
+    - Tự động tăng quantity trong HubInventory tương ứng.
+    """
+    parts_request = await db.get(PartsRequest, request_id)
+    if not parts_request:
+        raise HTTPException(status_code=404, detail="Parts request not found")
+
+    if parts_request.status != PartsRequestStatus.APPROVED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Chỉ có thể fulfill yêu cầu ở trạng thái APPROVED, hiện tại là {parts_request.status.value}"
+        )
+
+    # Permission check
+    if user.role == UserRole.TECHNICIAN:
+        if not user.hub_id or parts_request.hub_id != int(user.hub_id):
+            raise HTTPException(status_code=403, detail="Yêu cầu không thuộc Hub của bạn")
+
+    now = get_vn_naive_datetime()
+
+    # Update HubInventory
+    inventory = await db.execute(
+        select(HubInventory).where(
+            (HubInventory.hub_id == parts_request.hub_id) &
+            (HubInventory.part_category_id == parts_request.part_category_id)
+        )
+    )
+    inv = inventory.scalar_one_or_none()
+
+    if inv:
+        # Increase quantity
+        inv.quantity += parts_request.quantity_needed
+        inv.updated_at = now
+    else:
+        # Create new inventory record if doesn't exist
+        inv = HubInventory(
+            hub_id=parts_request.hub_id,
+            part_category_id=parts_request.part_category_id,
+            quantity=parts_request.quantity_needed,
+            min_stock_threshold=5,
+            updated_at=now,
+        )
+        db.add(inv)
+
+    # Update parts request
+    parts_request.status = PartsRequestStatus.FULFILLED
+    parts_request.fulfilled_at = now
+
+    await db.commit()
+    await db.refresh(parts_request)
+    return parts_request
