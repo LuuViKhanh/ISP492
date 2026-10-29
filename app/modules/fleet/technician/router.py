@@ -32,6 +32,8 @@ from app.core.config import settings
 router = APIRouter(prefix="/technician/fleet", tags=["Fleet"])
 
 allow_technician = RoleChecker([UserRole.TECHNICIAN, UserRole.ADMIN])
+allow_admin = RoleChecker([UserRole.ADMIN])
+allow_admin_or_operator = RoleChecker([UserRole.ADMIN, UserRole.OPERATOR])
 
 
 from typing import Optional

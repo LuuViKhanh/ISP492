@@ -25,9 +25,34 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_async_d
     """
     Đăng ký người dùng mới.
     Nhận thông tin email, họ tên và mật khẩu.
+    
+    Quy tắc xử lý đăng ký lại:
+    - Nếu email thuộc về tài khoản đang hoạt động (is_active = True): Báo lỗi Email already registered.
+    - Nếu email thuộc về tài khoản đã bị xóa mềm trước đó (is_active = False):
+      Hệ thống tự động lưu trữ vĩnh viễn (archive) tài khoản cũ bằng cách gắn tiền tố 'archived_{timestamp}_'
+      vào email cũ để giải phóng email gốc. Sau đó tạo tài khoản mới tinh với email gốc.
+      Tài khoản cũ từ thời điểm này sẽ bị ngắt hoàn toàn và không thể khôi phục (restore) được nữa.
     """
-    if await service.get_user_by_email(db, body.email):
-        raise HTTPException(status_code=400, detail="Email already registered")
+    existing_user = await service.get_user_by_email(db, body.email)
+    if existing_user:
+        if existing_user.is_active:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # Tài khoản cũ đã bị xóa mềm -> Archive vĩnh viễn để giải phóng email gốc
+        import time
+        archived_email = f"archived_{int(time.time())}_{existing_user.email}"
+        old_id = existing_user.id
+        old_email = existing_user.email
+        
+        existing_user.email = archived_email
+        db.add(existing_user)
+        await db.flush()
+        
+        await log_action(
+            db, old_id, "ARCHIVE_OLD_ACCOUNT_ON_REREGISTER", "users",
+            {"old_email": old_email, "archived_email": archived_email}
+        )
+
     user = await service.register_user(db, body.email, body.full_name, body.password)
     await log_action(db, user.id, "REGISTER", "users", {"email": user.email})
     return user
@@ -45,7 +70,10 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_async_db)):
     if not user or not user.hashed_password or not service.verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not user.is_active:
-        raise HTTPException(status_code=403, detail="Account is disabled")
+        raise HTTPException(
+            status_code=403, 
+            detail="Tài khoản này đã bị xóa hoặc tạm khóa. Vui lòng liên hệ quản trị viên để được hỗ trợ."
+        )
     await log_action(db, user.id, "LOGIN", "users", {"email": user.email})
     return TokenResponse(
         access_token=service.create_access_token(user.id, user.role.value),
@@ -108,7 +136,7 @@ async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_async
         raise HTTPException(status_code=401, detail="Invalid refresh token")
     user = await service.get_user_by_id(db, payload["sub"])
     if not user or not user.is_active:
-        raise HTTPException(status_code=401, detail="User not found or disabled")
+        raise HTTPException(status_code=401, detail="Tài khoản đã bị xóa hoặc vô hiệu hóa")
     return TokenResponse(
         access_token=service.create_access_token(user.id, user.role.value),
         refresh_token=service.create_refresh_token(user.id),
@@ -155,4 +183,3 @@ async def google_callback(code: str, db: AsyncSession = Depends(get_async_db)):
         f"&token_type=bearer"
     )
     return RedirectResponse(url=redirect_url)
-

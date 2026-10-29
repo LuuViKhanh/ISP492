@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -16,14 +17,20 @@ router = APIRouter(
 )
 
 @router.get("/", response_model=list[ProfileResponse])
-async def get_all_users(db: AsyncSession = Depends(get_async_db)):
+async def get_all_users(
+    is_active: Optional[bool] = Query(None, description="Lọc theo trạng thái hoạt động: true = đang hoạt động, false = đã xóa/vô hiệu hóa, null = tất cả"),
+    db: AsyncSession = Depends(get_async_db)
+):
     """
-    Lấy danh sách tất cả người dùng trong hệ thống.
+    Lấy danh sách người dùng trong hệ thống (kèm bộ lọc trạng thái xóa/hoạt động).
     
-    Mục đích: Cung cấp cho quản trị viên (Admin) danh sách toàn bộ người dùng để dễ dàng quản lý.
-    Cách dùng: Gửi request GET tới endpoint này. Yêu cầu token hợp lệ có quyền Admin.
+    Mục đích: Cung cấp cho Admin danh sách người dùng để quản trị, có thể lọc người dùng đang hoạt động hoặc đã bị xóa mềm.
     """
-    result = await db.execute(select(User))
+    query = select(User)
+    if is_active is not None:
+        query = query.where(User.is_active == is_active)
+    query = query.order_by(User.created_at.desc())
+    result = await db.execute(query)
     users = result.scalars().all()
     return [ProfileResponse.model_validate(u) for u in users]
 
@@ -34,13 +41,17 @@ async def create_user(
 ):
     """
     Tạo tài khoản người dùng mới và gán vai trò (Role).
-    
-    Mục đích: Cho phép quản trị viên cấp phát tài khoản mới cho nhân viên hoặc người dùng đặc biệt với vai trò tương ứng.
-    Cách dùng: Gửi request POST với payload chứa thông tin người dùng (email, username, full_name, password, role). Trả về thông tin người dùng vừa tạo.
+    Nếu email thuộc về tài khoản đã bị xóa mềm, hệ thống sẽ tự động lưu trữ (archive) tài khoản cũ.
     """
     existing = await get_user_by_email(db, body.email)
     if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        if existing.is_active:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        import time
+        archived_email = f"archived_{int(time.time())}_{existing.email}"
+        existing.email = archived_email
+        db.add(existing)
+        await db.flush()
         
     new_user = User(
         email=body.email,
@@ -57,9 +68,6 @@ async def create_user(
 async def get_user(user_id: str, db: AsyncSession = Depends(get_async_db)):
     """
     Lấy thông tin chi tiết của một người dùng cụ thể dựa trên ID.
-    
-    Mục đích: Xem thông tin hồ sơ của người dùng (email, họ tên, vai trò) để kiểm tra hoặc hỗ trợ.
-    Cách dùng: Gửi request GET kèm theo `user_id` trên đường dẫn. Yêu cầu quyền Admin.
     """
     user = await get_user_by_id(db, user_id)
     if not user:
@@ -74,9 +82,6 @@ async def update_user(
 ):
     """
     Cập nhật thông tin, vai trò (Role) hoặc trạng thái hoạt động của người dùng.
-    
-    Mục đích: Cho phép Admin chỉnh sửa hồ sơ người dùng, thăng giáng cấp, hoặc khóa/mở khóa tài khoản khi cần thiết.
-    Cách dùng: Gửi request PATCH với `user_id` và payload chứa các trường cần thay đổi. Chỉ cập nhật những trường được truyền lên.
     """
     user = await get_user_by_id(db, user_id)
     if not user:
@@ -92,6 +97,12 @@ async def update_user(
     if body.role is not None:
         user.role_id = ROLE_NAME_TO_ID[body.role]
     if body.is_active is not None:
+        if body.is_active is True and not user.is_active:
+            if user.email.startswith("archived_") or user.email.startswith("deleted_"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Tài khoản này đã bị lưu trữ vĩnh viễn do email đã được đăng ký mới bởi tài khoản khác. Không thể hoàn tác."
+                )
         user.is_active = body.is_active
         
     db.add(user)
@@ -102,15 +113,60 @@ async def update_user(
 @router.delete("/{user_id}")
 async def delete_user(user_id: str, db: AsyncSession = Depends(get_async_db)):
     """
-    Xóa tài khoản người dùng khỏi hệ thống.
+    Xóa mềm (Soft Delete) tài khoản người dùng khỏi hệ thống.
     
-    Mục đích: Xóa bỏ các tài khoản không còn sử dụng hoặc vi phạm chính sách khỏi cơ sở dữ liệu.
-    Cách dùng: Gửi request DELETE kèm theo `user_id`. Hành động này không thể hoàn tác, cần cẩn trọng khi thực hiện.
+    Mục đích: Chuyển trạng thái tài khoản thành không hoạt động (is_active = False),
+    ngắt quyền truy cập ngay lập tức nhưng vẫn bảo toàn toàn vẹn dữ liệu lịch sử đơn hàng,
+    chuyến bay và bảo trì liên quan (tránh vi phạm Foreign Key Constraint).
     """
     user = await get_user_by_id(db, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    await db.delete(user)
+    user.is_active = False
+    db.add(user)
     await db.commit()
-    return {"message": "User deleted successfully"}
+    await db.refresh(user)
+
+    from app.modules.system.service import log_action
+    await log_action(db, user.id, "ADMIN_SOFT_DELETE", "users", {"email": user.email})
+
+    return {
+        "success": True,
+        "message": "Tài khoản người dùng đã được xóa (vô hiệu hóa) thành công",
+        "user_id": user.id,
+        "is_active": user.is_active
+    }
+
+@router.patch("/{user_id}/restore", response_model=ProfileResponse)
+async def restore_user(user_id: str, db: AsyncSession = Depends(get_async_db)):
+    """
+    Khôi phục tài khoản người dùng đã bị xóa/vô hiệu hóa (Restore Account).
+    
+    Mục đích: Cho phép Quản trị viên kích hoạt lại tài khoản người dùng khi cần thiết.
+    Điều kiện:
+    - Nếu tài khoản đã bị lưu trữ vĩnh viễn (do email đã được đăng ký mới) -> Từ chối khôi phục.
+    - Nếu tài khoản chỉ mới bị soft-delete (chưa bị ai đăng ký lại email) -> Khôi phục thành công.
+    """
+    user = await get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    if user.is_active:
+        return user
+
+    if user.email.startswith("archived_") or user.email.startswith("deleted_"):
+        raise HTTPException(
+            status_code=400,
+            detail="Tài khoản này đã bị lưu trữ vĩnh viễn do email đã được đăng ký mới bởi tài khoản khác. Không thể hoàn tác."
+        )
+
+    user.is_active = True
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    from app.modules.system.service import log_action
+    await log_action(db, user.id, "ADMIN_RESTORE", "users", {"email": user.email})
+
+    return user

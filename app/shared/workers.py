@@ -11,14 +11,18 @@ from app.modules.fleet.models import MaintenanceAlert
 
 async def get_operator_ids(db: AsyncSession) -> list[str]:
     operator_role_id = ROLE_NAME_TO_ID.get(UserRole.OPERATOR, "595bec91-7f4e-47ec-bfec-6f0087b84620")
-    result = await db.execute(select(User.id).where(User.role_id == operator_role_id))
+    result = await db.execute(
+        select(User.id).where(and_(User.role_id == operator_role_id, User.is_active == True))
+    )
     return result.scalars().all()
 
 async def get_technician_ids(db: AsyncSession) -> list[str]:
     technician_role_id = ROLE_NAME_TO_ID.get(UserRole.TECHNICIAN)
     if not technician_role_id:
         return []
-    result = await db.execute(select(User.id).where(User.role_id == technician_role_id))
+    result = await db.execute(
+        select(User.id).where(and_(User.role_id == technician_role_id, User.is_active == True))
+    )
     return result.scalars().all()
 
 async def run_approval_deadline_watcher(db: AsyncSession):
