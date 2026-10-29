@@ -267,3 +267,43 @@ class HubSupply(Base):
     unit: Mapped[str | None] = mapped_column(String(50), nullable=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SupplyRequestStatus(str, enum.Enum):
+    """Trạng thái yêu cầu cấp phát vật tư."""
+    PENDING = "Pending"      # Technician gửi yêu cầu, chờ Admin duyệt
+    APPROVED = "Approved"    # Admin duyệt, sắp xếp mua hàng
+    REJECTED = "Rejected"    # Admin từ chối
+    RECEIVED = "Received"    # Technician nhập hàng vào hub
+
+
+class SupplyRequest(Base):
+    """Bảng yêu cầu cấp phát vật tư từ Technician."""
+    __tablename__ = "supply_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    technician_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    hub_id: Mapped[int] = mapped_column(Integer, ForeignKey("hubs.id"), nullable=False, index=True)
+    status: Mapped[SupplyRequestStatus] = mapped_column(
+        SAEnum(SupplyRequestStatus, name="supply_request_status", create_type=False, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=SupplyRequestStatus.PENDING,
+        index=True
+    )
+    
+    # ── Items (JSON) ────────────────────────────────────────────────────
+    # Format: [{"item_name": "...", "quantity": 10, "unit": "cái"}, ...]
+    items: Mapped[str] = mapped_column(Text, nullable=False)  # JSON
+    
+    # ── Notes ────────────────────────────────────────────────────
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)  # Lý do yêu cầu
+    admin_notes: Mapped[str | None] = mapped_column(Text, nullable=True)  # Ghi chú từ Admin (lúc approve/reject)
+    
+    # ── Timestamps ────────────────────────────────────────────────────
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    received_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
