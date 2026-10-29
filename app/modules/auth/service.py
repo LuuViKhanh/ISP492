@@ -83,7 +83,7 @@ async def register_user(db: AsyncSession, email: str, full_name: str, password: 
 
 async def create_reset_token(db: AsyncSession, email: str) -> Optional[str]:
     user = await get_user_by_email(db, email)
-    if not user:
+    if not user or not user.is_active:
         return None
     token = secrets.token_urlsafe(32)
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
@@ -148,6 +148,18 @@ async def get_or_create_google_user(db: AsyncSession, google_info: dict) -> User
 
     user = await get_user_by_email(db, email)
     if user:
+        if not user.is_active:
+            import time
+            archived_email = f"archived_{int(time.time())}_{user.email}"
+            user.email = archived_email
+            db.add(user)
+            await db.flush()
+            
+            new_user = User(email=email, full_name=full_name, hashed_password="", role_id=ROLE_NAME_TO_ID[UserRole.CUSTOMER])
+            db.add(new_user)
+            await db.commit()
+            await db.refresh(new_user)
+            return new_user
         return user
 
     user = User(email=email, full_name=full_name, hashed_password="", role_id=ROLE_NAME_TO_ID[UserRole.CUSTOMER])
