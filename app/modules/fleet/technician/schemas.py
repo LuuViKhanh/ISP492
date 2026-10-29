@@ -209,3 +209,54 @@ class HubSupplyResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ── SupplyRequest (Yêu cầu cấp phát vật tư) ───────────────────────────────────
+
+class SupplyRequestItemSchema(BaseModel):
+    """Item trong yêu cầu cấp phát."""
+    item_name: str
+    quantity: int
+    unit: Optional[str] = None  # vd: "cái", "bộ"
+
+
+class SupplyRequestCreate(BaseModel):
+    """Tạo yêu cầu cấp phát vật tư."""
+    items: List[SupplyRequestItemSchema]
+    reason: Optional[str] = None
+
+
+class SupplyRequestApprove(BaseModel):
+    """Admin duyệt yêu cầu."""
+    admin_notes: Optional[str] = None
+
+
+class SupplyRequestReject(BaseModel):
+    """Admin từ chối yêu cầu."""
+    admin_notes: Optional[str] = None
+
+
+class SupplyRequestConfirmReceipt(BaseModel):
+    """Technician xác nhận đã nhập hàng."""
+    pass  # Không cần tham số, chỉ cần xác nhận
+
+
+class SupplyRequestResponse(BaseModel):
+    """Phản hồi yêu cầu cấp phát vật tư."""
+    id: int
+    technician_id: str
+    hub_id: int
+    status: str  # Pending | Approved | Rejected | Received
+    items: str  # JSON string
+    reason: Optional[str] = None
+    admin_notes: Optional[str] = None
+    requested_at: datetime
+    approved_at: Optional[datetime] = None
+    approved_by: Optional[str] = None
+    rejected_at: Optional[datetime] = None
+    rejected_by: Optional[str] = None
+    received_at: Optional[datetime] = None
+    received_by: Optional[str] = None
+
+    class Config:
+        from_attributes = True

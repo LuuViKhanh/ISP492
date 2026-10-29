@@ -23,7 +23,8 @@ from app.modules.fleet.technician.schemas import (
     WorkOrderLogResponse, MaintenanceAlertResponse,
     MaintenanceScheduleResponse, MaintenanceScheduleCreate,
     IncomingMissionResponse, BatteryResponse, BatteryUseRequest,
-    HubSupplyCreate, HubSupplyUpdate, HubSupplyResponse
+    HubSupplyCreate, HubSupplyUpdate, HubSupplyResponse,
+    SupplyRequestCreate, SupplyRequestApprove, SupplyRequestReject, SupplyRequestConfirmReceipt
 )
 from app.modules.missions.models import Mission, MissionStatus, HandlingStatus, Incident, IncidentStatus
 from app.core.config import settings
@@ -2089,3 +2090,325 @@ async def delete_hub_supply(
 
     await db.delete(supply)
     await db.commit()
+
+
+# ==================== SUPPLY REQUEST ENDPOINTS ====================
+
+@router.post("/supplies/requests", summary="Technician: Yêu cầu cấp phát vật tư")
+async def create_supply_request(
+    body: SupplyRequestCreate,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Technician gửi yêu cầu cấp phát vật tư."""
+    from datetime import datetime
+    from app.modules.fleet.models import SupplyRequest, SupplyRequestStatus
+    import json
+    
+    if not user.hub_id:
+        raise HTTPException(status_code=400, detail="Technician không có hub_id")
+    
+    now = datetime.utcnow()
+    items_json = json.dumps([item.dict() for item in body.items])
+    
+    supply_req = SupplyRequest(
+        technician_id=str(user.id),
+        hub_id=int(user.hub_id),
+        status=SupplyRequestStatus.PENDING,
+        items=items_json,
+        reason=body.reason,
+        requested_at=now
+    )
+    
+    db.add(supply_req)
+    await db.commit()
+    await db.refresh(supply_req)
+    
+    return {
+        "message": "Yêu cầu cấp phát vật tư đã được gửi",
+        "id": supply_req.id,
+        "status": supply_req.status.value
+    }
+
+
+@router.get("/supplies/requests", summary="Technician: Xem danh sách yêu cầu của mình")
+async def get_my_supply_requests(
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Technician xem danh sách yêu cầu cấp phát của mình."""
+    from sqlalchemy import select
+    from app.modules.fleet.models import SupplyRequest
+    
+    result = await db.execute(
+        select(SupplyRequest).where(SupplyRequest.technician_id == str(user.id)).order_by(SupplyRequest.requested_at.desc())
+    )
+    requests = result.scalars().all()
+    
+    return {
+        "total": len(requests),
+        "requests": [
+            {
+                "id": req.id,
+                "hub_id": req.hub_id,
+                "status": req.status.value if hasattr(req.status, "value") else req.status,
+                "items": req.items,
+                "reason": req.reason,
+                "requested_at": req.requested_at.isoformat() if req.requested_at else None,
+                "approved_at": req.approved_at.isoformat() if req.approved_at else None,
+                "received_at": req.received_at.isoformat() if req.received_at else None
+            }
+            for req in requests
+        ]
+    }
+
+
+@router.post("/admin/supplies/requests/{request_id}/approve", summary="Admin: Duyệt yêu cầu cấp phát")
+async def approve_supply_request(
+    request_id: int,
+    body: SupplyRequestApprove,
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Admin duyệt yêu cầu cấp phát vật tư."""
+    from datetime import datetime
+    from app.modules.fleet.models import SupplyRequest, SupplyRequestStatus
+    
+    supply_req = await db.get(SupplyRequest, request_id)
+    if not supply_req:
+        raise HTTPException(status_code=404, detail="Yêu cầu không tồn tại")
+    
+    if supply_req.status != SupplyRequestStatus.PENDING:
+        raise HTTPException(status_code=400, detail=f"Không thể duyệt yêu cầu có status: {supply_req.status.value}")
+    
+    supply_req.status = SupplyRequestStatus.APPROVED
+    supply_req.approved_at = datetime.utcnow()
+    supply_req.approved_by = str(user.id)
+    supply_req.admin_notes = body.admin_notes
+    
+    await db.commit()
+    await db.refresh(supply_req)
+    
+    return {
+        "message": "Yêu cầu đã được duyệt",
+        "id": supply_req.id,
+        "status": supply_req.status.value
+    }
+
+
+@router.post("/admin/supplies/requests/{request_id}/reject", summary="Admin: Từ chối yêu cầu cấp phát")
+async def reject_supply_request(
+    request_id: int,
+    body: SupplyRequestReject,
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Admin từ chối yêu cầu cấp phát vật tư."""
+    from datetime import datetime
+    from app.modules.fleet.models import SupplyRequest, SupplyRequestStatus
+    
+    supply_req = await db.get(SupplyRequest, request_id)
+    if not supply_req:
+        raise HTTPException(status_code=404, detail="Yêu cầu không tồn tại")
+    
+    if supply_req.status != SupplyRequestStatus.PENDING:
+        raise HTTPException(status_code=400, detail=f"Không thể từ chối yêu cầu có status: {supply_req.status.value}")
+    
+    supply_req.status = SupplyRequestStatus.REJECTED
+    supply_req.rejected_at = datetime.utcnow()
+    supply_req.rejected_by = str(user.id)
+    supply_req.admin_notes = body.admin_notes
+    
+    await db.commit()
+    await db.refresh(supply_req)
+    
+    return {
+        "message": "Yêu cầu đã bị từ chối",
+        "id": supply_req.id,
+        "status": supply_req.status.value
+    }
+
+
+@router.get("/admin/supplies/requests", summary="Admin: Xem tất cả yêu cầu cấp phát")
+async def list_all_supply_requests(
+    status: str = None,
+    hub_id: int = None,
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Admin xem tất cả yêu cầu cấp phát vật tư (có thể lọc theo status hoặc hub_id)."""
+    from sqlalchemy import select
+    from app.modules.fleet.models import SupplyRequest
+    
+    query = select(SupplyRequest)
+    
+    if status:
+        query = query.where(SupplyRequest.status == status)
+    if hub_id:
+        query = query.where(SupplyRequest.hub_id == hub_id)
+    
+    result = await db.execute(query.order_by(SupplyRequest.requested_at.desc()))
+    requests = result.scalars().all()
+    
+    return {
+        "total": len(requests),
+        "requests": [
+            {
+                "id": req.id,
+                "technician_id": req.technician_id,
+                "hub_id": req.hub_id,
+                "status": req.status.value if hasattr(req.status, "value") else req.status,
+                "items": req.items,
+                "reason": req.reason,
+                "requested_at": req.requested_at.isoformat() if req.requested_at else None,
+                "approved_at": req.approved_at.isoformat() if req.approved_at else None,
+                "approved_by": req.approved_by,
+                "rejected_at": req.rejected_at.isoformat() if req.rejected_at else None,
+                "rejected_by": req.rejected_by
+            }
+            for req in requests
+        ]
+    }
+
+
+@router.post("/supplies/requests/{request_id}/confirm-receipt", summary="Technician: Xác nhận nhập hàng")
+async def confirm_supply_receipt(
+    request_id: int,
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Technician xác nhận đã nhập hàng vào hub + cập nhật hub_supplies."""
+    from datetime import datetime
+    from app.modules.fleet.models import SupplyRequest, SupplyRequestStatus, HubSupply
+    import json
+    
+    supply_req = await db.get(SupplyRequest, request_id)
+    if not supply_req:
+        raise HTTPException(status_code=404, detail="Yêu cầu không tồn tại")
+    
+    if supply_req.status != SupplyRequestStatus.APPROVED:
+        raise HTTPException(status_code=400, detail=f"Chỉ có thể confirm receipt khi status = Approved")
+    
+    # Parse items JSON
+    items_list = json.loads(supply_req.items)
+    
+    # Cập nhật hub_supplies
+    for item in items_list:
+        item_name = item.get("item_name")
+        quantity = item.get("quantity", 0)
+        
+        # Tìm supply hiện tại
+        from sqlalchemy import select
+        existing_supply = await db.execute(
+            select(HubSupply).where(
+                (HubSupply.hub_id == supply_req.hub_id) & 
+                (HubSupply.item_name == item_name)
+            )
+        )
+        existing_supply = existing_supply.scalar_one_or_none()
+        
+        if existing_supply:
+            # Tăng số lượng
+            existing_supply.quantity += quantity
+            existing_supply.updated_at = datetime.utcnow()
+        else:
+            # Tạo mới
+            new_supply = HubSupply(
+                hub_id=supply_req.hub_id,
+                item_name=item_name,
+                quantity=quantity,
+                unit=item.get("unit"),
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            db.add(new_supply)
+    
+    # Cập nhật supply request
+    supply_req.status = SupplyRequestStatus.RECEIVED
+    supply_req.received_at = datetime.utcnow()
+    supply_req.received_by = str(user.id)
+    
+    await db.commit()
+    await db.refresh(supply_req)
+    
+    return {
+        "message": "Nhập hàng thành công, hub_supplies đã được cập nhật",
+        "id": supply_req.id,
+        "status": supply_req.status.value
+    }
+
+
+@router.get("/supplies/requests/{request_id}/audit-trail", summary="Supply Request Audit Trail")
+async def get_supply_request_audit_trail(
+    request_id: int,
+    user: CurrentUser = Depends(allow_admin_or_operator),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Lấy audit trail của 1 supply request."""
+    from app.modules.fleet.models import SupplyRequest
+    import json
+    
+    supply_req = await db.get(SupplyRequest, request_id)
+    if not supply_req:
+        raise HTTPException(status_code=404, detail="Yêu cầu không tồn tại")
+    
+    # Build timeline
+    timeline = []
+    
+    if supply_req.requested_at:
+        timeline.append({
+            "timestamp": supply_req.requested_at,
+            "event": "Supply Request Created",
+            "status": supply_req.status.value if hasattr(supply_req.status, "value") else supply_req.status,
+            "items": json.loads(supply_req.items),
+            "reason": supply_req.reason,
+            "actor": "Technician",
+            "actor_id": supply_req.technician_id
+        })
+    
+    if supply_req.approved_at:
+        timeline.append({
+            "timestamp": supply_req.approved_at,
+            "event": "Supply Request Approved",
+            "status": supply_req.status.value if hasattr(supply_req.status, "value") else supply_req.status,
+            "admin_notes": supply_req.admin_notes,
+            "actor": "Admin",
+            "actor_id": supply_req.approved_by
+        })
+    
+    if supply_req.rejected_at:
+        timeline.append({
+            "timestamp": supply_req.rejected_at,
+            "event": "Supply Request Rejected",
+            "status": supply_req.status.value if hasattr(supply_req.status, "value") else supply_req.status,
+            "admin_notes": supply_req.admin_notes,
+            "actor": "Admin",
+            "actor_id": supply_req.rejected_by
+        })
+    
+    if supply_req.received_at:
+        timeline.append({
+            "timestamp": supply_req.received_at,
+            "event": "Supply Request Received & Hub Supplies Updated",
+            "status": supply_req.status.value if hasattr(supply_req.status, "value") else supply_req.status,
+            "items": json.loads(supply_req.items),
+            "actor": "Technician",
+            "actor_id": supply_req.received_by
+        })
+    
+    return {
+        "request_id": supply_req.id,
+        "technician_id": supply_req.technician_id,
+        "hub_id": supply_req.hub_id,
+        "current_status": supply_req.status.value if hasattr(supply_req.status, "value") else supply_req.status,
+        "timeline": timeline,
+        "summary": {
+            "total_events": len(timeline),
+            "first_event": timeline[0].get("timestamp") if timeline else None,
+            "last_event": timeline[-1].get("timestamp") if timeline else None,
+            "duration_days": (
+                (timeline[-1].get("timestamp") - timeline[0].get("timestamp")).days
+                if timeline and len(timeline) > 1 else None
+            )
+        }
+    }
