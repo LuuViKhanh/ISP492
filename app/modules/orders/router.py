@@ -166,7 +166,10 @@ def calculate_planning_state(order: Order, mission: Mission = None) -> str | Non
     if order.replan_required_at:
         return "NEEDS_REPLANNING"
 
-    # 4. Kiểm tra Overdue / Urgent dựa trên customer_deadline (= estimated_window_end)
+    # 4. Kiểm tra Aging Priority / Overdue / Urgent
+    if getattr(order, "is_aging_priority", False):
+        return "URGENT"
+
     deadline = order.estimated_window_end
     if deadline:
         overdue_mins = (now - deadline).total_seconds() / 60.0
@@ -224,6 +227,8 @@ def compute_urgency_fields(
     # BasePriority theo mode
     d_mode = order.delivery_mode.value if hasattr(order.delivery_mode, "value") else str(order.delivery_mode or "")
     base = {"EXPRESS": 60.0, "SCHEDULED": 35.0, "NORMAL": 10.0}.get(d_mode, 10.0)
+    if getattr(order, "is_aging_priority", False):
+        base = max(base, 50.0)
 
     # UrgencyScore
     urgency = min(100.0, max(0.0, 100.0 * (60.0 - slack_mins) / 60.0))
@@ -232,7 +237,7 @@ def compute_urgency_fields(
     # Priority level
     if slack_mins <= 0:
         level = "CRITICAL"
-    elif slack_mins <= 30:
+    elif slack_mins <= 30 or getattr(order, "is_aging_priority", False):
         level = "HIGH"
     elif slack_mins <= 60:
         level = "MEDIUM"

@@ -167,43 +167,11 @@ class WorkOrder(Base):
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-
-class MaintenanceRecord(Base):
-    __tablename__ = "maintenance_records"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    work_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    drone_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    performed_by: Mapped[str | None] = mapped_column(String, nullable=True)
-    title: Mapped[str | None] = mapped_column(String, nullable=True)
     diagnosis: Mapped[str | None] = mapped_column(Text, nullable=True)
-    corrective_action: Mapped[str | None] = mapped_column(Text, nullable=True)
     resulting_drone_status: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-
-class MaintenanceInspectionItem(Base):
-    __tablename__ = "maintenance_inspection_items"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    maintenance_record_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    item_name: Mapped[str | None] = mapped_column(String, nullable=True)
-    is_completed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-
-class WorkOrderLog(Base):
-    __tablename__ = "work_order_logs"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    work_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    action: Mapped[str | None] = mapped_column(String, nullable=True)
-    from_status: Mapped[str | None] = mapped_column(String, nullable=True)
-    to_status: Mapped[str | None] = mapped_column(String, nullable=True)
-    changed_by: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    record_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    inspection_items_json: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
+    status_logs_json: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
 
 
 class MaintenanceAlert(Base):
@@ -246,79 +214,12 @@ class MaintenanceSchedule(Base):
 
 
 # ==================== PARTS MANAGEMENT (Quản lý vật tư - Parts) ====================
-
-class PartCategoryType(str, enum.Enum):
-    """Loại danh mục vật tư."""
-    PROPELLER = "Propeller"           # Cánh quạt
-    BATTERY = "Battery"               # Pin
-    MOTOR = "Motor"                   # Động cơ
-    FRAME = "Frame"                   # Khung
-    CAMERA = "Camera"                 # Camera
-    LANDING_GEAR = "Landing Gear"     # Bánh đạp
-    GIMBAL = "Gimbal"                 # Gimbal
-    CHARGER = "Charger"               # Sạc
-    MAINTENANCE_KIT = "Maintenance Kit"  # Bộ dụng cụ sửa chữa
-    OTHER = "Other"                   # Khác
-
-
-class PartsRequestStatus(str, enum.Enum):
-    """Trạng thái yêu cầu vật tư từ Technician."""
-    PENDING = "Pending"                # Technician gửi yêu cầu, chờ Admin duyệt
-    APPROVED = "Approved"              # Admin duyệt, sắp xếp mua hàng
-    REJECTED = "Rejected"              # Admin từ chối
-    FULFILLED = "Fulfilled"            # Vật tư đã được nhập vào hub
-
-
-class PartCategory(Base):
-    """Danh mục loại vật tư - định nghĩa từng loại part (vd: Propeller DJI Matrice, Battery 5000mAh)."""
-    __tablename__ = "part_categories"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)  # vd: "DJI Matrice 100 Propeller"
-    category_type: Mapped[PartCategoryType] = mapped_column(
-        SAEnum(PartCategoryType, name="part_category_type_enum", create_type=False, values_callable=lambda x: [e.value for e in x]),
-        nullable=False
-    )
-    compatible_drone_models: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # vd: ["DJI Matrice 100", "Aurellia X6"]
-    unit_cost: Mapped[float | None] = mapped_column(Float, nullable=True)  # Giá per unit (VND)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
-class PartsRequest(Base):
-    """Yêu cầu cấp phát vật tư từ Technician - sử dụng PartCategory thay vì item_name."""
-    __tablename__ = "parts_requests"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    requested_by: Mapped[str] = mapped_column(String, nullable=False, index=True)  # Technician ID
-    hub_id: Mapped[int] = mapped_column(Integer, ForeignKey("hubs.id"), nullable=False, index=True)
-    drone_id: Mapped[str | None] = mapped_column(String(50), nullable=True)  # Drone that needs the part (optional)
-    part_category_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("part_categories.id"), nullable=False, index=True)
-    quantity_needed: Mapped[int] = mapped_column(Integer, nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False)  # Reason or additional details
-    photo_urls: Mapped[list | None] = mapped_column(JSON, nullable=True)  # Array of photo URLs
-    status: Mapped[PartsRequestStatus] = mapped_column(
-        SAEnum(PartsRequestStatus, name="parts_request_status_enum", create_type=False, values_callable=lambda x: [e.value for e in x]),
-        nullable=False,
-        default=PartsRequestStatus.PENDING,
-        index=True
-    )
-    reviewed_by: Mapped[str | None] = mapped_column(String, nullable=True)  # Admin ID who reviewed
-    admin_note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    actual_cost: Mapped[float | None] = mapped_column(Float, nullable=True)  # Actual cost when approved/fulfilled (VND)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
-class HubInventory(Base):
-    """Tồn kho vật tư tại mỗi Hub - số lượng theo PartCategory."""
-    __tablename__ = "hub_inventories"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    hub_id: Mapped[int] = mapped_column(Integer, ForeignKey("hubs.id"), nullable=False, index=True)
-    part_category_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("part_categories.id"), nullable=False, index=True)
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # Số lượng hiện tại
-    min_stock_threshold: Mapped[int] = mapped_column(Integer, nullable=False, default=5)  # Mức tồn kho tối thiểu (alert nếu < mức này)
-    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+from app.modules.inventory.models import (
+    PartCategoryType,
+    PartsRequestStatus,
+    TxnReason,
+    PartCategory,
+    PartsRequest,
+    HubInventory,
+    InventoryTransaction,
+)

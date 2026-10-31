@@ -214,7 +214,7 @@ def run(conn: Connection):
         ("DEMO-NORMAL-DONE-1",   5, 8, "NORMAL",    1.8, "DELIVERED_TO_HUB", "Completed",         4, 95000),
         ("DEMO-CANCELLED-1",     1, 9, "EXPRESS",   1.0, "CANCELLED",        "Cancelled",         2,  0),
         ("DEMO-CANCELLED-2",     6, 2, "SCHEDULED", 2.0, "CANCELLED",        "Cancelled",         6,  0),
-        ("DEMO-FLYING-NOW",      3, 4, "EXPRESS",   1.5, "IN_DELIVERY",      "In Progress",       0, 90000),
+        ("DEMO-FLYING-NOW",      3, 4, "EXPRESS",   1.5, "IN_DELIVERY",      "Flying",            0, 90000),
         ("DEMO-SCHEDULED-UP",    2, 7, "SCHEDULED", 3.5, "IN_DELIVERY",      "Scheduled",         0, 135000),
         ("DEMO-AT-HUB-WAIT",     5, 1, "NORMAL",    2.2, "AT_HUB",           None,                1,  0),
         ("DEMO-AT-HUB-WAIT2",    8, 3, "EXPRESS",   0.9, "AT_HUB",           None,                0,  0),

@@ -60,7 +60,6 @@ async def run_hourly_cronjobs():
         await run_with_retry(run_battery_overdue_alerts_logic, "battery_overdue_alerts")
         await run_with_retry(run_battery_charging_simulation,  "battery_charging_sim")
         await run_with_retry(run_pickup_reminder_watcher,      "pickup_reminder")
-        await run_with_retry(run_aging_priority_watcher,       "aging_priority")
         await run_with_retry(run_critical_order_notifier,      "critical_order_notifier")
         await asyncio.sleep(3600)
 
@@ -70,6 +69,7 @@ async def run_quarter_cronjobs():
     """
     while True:
         await run_with_retry(run_deadline_alert_watcher, "deadline_alert")
+        await run_with_retry(run_aging_priority_watcher, "aging_priority")
         await asyncio.sleep(900)
 
 async def run_realtime_cronjobs():

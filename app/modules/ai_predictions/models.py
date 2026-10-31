@@ -1,7 +1,6 @@
 import enum
 from datetime import datetime, timezone
-from sqlalchemy import BigInteger, Float, String, DateTime, Boolean, Enum as SAEnum, Text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import BigInteger, Float, String, DateTime, Boolean, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database.db import Base
 
@@ -27,16 +26,6 @@ class AIPrediction(Base):
     estimated_energy_wh: Mapped[float] = mapped_column(Float, nullable=False)
     estimated_duration_m: Mapped[float] = mapped_column(Float, nullable=False)
     risk_level: Mapped[str] = mapped_column(String(20), nullable=False, default="Low")
-    shap_values_json: Mapped[dict | list | None] = mapped_column(JSONB, nullable=True)
+    recommendation_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_recommendation_applied: Mapped[bool] = mapped_column(Boolean, default=True)
     predicted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-
-class AIRecommendation(Base):
-    __tablename__ = "ai_recommendations"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    mission_id: Mapped[str] = mapped_column(String(50), nullable=False)
-    category: Mapped[str] = mapped_column(String(50), nullable=False, default="Mission Planning")
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    is_applied: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-
