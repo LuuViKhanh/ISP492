@@ -11,7 +11,7 @@ from app.shared.dependencies import get_current_user, CurrentUser
 from app.modules.system.models import Hub
 from app.modules.missions.models import (
     Order, OrderStatus, PaymentStatus, DeliveryMode,
-    Mission, MissionStatus, TelemetryLog, MissionHubCheckpoint,
+    Mission, MissionStatus, TelemetryLog,
     MissionLeg, MissionLegStatus,
 )
 from app.modules.fleet.models import Drone, Battery
@@ -296,8 +296,8 @@ async def create_order(
         requested_delivery_at=req_at_naive,
         estimated_window_start=window_start,
         estimated_window_end=window_end,
-        # aging_deadline=order_aging_deadline,
-        # is_aging_priority=False,
+        aging_deadline=order_aging_deadline,
+        is_aging_priority=False,
         status=OrderStatus.PENDING,
         delivery_fee=total_fee,
         sender_phone=body.sender_phone,
@@ -575,10 +575,7 @@ async def track_delivery(
             .limit(MAX_PATH_POINTS)
         )).all()
         resp.travelled_path = [RoutePointSchema(latitude=lat, longitude=lng) for lat, lng in path_logs]
-        cp_count = (await db.execute(
-            select(MissionHubCheckpoint).where(MissionHubCheckpoint.mission_id == mission.id)
-        )).scalars().all()
-        resp.checkpoints_passed = len(cp_count)
+        resp.checkpoints_passed = len(mission.checkpoints_json or [])
 
         # 3. Legs & Current Leg
         legs_list = []

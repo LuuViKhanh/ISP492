@@ -348,20 +348,16 @@ from app.modules.missions.models import DeliveryMode as _DeliveryMode
 
 
 async def run_aging_priority_watcher(db: AsyncSession):
-    # T?m th?i v� hi?u h�a worker v� DB server chua migrate c?t is_aging_priority
-    return
     """
-    Worker: Tự động đánh dấu Aging Priority cho đơn NORMAL khi sắp hết deadline.
+    Worker định kỳ (15 phút/lần):
+    Tự động đánh dấu Aging Priority cho đơn NORMAL khi sắp hết hạn lưu kho (now >= aging_deadline).
 
     Logic:
-    - Quét các đơn NORMAL + PENDING + chưa có mission + is_aging_priority=False.
-    - Nếu now >= aging_deadline → set is_aging_priority=True + notify tất cả Operators.
-    - KHÔNG thay đổi bất cứ thứ gì của SCHEDULED orders (đúng với yêu cầu
-      "không ảnh hưởng tới schedule").
-
-    Mỗi đơn chỉ được nâng cấp 1 lần (dedup bằng is_aging_priority flag).
+    - Quét các đơn NORMAL đang ở trạng thái chờ gom chuyến/xử lý (PENDING, AWAITING_DROP_OFF, AT_HUB)
+      chưa có mission và is_aging_priority=False.
+    - Nếu now >= aging_deadline → set is_aging_priority=True + notify Customer & tất cả Operators.
+    - Đơn có is_aging_priority=True được cộng điểm ưu tiên lên 50.0 (ngang Express) và gán trạng thái URGENT.
     """
-    return  # Tạm thời vô hiệu hóa cho tới khi DB migration cột is_aging_priority
     from app.modules.missions.models import Order, OrderStatus, Mission
 
     now = get_vn_naive_datetime()
@@ -371,7 +367,11 @@ async def run_aging_priority_watcher(db: AsyncSession):
         select(Order).where(
             and_(
                 Order.delivery_mode == _DeliveryMode.NORMAL,
-                Order.status == OrderStatus.PENDING,
+                Order.status.in_([
+                    OrderStatus.PENDING,
+                    OrderStatus.AWAITING_DROP_OFF,
+                    OrderStatus.AT_HUB,
+                ]),
                 Order.is_aging_priority == False,     # noqa: E712
                 Order.aging_deadline.isnot(None),
                 Order.aging_deadline <= now,

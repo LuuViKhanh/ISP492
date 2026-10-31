@@ -12,7 +12,7 @@ from app.shared.roles import UserRole
 from app.modules.auth.models import User
 from app.modules.fleet.models import (
     Drone, Battery, WorkOrder, WorkOrderStatus, batteries_status,
-    MaintenanceRecord, MaintenanceInspectionItem, WorkOrderLog, MaintenanceAlert, MaintenanceSchedule,
+    MaintenanceAlert, MaintenanceSchedule,
     PartCategory, PartsRequest, PartsRequestStatus, HubInventory, PartCategoryType
 )
 from app.modules.system.models import Hub
@@ -668,8 +668,6 @@ async def get_drone_maintenance_history(
     - TECHNICIAN: chỉ xem drone tại hub của mình
     - Trả về danh sách work orders + maintenance records, sorted by resolved_at DESC (gần nhất trước)
     """
-    from app.modules.fleet.models import MaintenanceRecord
-    
     # Kiểm tra drone có tại hub của technician không
     drone = await db.get(Drone, drone_id)
     if not drone:
@@ -677,19 +675,9 @@ async def get_drone_maintenance_history(
     if user.hub_id and drone.current_hub_id != int(user.hub_id):
         raise HTTPException(status_code=403, detail="Drone không ở Hub của bạn")
     
-    # Lấy maintenance history
+    # Lấy maintenance history từ bảng work_orders đã hợp nhất
     query = (
-        select(
-            WorkOrder.id.label("work_order_id"),
-            WorkOrder.status,
-            WorkOrder.issue_description,
-            WorkOrder.action_taken,
-            WorkOrder.resolved_at,
-            MaintenanceRecord.id.label("record_id"),
-            MaintenanceRecord.maintenance_type,
-            MaintenanceRecord.description.label("record_description"),
-        )
-        .outerjoin(MaintenanceRecord, MaintenanceRecord.work_order_id == WorkOrder.id)
+        select(WorkOrder)
         .where(WorkOrder.drone_id == drone_id)
         .order_by(WorkOrder.resolved_at.desc().nullslast())
         .limit(limit)
@@ -697,16 +685,17 @@ async def get_drone_maintenance_history(
     )
     
     result = await db.execute(query)
+    work_orders = result.scalars().all()
     maintenance_records = []
-    for row in result.fetchall():
+    for wo in work_orders:
         maintenance_records.append({
-            "work_order_id": row.work_order_id,
-            "status": row.status.value if row.status else None,
-            "issue_description": row.issue_description,
-            "action_taken": row.action_taken,
-            "resolved_at": row.resolved_at,
-            "maintenance_type": row.maintenance_type,
-            "record_description": row.record_description,
+            "work_order_id": wo.id,
+            "status": wo.status.value if wo.status else None,
+            "issue_description": wo.issue_description,
+            "action_taken": wo.action_taken,
+            "resolved_at": wo.resolved_at,
+            "maintenance_type": "Scheduled" if wo.scheduled_at else "Corrective",
+            "record_description": wo.diagnosis or wo.issue_description,
         })
     
     return maintenance_records
@@ -884,27 +873,28 @@ async def get_maintenance_records(
     db: AsyncSession = Depends(get_async_db),
 ):
     result = await db.execute(
-        select(MaintenanceRecord).where(MaintenanceRecord.drone_id == drone_id).order_by(MaintenanceRecord.id.desc())
-    )
-    records = result.scalars().all()
-    response = []
-    for record in records:
-        items_result = await db.execute(
-            select(MaintenanceInspectionItem).where(MaintenanceInspectionItem.maintenance_record_id == record.id)
+        select(WorkOrder)
+        .where(
+            WorkOrder.drone_id == drone_id,
+            (WorkOrder.diagnosis.isnot(None)) | (WorkOrder.action_taken.isnot(None))
         )
-        items = items_result.scalars().all()
+        .order_by(WorkOrder.id.desc())
+    )
+    work_orders = result.scalars().all()
+    response = []
+    for wo in work_orders:
         response.append(MaintenanceRecordResponse(
-            id=record.id,
-            work_order_id=record.work_order_id,
-            drone_id=record.drone_id,
-            performed_by=record.performed_by,
-            title=record.title,
-            diagnosis=record.diagnosis,
-            corrective_action=record.corrective_action,
-            resulting_drone_status=record.resulting_drone_status,
-            created_at=record.created_at,
-            completed_at=record.completed_at,
-            inspection_items=items,
+            id=wo.id,
+            work_order_id=wo.id,
+            drone_id=wo.drone_id,
+            performed_by=wo.technician_id,
+            title=wo.title,
+            diagnosis=wo.diagnosis,
+            corrective_action=wo.action_taken,
+            resulting_drone_status=wo.resulting_drone_status,
+            created_at=wo.started_at or wo.scheduled_at,
+            completed_at=wo.record_completed_at or wo.resolved_at or wo.completed_at,
+            inspection_items=wo.inspection_items_json or [],
         ))
     return response
 
@@ -915,44 +905,42 @@ async def create_maintenance_record(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    record = MaintenanceRecord(
-        work_order_id=body.work_order_id,
-        drone_id=body.drone_id,
-        performed_by=user.id,
-        title=body.title,
-        diagnosis=body.diagnosis,
-        corrective_action=body.corrective_action,
-        resulting_drone_status=body.resulting_drone_status,
-        created_at=get_vn_naive_datetime(),
-    )
-    db.add(record)
-    await db.flush()
+    wo = await db.get(WorkOrder, body.work_order_id)
+    if not wo:
+        raise HTTPException(status_code=404, detail="Work order not found")
+
+    now = get_vn_naive_datetime()
+    wo.diagnosis = body.diagnosis
+    wo.action_taken = body.corrective_action or wo.action_taken
+    wo.resulting_drone_status = body.resulting_drone_status
+    wo.record_completed_at = now
+    if body.title:
+        wo.title = body.title
 
     items = []
-    for item in (body.inspection_items or []):
-        inspection_item = MaintenanceInspectionItem(
-            maintenance_record_id=record.id,
-            item_name=item.item_name,
-            is_completed=item.is_completed,
-            checked_at=get_vn_naive_datetime() if item.is_completed else None,
-        )
-        db.add(inspection_item)
-        items.append(inspection_item)
+    for idx, item in enumerate(body.inspection_items or [], 1):
+        items.append({
+            "id": idx,
+            "item_name": item.item_name,
+            "is_completed": item.is_completed,
+            "checked_at": now.isoformat() if item.is_completed else None,
+        })
+    wo.inspection_items_json = items
 
     await db.commit()
-    await db.refresh(record)
+    await db.refresh(wo)
 
     return MaintenanceRecordResponse(
-        id=record.id,
-        work_order_id=record.work_order_id,
-        drone_id=record.drone_id,
-        performed_by=record.performed_by,
-        title=record.title,
-        diagnosis=record.diagnosis,
-        corrective_action=record.corrective_action,
-        resulting_drone_status=record.resulting_drone_status,
-        created_at=record.created_at,
-        completed_at=record.completed_at,
+        id=wo.id,
+        work_order_id=wo.id,
+        drone_id=wo.drone_id,
+        performed_by=user.id,
+        title=wo.title,
+        diagnosis=wo.diagnosis,
+        corrective_action=wo.action_taken,
+        resulting_drone_status=wo.resulting_drone_status,
+        created_at=now,
+        completed_at=wo.record_completed_at,
         inspection_items=items,
     )
 
@@ -965,10 +953,11 @@ async def get_work_order_logs(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    result = await db.execute(
-        select(WorkOrderLog).where(WorkOrderLog.work_order_id == work_order_id).order_by(WorkOrderLog.id.desc())
-    )
-    return result.scalars().all()
+    wo = await db.get(WorkOrder, work_order_id)
+    if not wo:
+        raise HTTPException(status_code=404, detail="Work order not found")
+    logs = list(reversed(wo.status_logs_json or []))
+    return logs
 
 
 # ── Maintenance Schedules ─────────────────────────────────────────────────────
@@ -1267,10 +1256,7 @@ async def update_inspection(
 
     # Khi Complete: bắt buộc phải có Maintenance Record trước
     if body.status == WorkOrderStatus.COMPLETED:
-        record_result = await db.execute(
-            select(MaintenanceRecord).where(MaintenanceRecord.work_order_id == work_order_id).limit(1)
-        )
-        if not record_result.scalars().first():
+        if not wo.diagnosis and not wo.resulting_drone_status and not wo.action_taken:
             raise HTTPException(
                 status_code=400,
                 detail="Chưa có Maintenance Record cho Work Order này. Vui lòng tạo Maintenance Record trước khi Complete."
@@ -1304,15 +1290,18 @@ async def update_inspection(
                 alert.acknowledged_at = now
                 print(f"[MAINTENANCE] Alert #{alert.id} acknowledged by technician {user.id}")
     
-    log = WorkOrderLog(
-        work_order_id=wo.id,
-        action="inspection_update",
-        from_status=old_status,
-        to_status=body.status.value,
-        changed_by=user.id,
-        created_at=now,
-    )
-    db.add(log)
+    new_log = {
+        "id": len(wo.status_logs_json or []) + 1,
+        "work_order_id": wo.id,
+        "action": "inspection_update",
+        "from_status": old_status,
+        "to_status": body.status.value,
+        "changed_by": user.id,
+        "created_at": now.isoformat() if hasattr(now, "isoformat") else str(now),
+    }
+    cur_logs = list(wo.status_logs_json or [])
+    cur_logs.append(new_log)
+    wo.status_logs_json = cur_logs
     await db.commit()
     await db.refresh(wo)
     return wo
@@ -1487,7 +1476,7 @@ async def swap_battery_at_relay(
     - mission.handling_status → READY (sẵn sàng dispatch).
     """
     from sqlalchemy import and_
-    from app.modules.missions.models import MissionLeg, MissionLegStatus, MissionBatterySwapHistory
+    from app.modules.missions.models import MissionLeg, MissionLegStatus
     from app.modules.fleet.models import DroneStatus, batteries_status
     from app.modules.missions.technician.router import get_compatible_battery_models
 
@@ -1649,15 +1638,7 @@ async def swap_battery_at_relay(
     if next_leg:
         next_leg.battery_id = new_battery.id
 
-    # Ghi lịch sử swap
-    swap_record = MissionBatterySwapHistory(
-        mission_id=mission.id,
-        hub_id=relay_hub_id,
-        old_battery_id=old_battery_id,
-        new_battery_id=new_battery.id,
-        swapped_at=now,
-    )
-    db.add(swap_record)
+    # Ghi nhận thay pin hoàn tất
 
     # Cập nhật handling_status → READY
     mission.handling_status = HandlingStatus.READY

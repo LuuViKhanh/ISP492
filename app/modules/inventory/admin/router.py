@@ -593,14 +593,16 @@ async def finance_report(
         period_label = f"Năm {target_year}"
 
     # ── Thu: doanh thu giao hàng ──────────────────────────────────
+    period_start_naive = period_start.replace(tzinfo=None)
+    period_end_naive = period_end.replace(tzinfo=None)
     comp_ts = func.coalesce(Mission.arrival_confirmed_at, Mission.end_time, Mission.departed_at)
     revenue_q = await db.execute(
         select(func.coalesce(func.sum(Mission.delivery_fee), 0.0))
         .where(
             and_(
                 Mission.status.in_(COMPLETED_MS),
-                comp_ts >= period_start,
-                comp_ts <= period_end,
+                comp_ts >= period_start_naive,
+                comp_ts <= period_end_naive,
             )
         )
     )

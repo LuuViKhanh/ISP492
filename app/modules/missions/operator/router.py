@@ -11,7 +11,7 @@ from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
 from app.core.config import settings
-from app.modules.missions.models import Mission, MissionStatus, HandlingStatus, Location, LocationType, Incident, IncidentStatus, IncidentSeverity, TelemetryLog, MissionHubCheckpoint, MissionLeg, MissionLegStatus
+from app.modules.missions.models import Mission, MissionStatus, HandlingStatus, Incident, IncidentStatus, IncidentSeverity, TelemetryLog, MissionLeg, MissionLegStatus
 from app.modules.system.models import Hub
 from app.modules.fleet.models import MaintenanceAlert
 import heapq
@@ -130,12 +130,12 @@ async def list_mini_hubs(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Lấy danh sách các Hub phụ (Mini-hubs)."""
+    """Lấy danh sách các Hub (Mini-hubs và Hubs đã hợp nhất)."""
     result = await db.execute(
-        select(Location).where(Location.type == LocationType.HUB).order_by(Location.id)
+        select(Hub).order_by(Hub.id)
     )
-    locations = result.scalars().all()
-    return [{"id": l.id, "name": l.name, "latitude": l.latitude, "longitude": l.longitude, "type": l.type.value} for l in locations]
+    hubs = result.scalars().all()
+    return [{"id": h.id, "name": h.name, "latitude": h.latitude, "longitude": h.longitude, "type": "Hub"} for h in hubs]
 
 
 @router.get(
@@ -183,15 +183,7 @@ async def get_live_tracking(
     )
     latest_logs = {log.mission_id: log for log in latest_logs_result.scalars().all()}
 
-    cp_counts_result = await db.execute(
-        select(
-            MissionHubCheckpoint.mission_id,
-            func.count(MissionHubCheckpoint.id).label("cnt"),
-        )
-        .where(MissionHubCheckpoint.mission_id.in_(mission_ids))
-        .group_by(MissionHubCheckpoint.mission_id)
-    )
-    cp_counts = {row.mission_id: row.cnt for row in cp_counts_result.all()}
+    cp_counts = {m.id: len(m.checkpoints_json or []) for m in missions}
 
     # Lấy thông tin Legs cho các mission đang bay
     legs_result = await db.execute(
@@ -632,39 +624,19 @@ async def collect_telemetry(
         logs_to_insert.append(log_entry)
         db.add(log_entry)
 
-    # ── 3. Tải hubs + mini-hubs để detect proximity ────────────────────────────
+    # ── 3. Tải hubs để detect proximity ────────────────────────────
     hubs_result = await db.execute(
         select(Hub).where(and_(Hub.latitude.isnot(None), Hub.longitude.isnot(None)))
     )
-    all_hubs = hubs_result.scalars().all()  # [(id, lat, lng, name, is_mini=False)]
+    all_hubs = hubs_result.scalars().all()
 
-    mini_hubs_result = await db.execute(
-        select(Location).where(Location.type == LocationType.HUB)
-    )
-    all_mini_hubs = mini_hubs_result.scalars().all()
-
-    # ── 4. Đếm số checkpoint đã có để gán thứ tự tiếp theo ─────────────────────
-    cp_count_result = await db.execute(
-        select(func.count()).select_from(MissionHubCheckpoint)
-        .where(MissionHubCheckpoint.mission_id == actual_mission_id)
-    )
-    existing_cp_count = cp_count_result.scalar_one() or 0
-    next_order = existing_cp_count + 1
-
-    # ── 5. Detect hub proximity cho từng điểm telemetry ────────────────────────
+    # ── 4. Detect hub proximity cho từng điểm telemetry ────────────────────────
     HUB_PROXIMITY_RADIUS_M = 200.0   # Bán kính tính từ tâm hub (m)
     COOLDOWN_SECONDS = 60             # Tránh log trùng cho cùng 1 hub liên tiếp
 
-    new_checkpoints: list[MissionHubCheckpoint] = []
-
-    # Lấy checkpoint gần nhất để cooldown check
-    last_cp_result = await db.execute(
-        select(MissionHubCheckpoint)
-        .where(MissionHubCheckpoint.mission_id == actual_mission_id)
-        .order_by(MissionHubCheckpoint.passed_at.desc())
-        .limit(1)
-    )
-    last_cp = last_cp_result.scalar_one_or_none()
+    current_checkpoints = list(mission.checkpoints_json or [])
+    new_checkpoints: list[HubCheckpointResponse] = []
+    next_order = len(current_checkpoints) + 1
 
     def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         """Tính khoảng cách Haversine (mét) giữa hai toạ độ WGS-84."""
@@ -678,59 +650,53 @@ async def collect_telemetry(
     for data in telemetry_data:
         pt_ts = data.timestamp.replace(tzinfo=None) if data.timestamp.tzinfo else data.timestamp
 
-        # Gom tất cả hub candidates: (hub_id, location_id, name, lat, lng)
-        candidates = [
-            (h.id, None, h.name or f"Hub #{h.id}", h.latitude, h.longitude)
-            for h in all_hubs
-        ] + [
-            (None, loc.id, loc.name or f"Mini-hub #{loc.id}", loc.latitude, loc.longitude)
-            for loc in all_mini_hubs
-        ]
-
-        for hub_id, loc_id, hub_name, hub_lat, hub_lng in candidates:
-            dist = haversine_m(data.latitude, data.longitude, hub_lat, hub_lng)
+        for h in all_hubs:
+            dist = haversine_m(data.latitude, data.longitude, h.latitude, h.longitude)
             if dist > HUB_PROXIMITY_RADIUS_M:
                 continue  # Không trong vùng
 
             # Cooldown: kiểm tra xem hub này đã được log trong 60s qua chưa
-            recent_cp_result = await db.execute(
-                select(MissionHubCheckpoint).where(
-                    and_(
-                        MissionHubCheckpoint.mission_id == actual_mission_id,
-                        MissionHubCheckpoint.hub_id == hub_id if hub_id else MissionHubCheckpoint.location_id == loc_id,
-                        MissionHubCheckpoint.passed_at >= (
-                            pt_ts.replace(tzinfo=None) - timedelta(seconds=COOLDOWN_SECONDS)
-                        ),
-                    )
-                ).limit(1)
-            )
-            if recent_cp_result.scalar_one_or_none():
-                continue  # Đã log gần đây, bỏ qua
+            in_cooldown = False
+            for cp in reversed(current_checkpoints):
+                if cp.get("hub_id") == h.id:
+                    cp_ts_str = cp.get("passed_at")
+                    if cp_ts_str:
+                        try:
+                            cp_ts = datetime.fromisoformat(str(cp_ts_str))
+                            if abs((pt_ts - cp_ts).total_seconds()) < COOLDOWN_SECONDS:
+                                in_cooldown = True
+                                break
+                        except Exception:
+                            pass
+            if in_cooldown:
+                continue
 
-            cp = MissionHubCheckpoint(
-                mission_id=actual_mission_id,
-                hub_id=hub_id,
-                location_id=loc_id,
-                hub_name=hub_name,
-                hub_latitude=hub_lat,
-                hub_longitude=hub_lng,
-                drone_latitude=data.latitude,
-                drone_longitude=data.longitude,
-                distance_to_hub_m=round(dist, 2),
-                passed_at=pt_ts,
-                checkpoint_order=next_order,
-            )
-            db.add(cp)
-            new_checkpoints.append(cp)
+            cp_dict = {
+                "id": next_order,
+                "mission_id": actual_mission_id,
+                "hub_id": h.id,
+                "location_id": None,
+                "hub_name": h.name or f"Hub #{h.id}",
+                "hub_latitude": h.latitude,
+                "hub_longitude": h.longitude,
+                "drone_latitude": data.latitude,
+                "drone_longitude": data.longitude,
+                "distance_to_hub_m": round(dist, 2),
+                "passed_at": pt_ts.isoformat() if hasattr(pt_ts, "isoformat") else str(pt_ts),
+                "checkpoint_order": next_order,
+            }
+            current_checkpoints.append(cp_dict)
+            new_checkpoints.append(HubCheckpointResponse(**cp_dict))
             next_order += 1
+
+    if new_checkpoints:
+        mission.checkpoints_json = current_checkpoints
 
     # ── 6. Commit tất cả ────────────────────────────────────────────────────────
     await db.commit()
 
     for log in logs_to_insert:
         await db.refresh(log)
-    for cp in new_checkpoints:
-        await db.refresh(cp)
     await db.refresh(mission)
 
     return TelemetryIngestResponse(
@@ -786,12 +752,7 @@ async def get_hub_checkpoints(
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
 
-    result = await db.execute(
-        select(MissionHubCheckpoint)
-        .where(MissionHubCheckpoint.mission_id == mission.id)
-        .order_by(MissionHubCheckpoint.checkpoint_order.asc())
-    )
-    return result.scalars().all()
+    return [HubCheckpointResponse(**cp) for cp in (mission.checkpoints_json or [])]
 
 
 # ── Hubs & Locations ──────────────────────────────────────────────────────────────
@@ -803,7 +764,7 @@ from app.modules.missions.schemas import (
     RelayHubBatteryOptionSchema,
 )
 from app.modules.missions.models import Order, OrderStatus, PaymentStatus, MissionLeg, MissionLegStatus
-from app.modules.ai_predictions.models import AIPrediction, AIRecommendation
+from app.modules.ai_predictions.models import AIPrediction
 from app.modules.ai_predictions.service import predict_flight_energy, haversine_distance
 from app.modules.missions.technician.router import DRONE_BATTERY_COMPATIBILITY, get_compatible_battery_models
 from app.shared.id_generator import generate_sequential_id
@@ -2292,15 +2253,7 @@ async def build_missions_response_list(
         if p.mission_id not in pred_by_mission:
             pred_by_mission[p.mission_id] = p
 
-    recs_res = await db.execute(
-        select(AIRecommendation)
-        .where(AIRecommendation.mission_id.in_(mission_ids))
-        .order_by(AIRecommendation.id.desc())
-    )
-    rec_by_mission: dict[str, AIRecommendation] = {}
-    for r in recs_res.scalars().all():
-        if r.mission_id not in rec_by_mission:
-            rec_by_mission[r.mission_id] = r
+    rec_by_mission = {}
 
     # 4. Lấy danh sách Pin & Drone để tính chính xác % tiêu hao pin theo model Drone
     bats_res = await db.execute(select(Battery))
@@ -2474,7 +2427,16 @@ async def build_missions_response_list(
                         from_longitude=h1.longitude if h1 else None,
                         to_latitude=h2.latitude if h2 else None,
                         to_longitude=h2.longitude if h2 else None,
-                        status="PENDING",
+                        status=(
+                            "COMPLETED" if str(m.status.value if hasattr(m.status, "value") else (m.status or "")).strip().lower() in ("completed", "mission completed")
+                            else (
+                                "IN_PROGRESS" if str(m.status.value if hasattr(m.status, "value") else (m.status or "")).strip().lower() in ("flying", "in progress", "active mission")
+                                else (
+                                    "CANCELLED" if str(m.status.value if hasattr(m.status, "value") else (m.status or "")).strip().lower() in ("cancelled", "rejected", "failed", "incident return")
+                                    else "PENDING"
+                                )
+                            )
+                        ),
                         energy_wh=round(e, 2),
                         battery_id=origin_bat_id,
                         battery_serial=origin_bat_obj.serial_number if origin_bat_obj else None,
@@ -2489,7 +2451,7 @@ async def build_missions_response_list(
 
         dist_km = round(m.distance_m / 1000.0, 2) if m.distance_m else round(sum(l.distance_km for l in legs_detail), 2)
         ai_pred = pred_by_mission.get(m.id)
-        ai_rec = rec_by_mission.get(m.id)
+        ai_rec = None
 
         if ai_pred and ai_pred.estimated_energy_wh is not None:
             pred_energy = round(float(ai_pred.estimated_energy_wh), 2)
@@ -2514,9 +2476,10 @@ async def build_missions_response_list(
             risk = "LOW" if batt_pct < 60 else ("MEDIUM" if batt_pct <= 80 else "HIGH")
 
         conf_pct = 90 if risk == "LOW" else (85 if risk == "MEDIUM" else 75)
+        rec_content = ai_pred.recommendation_content if ai_pred else None
         reason = (
-            ai_rec.content
-            if (ai_rec and ai_rec.content)
+            rec_content
+            if rec_content
             else f"Lộ trình {route_string} được chọn theo phân tích AI ({pred_energy:.1f} Wh)."
         )
         route_id = f"R-{m.order_id or m.id}-SCH"
@@ -2846,7 +2809,7 @@ async def create_mission(
         3. Validate viên pin được chọn cho Drone (`batteryId` / `battery_id`) hoặc tự động chọn viên pin tương thích tốt nhất tại Origin Hub.
         4. Phân tích lại tuyến đường dựa trên năng lượng thực tế của viên pin được gán (`available_energy_wh = capacity_wh * charge_level_pct / 100`) và ngưỡng dự phòng an toàn 20%.
         5. Ở các tuyến Multi-Hub (Relay), chỉ định và giữ chỗ chính xác từng viên pin cụ thể tại mỗi Hub trung gian (`MissionLeg.battery_id`) để dùng thay thế.
-        6. Tạo bản ghi `Mission`, `MissionLeg`, `AIPrediction`, `AIRecommendation`.
+        6. Tạo bản ghi `Mission`, `MissionLeg`, `AIPrediction`.
     """
     clean_order_id = request.orderId.strip() if request.orderId else request.orderId
     order = await db.get(Order, clean_order_id)
@@ -3097,15 +3060,6 @@ async def create_mission(
         db.add(m_leg)
 
     # 3. Lưu AI Snapshot
-    ai_pred = AIPrediction(
-        mission_id=mission_id,
-        estimated_energy_wh=round(total_energy_wh, 2),
-        estimated_duration_m=float(duration_min),
-        risk_level=selected_schema.risk.capitalize() if (selected_schema and selected_schema.risk) else "Low",
-        predicted_at=get_vn_datetime()
-    )
-    db.add(ai_pred)
-
     rec_content = (
         selected_schema.reason
         if (selected_schema and selected_schema.reason)
@@ -3115,14 +3069,16 @@ async def create_mission(
             + (f" Pin thay thế trung gian: {', '.join(relay_swap_summary_parts)}." if relay_swap_summary_parts else "")
         )
     )
-    ai_rec = AIRecommendation(
+    ai_pred = AIPrediction(
         mission_id=mission_id,
-        category="Mission Planning",
-        content=rec_content,
-        is_applied=True,
-        created_at=get_vn_datetime()
+        estimated_energy_wh=round(total_energy_wh, 2),
+        estimated_duration_m=float(duration_min),
+        risk_level=selected_schema.risk.capitalize() if (selected_schema and selected_schema.risk) else "Low",
+        recommendation_content=rec_content,
+        is_recommendation_applied=True,
+        predicted_at=get_vn_datetime()
     )
-    db.add(ai_rec)
+    db.add(ai_pred)
 
     # 4. Ghi nhận thời gian planning trên tất cả các đơn hàng thuộc nhiệm vụ
     now_naive = get_vn_naive_datetime()
@@ -3207,7 +3163,7 @@ async def operator_battery_swap(
     - Mission phải đang dừng tại hub: `handling_status ∈ {AT_HUB, READY, INCOMING}`.
     - Pin mới phải: ACTIVE, tại đúng hub của drone, chưa gắn drone khác, charge ≥ 80%.
     """
-    from app.modules.missions.models import MissionBatterySwapHistory
+    
     from app.modules.fleet.models import Battery, batteries_status
     from app.modules.system.models import Notification, NotificationType
 
@@ -3290,16 +3246,7 @@ async def operator_battery_swap(
     new_battery.current_hub_id = hub_id
     mission.battery_id = new_battery.id
 
-    # ── 5. Ghi lịch sử swap ──────────────────────────────────────────────────
-    swap_record = MissionBatterySwapHistory(
-        mission_id=mission.id,
-        hub_id=hub_id,
-        old_battery_id=old_battery_id or None,
-        new_battery_id=new_battery.id,
-        swapped_at=now,
-    )
-    db.add(swap_record)
-    await db.flush()
+    # ── 5. Hoàn tất swap pin ──────────────────────────────────────────────────
 
     # ── 6. Notify ─────────────────────────────────────────────────────────────
     hub = await db.get(Hub, hub_id)
