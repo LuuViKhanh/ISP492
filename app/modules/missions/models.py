@@ -193,6 +193,9 @@ class Order(Base):
     payment_account_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     payment_account_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    refund_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    refund_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    refund_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # ── Aging Priority fields (NORMAL mode) ──────────────────────────────────
     is_aging_priority: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     aging_deadline: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
