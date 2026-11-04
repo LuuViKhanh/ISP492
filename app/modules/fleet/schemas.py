@@ -73,6 +73,7 @@ class WorkOrderResponse(BaseModel):
     action_taken: Optional[str] = None
     status: WorkOrderStatus
     resolved_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
     alert_id: Optional[int] = None
     title: Optional[str] = None
     priority: Optional[str] = None

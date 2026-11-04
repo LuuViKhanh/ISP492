@@ -149,8 +149,8 @@ class WorkOrder(Base):
     __tablename__ = "work_orders"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    drone_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    battery_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    drone_id: Mapped[str | None] = mapped_column(String(50), ForeignKey("drones.id"), nullable=True)
+    battery_id: Mapped[str | None] = mapped_column(String(50), ForeignKey("batteries.id"), nullable=True)
     technician_id: Mapped[str] = mapped_column(String, nullable=False)
     issue_description: Mapped[str] = mapped_column(Text, nullable=False)
     action_taken: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -159,7 +159,8 @@ class WorkOrder(Base):
         nullable=False, default=WorkOrderStatus.PENDING,
     )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    alert_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    alert_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("maintenance_alerts.id"), nullable=True)
     title: Mapped[str | None] = mapped_column(String, nullable=True)
     priority: Mapped[str | None] = mapped_column(String, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)
