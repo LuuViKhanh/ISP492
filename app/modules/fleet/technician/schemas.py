@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 from typing import Optional, List, Union
 from datetime import datetime
-from app.modules.fleet.models import DroneStatus, WorkOrderStatus
+from app.modules.fleet.models import DroneStatus, WorkOrderStatus, PartCategoryType, PartsRequestStatus
 
 
 class DroneProfileResponse(BaseModel):
@@ -53,6 +53,7 @@ class BatteryResponse(BaseModel):
     battery_model: Optional[str] = None
     last_charged_at: Optional[datetime] = None
     estimated_minutes_remaining: Optional[int] = None
+    available_status: Optional[str] = None       # In Use | Ready | Charging | Replaced
     # Vòng đời pin (tính on-the-fly, không lưu DB)
     lifecycle_status: Optional[str] = None       # Active | Expired
     days_until_expiry: Optional[int] = None      # số ngày còn lại đến khi hết vòng đời (730 ngày)
@@ -180,83 +181,123 @@ class MaintenanceScheduleCreate(BaseModel):
     interval_flight_hours: Optional[float] = None
 
 
-# ── HubSupply (Quản lý vật tư tại Hub) ───────────────────────────────────────
+# ── PartCategory (Danh mục loại vật tư) ───────────────────────────────────────
 
-class HubSupplyCreate(BaseModel):
-    """Tạo mới bản ghi vật tư tại hub."""
-    hub_id: int
-    item_name: str
-    quantity: int = 0
-    unit: Optional[str] = None       # vd: "cái", "bộ", "chiếc"
-
-
-class HubSupplyUpdate(BaseModel):
-    """Cập nhật vật tư (partial update — chỉ field nào được truyền mới thay đổi)."""
-    item_name: Optional[str] = None
-    quantity: Optional[int] = None
-    unit: Optional[str] = None
+class PartCategoryCreate(BaseModel):
+    """Tạo mới danh mục vật tư."""
+    name: str  # vd: "DJI Matrice 100 Propeller"
+    category_type: PartCategoryType  # Loại vật tư (Propeller, Battery, Motor, etc.)
+    compatible_drone_models: Optional[List[str]] = None  # vd: ["DJI Matrice 100", "Aurellia X6"]
+    unit_cost: Optional[float] = None  # Giá per unit (VND)
+    description: Optional[str] = None
+    is_active: bool = True
 
 
-class HubSupplyResponse(BaseModel):
-    """Phản hồi khi truy vấn vật tư."""
+class PartCategoryUpdate(BaseModel):
+    """Cập nhật danh mục vật tư (partial update)."""
+    name: Optional[str] = None
+    category_type: Optional[PartCategoryType] = None
+    compatible_drone_models: Optional[List[str]] = None
+    unit_cost: Optional[float] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class PartCategoryResponse(BaseModel):
+    """Phản hồi danh mục vật tư."""
     id: int
-    hub_id: Optional[int] = None
-    item_name: str
-    quantity: int
-    unit: Optional[str] = None
-    updated_at: Optional[datetime] = None
+    name: str
+    category_type: PartCategoryType
+    compatible_drone_models: Optional[List[str]] = None
+    unit_cost: Optional[float] = None
+    description: Optional[str] = None
+    is_active: bool
     created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
 
 
-# ── SupplyRequest (Yêu cầu cấp phát vật tư) ───────────────────────────────────
+# ── PartsRequest (Yêu cầu cấp phát vật tư) ───────────────────────────────────
 
-class SupplyRequestItemSchema(BaseModel):
-    """Item trong yêu cầu cấp phát."""
-    item_name: str
-    quantity: int
-    unit: Optional[str] = None  # vd: "cái", "bộ"
-
-
-class SupplyRequestCreate(BaseModel):
+class PartsRequestCreate(BaseModel):
     """Tạo yêu cầu cấp phát vật tư."""
-    items: List[SupplyRequestItemSchema]
-    reason: Optional[str] = None
+    part_category_id: int  # ID của loại vật tư
+    quantity_needed: int  # Số lượng cần
+    description: str  # Lý do/mô tả chi tiết
+    drone_id: Optional[str] = None  # Drone cần vật tư này (optional)
+    photo_urls: Optional[List[str]] = None  # URLs của ảnh chứng minh
 
 
-class SupplyRequestApprove(BaseModel):
-    """Admin duyệt yêu cầu."""
-    admin_notes: Optional[str] = None
+class PartsRequestApprove(BaseModel):
+    """Admin duyệt yêu cầu cấp phát vật tư."""
+    admin_note: Optional[str] = None  # Ghi chú từ admin
 
 
-class SupplyRequestReject(BaseModel):
-    """Admin từ chối yêu cầu."""
-    admin_notes: Optional[str] = None
+class PartsRequestReject(BaseModel):
+    """Admin từ chối yêu cầu cấp phát vật tư."""
+    admin_note: Optional[str] = None  # Ghi chú từ admin
 
 
-class SupplyRequestConfirmReceipt(BaseModel):
-    """Technician xác nhận đã nhập hàng."""
-    pass  # Không cần tham số, chỉ cần xác nhận
-
-
-class SupplyRequestResponse(BaseModel):
+class PartsRequestResponse(BaseModel):
     """Phản hồi yêu cầu cấp phát vật tư."""
     id: int
-    technician_id: str
+    requested_by: str  # Technician ID
     hub_id: int
-    status: str  # Pending | Approved | Rejected | Received
-    items: str  # JSON string
-    reason: Optional[str] = None
-    admin_notes: Optional[str] = None
-    requested_at: datetime
-    approved_at: Optional[datetime] = None
-    approved_by: Optional[str] = None
-    rejected_at: Optional[datetime] = None
-    rejected_by: Optional[str] = None
-    received_at: Optional[datetime] = None
-    received_by: Optional[str] = None
+    drone_id: Optional[str] = None
+    part_category_id: int
+    quantity_needed: int
+    description: str
+    photo_urls: Optional[List[str]] = None
+    status: PartsRequestStatus
+    reviewed_by: Optional[str] = None
+    admin_note: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    actual_cost: Optional[float] = None  # Actual cost when approved (VND)
+    created_at: datetime
+    fulfilled_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ── HubInventory (Tồn kho vật tư tại Hub) ───────────────────────────────────
+
+class HubInventoryCreate(BaseModel):
+    """Tạo bản ghi tồn kho vật tư tại hub."""
+    part_category_id: int  # ID loại vật tư
+    quantity: int = 0  # Số lượng ban đầu
+    min_stock_threshold: int = 5  # Mức tồn kho tối thiểu
+
+
+class HubInventoryUpdate(BaseModel):
+    """Cập nhật tồn kho vật tư (partial update)."""
+    quantity: Optional[int] = None
+    min_stock_threshold: Optional[int] = None
+
+
+class HubInventoryResponse(BaseModel):
+    """Phản hồi tồn kho vật tư."""
+    id: int
+    hub_id: int
+    part_category_id: int
+    quantity: int
+    min_stock_threshold: int
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class HubInventoryDetailedResponse(BaseModel):
+    """Phản hồi tồn kho với thông tin chi tiết về loại vật tư."""
+    id: int
+    hub_id: int
+    part_category: PartCategoryResponse  # Thông tin về loại vật tư
+    quantity: int
+    min_stock_threshold: int
+    is_low_stock: bool = False  # Có phải dưới mức tồn kho tối thiểu không?
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

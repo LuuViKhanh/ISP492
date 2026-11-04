@@ -11,7 +11,18 @@ from app.modules.fleet.models import MaintenanceAlert
 
 async def get_operator_ids(db: AsyncSession) -> list[str]:
     operator_role_id = ROLE_NAME_TO_ID.get(UserRole.OPERATOR, "595bec91-7f4e-47ec-bfec-6f0087b84620")
-    result = await db.execute(select(User.id).where(User.role_id == operator_role_id))
+    result = await db.execute(
+        select(User.id).where(and_(User.role_id == operator_role_id, User.is_active == True))
+    )
+    return result.scalars().all()
+
+async def get_technician_ids(db: AsyncSession) -> list[str]:
+    technician_role_id = ROLE_NAME_TO_ID.get(UserRole.TECHNICIAN)
+    if not technician_role_id:
+        return []
+    result = await db.execute(
+        select(User.id).where(and_(User.role_id == technician_role_id, User.is_active == True))
+    )
     return result.scalars().all()
 
 async def run_approval_deadline_watcher(db: AsyncSession):
@@ -337,20 +348,16 @@ from app.modules.missions.models import DeliveryMode as _DeliveryMode
 
 
 async def run_aging_priority_watcher(db: AsyncSession):
-    # T?m th?i v� hi?u h�a worker v� DB server chua migrate c?t is_aging_priority
-    return
     """
-    Worker: Tự động đánh dấu Aging Priority cho đơn NORMAL khi sắp hết deadline.
+    Worker định kỳ (15 phút/lần):
+    Tự động đánh dấu Aging Priority cho đơn NORMAL khi sắp hết hạn lưu kho (now >= aging_deadline).
 
     Logic:
-    - Quét các đơn NORMAL + PENDING + chưa có mission + is_aging_priority=False.
-    - Nếu now >= aging_deadline → set is_aging_priority=True + notify tất cả Operators.
-    - KHÔNG thay đổi bất cứ thứ gì của SCHEDULED orders (đúng với yêu cầu
-      "không ảnh hưởng tới schedule").
-
-    Mỗi đơn chỉ được nâng cấp 1 lần (dedup bằng is_aging_priority flag).
+    - Quét các đơn NORMAL đang ở trạng thái chờ gom chuyến/xử lý (PENDING, AWAITING_DROP_OFF, AT_HUB)
+      chưa có mission và is_aging_priority=False.
+    - Nếu now >= aging_deadline → set is_aging_priority=True + notify Customer & tất cả Operators.
+    - Đơn có is_aging_priority=True được cộng điểm ưu tiên lên 50.0 (ngang Express) và gán trạng thái URGENT.
     """
-    return  # Tạm thời vô hiệu hóa cho tới khi DB migration cột is_aging_priority
     from app.modules.missions.models import Order, OrderStatus, Mission
 
     now = get_vn_naive_datetime()
@@ -360,7 +367,11 @@ async def run_aging_priority_watcher(db: AsyncSession):
         select(Order).where(
             and_(
                 Order.delivery_mode == _DeliveryMode.NORMAL,
-                Order.status == OrderStatus.PENDING,
+                Order.status.in_([
+                    OrderStatus.PENDING,
+                    OrderStatus.AWAITING_DROP_OFF,
+                    OrderStatus.AT_HUB,
+                ]),
                 Order.is_aging_priority == False,     # noqa: E712
                 Order.aging_deadline.isnot(None),
                 Order.aging_deadline <= now,
@@ -525,6 +536,136 @@ async def run_critical_order_notifier(db: AsyncSession):
                 notifications_type=NotificationType.MISSION_STATUS,
                 mission_id=str(order.id),
                 reference_id=f"CRITICAL_{order.id}",
+                created_at=now,
+            ))
+
+    await db.commit()
+
+
+# ── Deadline Alert Watcher ────────────────────────────────────────────
+# Chạy mỗi 15 phút. Quét đơn chưa có Mission đang tiến gần hạn giao (slack <= 60 phút)
+# và thông báo cho Operator + Technician để chuẩn bị.
+DEADLINE_ALERT_REF_PREFIX = "DEADLINE_ALERT"
+DEADLINE_ALERT_RESEND_MINS = 30   # gửi lại mỗi 30 phút nếu tình trạng không đổi
+
+
+async def run_deadline_alert_watcher(db: AsyncSession):
+    """
+    Worker: Cảnh báo đơn hàng sắp quá hạn cho Operator và Technician.
+
+    Điều kiện kích hoạt:
+    - Đơn có trạng thái AT_HUB hoặc PENDING, chưa bị hủy.
+    - estimated_window_end trong tương lai (chưa overdue — overdue đã do run_critical_order_notifier xử lý).
+    - Slack (= coordination_deadline - now) <= 60 phút (MEDIUM hoặc HIGH).
+    - Chưa có Mission đang hoạt động cho đơn đó.
+
+    Dedup: chỉ gửi lại nếu >= DEADLINE_ALERT_RESEND_MINS kể từ lần gửi gần nhất.
+    """
+    from app.modules.missions.models import Order, OrderStatus, Mission, DeliveryMode as _DM
+    import math
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    # Lấy đơn chưa bị huỷ, còn trong hạn, có estimated_window_end
+    result = await db.execute(
+        select(Order).where(
+            and_(
+                Order.status.in_([OrderStatus.AT_HUB, OrderStatus.PENDING]),
+                Order.estimated_window_end.isnot(None),
+                Order.estimated_window_end > now,   # chưa overdue
+            )
+        )
+    )
+    pending_orders = result.scalars().all()
+    if not pending_orders:
+        return
+
+    # Lọc bỏ đơn đã có Mission active
+    all_ids = [o.id for o in pending_orders]
+    active_ms_result = await db.execute(
+        select(Mission.order_id).where(
+            and_(
+                Mission.order_id.in_(all_ids),
+                Mission.status.in_([
+                    MissionStatus.SCHEDULED,
+                    MissionStatus.APPROVED,
+                    MissionStatus.FLYING,
+                    MissionStatus.IN_PROGRESS,
+                    MissionStatus.ACTIVE_MISSION,
+                ])
+            )
+        )
+    )
+    has_active_mission = {row[0] for row in active_ms_result.all() if row[0]}
+
+    # Tính slack cho từng đơn (dùng công thức tương đương compute_urgency_fields)
+    FLIGHT_MINS_DEFAULT = 20  # fallback nếu không tính được
+
+    operator_ids = await get_operator_ids(db)
+    technician_ids = await get_technician_ids(db)
+    cutoff = now - timedelta(minutes=DEADLINE_ALERT_RESEND_MINS)
+
+    for order in pending_orders:
+        if order.id in has_active_mission:
+            continue
+
+        w_end = order.estimated_window_end
+        coord_deadline = w_end - timedelta(minutes=FLIGHT_MINS_DEFAULT + 30)
+        slack_mins = (coord_deadline - now).total_seconds() / 60.0
+
+        # Chỉ cảnh báo khi MEDIUM (<=60) hoặc HIGH (<=30) — CRITICAL do worker khác xử lý
+        if slack_mins > 60 or slack_mins <= 0:
+            continue
+
+        priority_level = "HIGH" if slack_mins <= 30 else "MEDIUM"
+        d_mode = order.delivery_mode.value if hasattr(order.delivery_mode, "value") else str(order.delivery_mode or "UNKNOWN")
+        ref_id = f"{DEADLINE_ALERT_REF_PREFIX}_{order.id}"
+
+        # Dedup: kiểm tra đã gửi trong khoảng thời gian gần nhất chưa
+        existing = await db.execute(
+            select(Notification)
+            .where(
+                and_(
+                    Notification.reference_id == ref_id,
+                    Notification.created_at >= cutoff,
+                )
+            )
+            .limit(1)
+        )
+        if existing.scalar_one_or_none():
+            continue
+
+        slack_str = f"{int(slack_mins)} phút"
+        eta_str = w_end.strftime("%H:%M %d/%m") if w_end else "N/A"
+        icon = "🔴" if priority_level == "HIGH" else "🟡"
+
+        # ── Notify Operators ─────────────────────────────────────────────────
+        for op_id in operator_ids:
+            db.add(Notification(
+                user_id=op_id,
+                title=f"{icon} [{priority_level}] Đơn #{order.id} sắp đến hạn ({slack_str})",
+                message=(
+                    f"Đơn #{order.id} ({d_mode}) chưa có Mission. "
+                    f"Còn {slack_str} trước khi hết thời gian điều phối. "
+                    f"ETA cam kết với khách: {eta_str}. Vui lòng lập lịch ngay!"
+                ),
+                notifications_type=NotificationType.MISSION_STATUS,
+                reference_id=ref_id,
+                created_at=now,
+            ))
+
+        # ── Notify Technicians (chuẩn bị drone + pin) ────────────────────────
+        for tech_id in technician_ids:
+            db.add(Notification(
+                user_id=tech_id,
+                title=f"{icon} Chuẩn bị drone — Đơn #{order.id} giao trong {slack_str}",
+                message=(
+                    f"Đơn hàng #{order.id} ({d_mode}) sắp được lên lịch bay. "
+                    f"Vui lòng đảm bảo drone và pin tại Hub sẵn sàng. "
+                    f"ETA: {eta_str}."
+                ),
+                notifications_type=NotificationType.MISSION_STATUS,
+                reference_id=ref_id,
                 created_at=now,
             ))
 

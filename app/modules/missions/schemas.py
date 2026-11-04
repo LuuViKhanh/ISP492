@@ -63,6 +63,10 @@ class RouteLegSchema(BaseModel):
     battery_energy_wh: Optional[float] = None
     battery_consumption_pct: Optional[int] = None
     remaining_battery_pct: Optional[int] = None
+    leg_type: str = "DISPATCH"  # DISPATCH (bay sang nhận hàng) hoặc DELIVERY (giao hàng)
+    is_dispatch: bool = False
+    payload_kg: Optional[float] = None
+    note: Optional[str] = None
 
 
 class HubBatteryStatus(BaseModel):
@@ -110,7 +114,17 @@ class RouteOptionSchema(BaseModel):
     # Battery feasibility & kế hoạch thay pin ở các Hub trung gian
     feasible: bool = True
     infeasible_reason: Optional[str] = None
+    is_selectable: bool = True
+    unselectable_reason: Optional[str] = None
     relay_battery_status: list[HubBatteryStatus] = []
+    # Cross-Hub Drone Dispatch: thông tin điều phối Drone từ Hub khác sang Hub nhận hàng
+    is_cross_hub: bool = False
+    drone_home_hub_id: Optional[int] = None
+    drone_home_hub_name: Optional[str] = None
+    drone_home_hub_code: Optional[str] = None
+    pickup_hub_id: Optional[int] = None
+    pickup_hub_name: Optional[str] = None
+    pickup_hub_code: Optional[str] = None
 
 
 class MissionResponse(BaseModel):
@@ -134,6 +148,8 @@ class MissionResponse(BaseModel):
     pickup_location_id: Optional[int] = None
     dropoff_location_id: Optional[int] = None
     payload_weight: Optional[float] = None
+    bundled_order_ids: Optional[list[str]] = None
+    total_orders_count: Optional[int] = 1
     distance_m: Optional[float] = None
     delivery_fee: Optional[float] = None
     status: MissionStatus
@@ -202,6 +218,12 @@ class TelemetryDataResponse(TelemetryDataCreate):
     weather_precipitation: Optional[float] = None
     weather_pressure: Optional[float] = None
     weather_cloud_cover: Optional[float] = None
+    # ── Failsafe In-flight Status ─────────────────────────────
+    failsafe_status: Optional[str] = "SAFE"
+    failsafe_alert: Optional[str] = None
+    is_diverted: bool = False
+    divert_hub_id: Optional[int] = None
+    divert_hub_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -259,6 +281,12 @@ class LiveTrackingDrone(BaseModel):
     weather_precipitation: Optional[float] = None
     weather_pressure: Optional[float] = None
     weather_cloud_cover: Optional[float] = None
+    # ── Failsafe In-flight Status ─────────────────────────────
+    failsafe_status: Optional[str] = "SAFE"
+    failsafe_alert: Optional[str] = None
+    is_diverted: bool = False
+    divert_hub_id: Optional[int] = None
+    divert_hub_name: Optional[str] = None
 
 
 class LiveTrackingResponse(BaseModel):
@@ -270,9 +298,12 @@ class MissionPlanningAnalyzeRequest(BaseModel):
     droneId: Union[str, int]
     batteryId: Optional[str] = None
     battery_id: Optional[str] = None
+    bundledOrderIds: Optional[list[str]] = None
 
 class MissionPlanningAnalyzeResponse(BaseModel):
     orderId: Optional[str] = None
+    bundledOrderIds: Optional[list[str]] = None
+    totalPayloadKg: Optional[float] = None
     droneId: Optional[Union[str, int]] = None
     assignedBatteryId: Optional[str] = None
     assignedBatterySerial: Optional[str] = None
@@ -280,6 +311,13 @@ class MissionPlanningAnalyzeResponse(BaseModel):
     assignedBatteryCapacityWh: Optional[float] = None
     assignedBatteryChargePct: Optional[int] = None
     assignedBatteryEnergyWh: Optional[float] = None
+    droneCurrentHubId: Optional[int] = None
+    droneCurrentHubName: Optional[str] = None
+    droneCurrentHubCode: Optional[str] = None
+    isCrossHubDispatch: bool = False
+    pickupHubId: Optional[int] = None
+    pickupHubName: Optional[str] = None
+    pickupHubCode: Optional[str] = None
     routes: list[RouteOptionSchema]
 
 class MissionCreateRequest(BaseModel):
@@ -295,6 +333,82 @@ class MissionCreateRequest(BaseModel):
     distance_km: Optional[float] = None
     predicted_energy_wh: Optional[float] = None
     predicted_duration_min: Optional[int] = None
+    bundledOrderIds: Optional[list[str]] = None
 
 
 
+
+
+
+
+# ── Order Consolidation / Piggybacking Schemas ───────────────
+
+class PreAnalyzeBundleCandidatesRequest(BaseModel):
+    orderId: str
+
+class ValidateBundleRequest(BaseModel):
+    orderIds: list[str]
+    droneId: Optional[Union[str, int]] = None
+
+class PostAnalyzeBundleCandidatesRequest(BaseModel):
+    orderId: str
+    droneId: Union[str, int]
+    routeId: Optional[str] = None
+
+# ── Failsafe & Dynamic In-flight Divert Schemas ───────────────
+
+class FailsafeEvaluateRequest(BaseModel):
+    current_lat: Optional[float] = None
+    current_lng: Optional[float] = None
+    current_altitude: Optional[float] = 50.0
+    override_battery_pct: Optional[float] = None
+    override_wind_speed: Optional[float] = None
+    simulate_wind_anomaly: bool = False  # Giả lập gặp gió lớn ngược chiều (> 8 m/s) làm suy hao pin nhanh
+
+class FailsafeHubInfo(BaseModel):
+    hub_id: int
+    hub_code: Optional[str] = None
+    hub_name: str
+    latitude: float
+    longitude: float
+    distance_km: float
+    estimated_battery_needed_pct: float
+    estimated_remaining_pct: float
+    is_safe: bool
+
+class FailsafeEvaluateResponse(BaseModel):
+    mission_id: str
+    current_status: str
+    drone_id: Optional[Union[str, int]] = None
+    current_lat: float
+    current_lng: float
+    current_battery_pct: float
+    wind_speed: float
+    wind_warning: bool
+    status: str  # SAFE | WARNING | RTH_TRIGGERED | DIVERT_TRIGGERED | EMERGENCY_LAND_TRIGGERED
+    tier: int    # 0: Bình thường | 1: RTH | 2: Divert Hub | 3: Emergency Landing
+    action: str  # CONTINUE | RETURN_TO_HOME | DIVERT_TO_HUB | EMERGENCY_LAND
+    reason: str
+    pnr_reached: bool
+    target_hub: Optional[FailsafeHubInfo] = None
+    origin_hub: Optional[FailsafeHubInfo] = None
+    recommended_hub: Optional[FailsafeHubInfo] = None
+    available_emergency_hubs: list[FailsafeHubInfo] = []
+    divert_route: list[dict] = []
+    can_execute: bool = False
+
+class FailsafeExecuteRequest(BaseModel):
+    action: str  # RETURN_TO_HOME | DIVERT_TO_HUB | EMERGENCY_LAND
+    target_hub_id: Optional[int] = None
+    reason: Optional[str] = "Phát hiện suy hao pin bất thường giữa chặng"
+
+class FailsafeExecuteResponse(BaseModel):
+    mission_id: str
+    previous_status: str
+    current_status: str
+    action_taken: str
+    target_hub_id: Optional[int] = None
+    target_hub_name: Optional[str] = None
+    incident_id: Optional[int] = None
+    alert_id: Optional[int] = None
+    message: str

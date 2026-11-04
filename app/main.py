@@ -25,6 +25,7 @@ import app.modules.auth.models  # noqa: F401
 import app.modules.fleet.models  # noqa: F401
 import app.modules.missions.models  # noqa: F401
 import app.modules.system.models  # noqa: F401
+import app.modules.inventory.models  # noqa: F401
 
 # Import routers từ các module
 from app.modules.auth.router import router as auth_router
@@ -47,7 +48,7 @@ import asyncio
 from app.database.db import async_engine, Base
 from app.database.cron_db import run_with_retry
 from app.modules.fleet.technician.service import run_maintenance_alerts_logic, run_battery_overdue_alerts_logic
-from app.shared.workers import run_approval_deadline_watcher, run_telemetry_signal_loss_watcher, run_battery_charging_simulation, run_pickup_reminder_watcher, run_aging_priority_watcher, run_critical_order_notifier
+from app.shared.workers import run_approval_deadline_watcher, run_telemetry_signal_loss_watcher, run_battery_charging_simulation, run_pickup_reminder_watcher, run_aging_priority_watcher, run_critical_order_notifier, run_deadline_alert_watcher
 
 async def run_hourly_cronjobs():
     """Vòng lặp chạy ngầm mỗi tiếng (3600s).
@@ -59,9 +60,17 @@ async def run_hourly_cronjobs():
         await run_with_retry(run_battery_overdue_alerts_logic, "battery_overdue_alerts")
         await run_with_retry(run_battery_charging_simulation,  "battery_charging_sim")
         await run_with_retry(run_pickup_reminder_watcher,      "pickup_reminder")
-        await run_with_retry(run_aging_priority_watcher,       "aging_priority")
         await run_with_retry(run_critical_order_notifier,      "critical_order_notifier")
         await asyncio.sleep(3600)
+
+async def run_quarter_cronjobs():
+    """Vòng lặp chạy ngầm mỗi 15 phút (900s).
+    Dùng cho các worker cần tần suất thấp hơn realtime nhưng cao hơn hourly.
+    """
+    while True:
+        await run_with_retry(run_deadline_alert_watcher, "deadline_alert")
+        await run_with_retry(run_aging_priority_watcher, "aging_priority")
+        await asyncio.sleep(900)
 
 async def run_realtime_cronjobs():
     """Vòng lặp chạy ngầm mỗi 3s cho realtime monitoring.
@@ -80,12 +89,14 @@ async def lifespan(app: FastAPI):
         
     # Bắt đầu cronjob ngầm
     task_hourly = asyncio.create_task(run_hourly_cronjobs())
+    task_quarter = asyncio.create_task(run_quarter_cronjobs())
     task_realtime = asyncio.create_task(run_realtime_cronjobs())
     
     yield
     
     # Hủy cronjob khi tắt server
     task_hourly.cancel()
+    task_quarter.cancel()
     task_realtime.cancel()
 
 
@@ -179,7 +190,7 @@ app.include_router(db_router)
 # Tự động include các router của các roles
 import importlib
 loaded_chatbot_roles = []
-for mod in ["auth", "users", "missions", "fleet", "ai_predictions", "orders", "chatbot", "dashboard"]:
+for mod in ["auth", "users", "missions", "fleet", "ai_predictions", "orders", "chatbot", "dashboard", "inventory"]:
     for role in ["admin", "operator", "technician", "customer"]:
         target_mod = f"app.modules.{mod}.{role}.router"
         try:

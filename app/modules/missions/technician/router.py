@@ -68,6 +68,7 @@ deliveries_router = APIRouter(
 )
 
 allow_technician = RoleChecker([UserRole.TECHNICIAN, UserRole.ADMIN])
+allow_admin_or_operator = RoleChecker([UserRole.OPERATOR, UserRole.ADMIN])
 
 
 @missions_router.get("/")

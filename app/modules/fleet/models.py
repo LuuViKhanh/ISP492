@@ -1,6 +1,6 @@
 import enum
 from datetime import datetime
-from sqlalchemy import BigInteger, Integer, Float, String, Text, DateTime, Boolean, ForeignKey, Enum as SAEnum
+from sqlalchemy import BigInteger, Integer, Float, String, Text, DateTime, Boolean, ForeignKey, Enum as SAEnum, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.db import Base
 
@@ -149,8 +149,8 @@ class WorkOrder(Base):
     __tablename__ = "work_orders"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    drone_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    battery_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    drone_id: Mapped[str | None] = mapped_column(String(50), ForeignKey("drones.id"), nullable=True)
+    battery_id: Mapped[str | None] = mapped_column(String(50), ForeignKey("batteries.id"), nullable=True)
     technician_id: Mapped[str] = mapped_column(String, nullable=False)
     issue_description: Mapped[str] = mapped_column(Text, nullable=False)
     action_taken: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -159,7 +159,8 @@ class WorkOrder(Base):
         nullable=False, default=WorkOrderStatus.PENDING,
     )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    alert_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    alert_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("maintenance_alerts.id"), nullable=True)
     title: Mapped[str | None] = mapped_column(String, nullable=True)
     priority: Mapped[str | None] = mapped_column(String, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -167,43 +168,11 @@ class WorkOrder(Base):
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-
-class MaintenanceRecord(Base):
-    __tablename__ = "maintenance_records"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    work_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    drone_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    performed_by: Mapped[str | None] = mapped_column(String, nullable=True)
-    title: Mapped[str | None] = mapped_column(String, nullable=True)
     diagnosis: Mapped[str | None] = mapped_column(Text, nullable=True)
-    corrective_action: Mapped[str | None] = mapped_column(Text, nullable=True)
     resulting_drone_status: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-
-class MaintenanceInspectionItem(Base):
-    __tablename__ = "maintenance_inspection_items"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    maintenance_record_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    item_name: Mapped[str | None] = mapped_column(String, nullable=True)
-    is_completed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-
-class WorkOrderLog(Base):
-    __tablename__ = "work_order_logs"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    work_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    action: Mapped[str | None] = mapped_column(String, nullable=True)
-    from_status: Mapped[str | None] = mapped_column(String, nullable=True)
-    to_status: Mapped[str | None] = mapped_column(String, nullable=True)
-    changed_by: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    record_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    inspection_items_json: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
+    status_logs_json: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
 
 
 class MaintenanceAlert(Base):
@@ -245,65 +214,13 @@ class MaintenanceSchedule(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
-# ==================== SUPPLIES (Vật tư tại Hub) ====================
-class HubSupply(Base):
-    """Bảng quản lý vật tư tiêu hao (cánh quạt, thiết bị sửa chữa, ...) tại mỗi Hub.
-
-    Theo dõi số lượng tồn kho theo loại vật tư tại từng hub —
-    KHÔNG định danh từng đơn vị vật tư (không serial number).
-
-    Ví dụ:
-        Hub Quận 1:
-        - Cánh quạt DJI Matrice 100: 12 cái
-        - Cánh quạt Aurellia X6: 8 cái
-        - Bộ dụng cụ sửa chữa: 2 bộ
-    """
-    __tablename__ = "hub_supplies"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    hub_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("hubs.id"), nullable=True, index=True)
-    item_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    unit: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
-class SupplyRequestStatus(str, enum.Enum):
-    """Trạng thái yêu cầu cấp phát vật tư."""
-    PENDING = "Pending"      # Technician gửi yêu cầu, chờ Admin duyệt
-    APPROVED = "Approved"    # Admin duyệt, sắp xếp mua hàng
-    REJECTED = "Rejected"    # Admin từ chối
-    RECEIVED = "Received"    # Technician nhập hàng vào hub
-
-
-class SupplyRequest(Base):
-    """Bảng yêu cầu cấp phát vật tư từ Technician."""
-    __tablename__ = "supply_requests"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    technician_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    hub_id: Mapped[int] = mapped_column(Integer, ForeignKey("hubs.id"), nullable=False, index=True)
-    status: Mapped[SupplyRequestStatus] = mapped_column(
-        SAEnum(SupplyRequestStatus, name="supply_request_status", create_type=False, values_callable=lambda x: [e.value for e in x]),
-        nullable=False,
-        default=SupplyRequestStatus.PENDING,
-        index=True
-    )
-    
-    # ── Items (JSON) ────────────────────────────────────────────────────
-    # Format: [{"item_name": "...", "quantity": 10, "unit": "cái"}, ...]
-    items: Mapped[str] = mapped_column(Text, nullable=False)  # JSON
-    
-    # ── Notes ────────────────────────────────────────────────────
-    reason: Mapped[str | None] = mapped_column(Text, nullable=True)  # Lý do yêu cầu
-    admin_notes: Mapped[str | None] = mapped_column(Text, nullable=True)  # Ghi chú từ Admin (lúc approve/reject)
-    
-    # ── Timestamps ────────────────────────────────────────────────────
-    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    approved_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    rejected_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    received_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+# ==================== PARTS MANAGEMENT (Quản lý vật tư - Parts) ====================
+from app.modules.inventory.models import (
+    PartCategoryType,
+    PartsRequestStatus,
+    TxnReason,
+    PartCategory,
+    PartsRequest,
+    HubInventory,
+    InventoryTransaction,
+)

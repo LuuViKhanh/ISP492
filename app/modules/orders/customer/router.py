@@ -11,10 +11,11 @@ from app.shared.dependencies import get_current_user, CurrentUser
 from app.modules.system.models import Hub
 from app.modules.missions.models import (
     Order, OrderStatus, PaymentStatus, DeliveryMode,
-    Mission, MissionStatus, TelemetryLog, MissionHubCheckpoint,
+    Mission, MissionStatus, TelemetryLog,
     MissionLeg, MissionLegStatus,
 )
 from app.modules.fleet.models import Drone, Battery
+from app.modules.orders.resource_readiness_service import evaluate_hub_resource_readiness
 from app.modules.orders.customer.schemas import (
     HubResponse,
     OrderEstimateRequest,
@@ -191,15 +192,28 @@ async def estimate_order(
         estimated_departure = req_time
         estimated_arrival = estimated_departure + timedelta(minutes=flight_mins)
 
+    # Đánh giá tài nguyên Hub và thời gian chờ bổ sung (Hàng chờ T_queue, Sạc pin T_charge, Máy bay T_dispatch)
+    readiness = await evaluate_hub_resource_readiness(
+        db=db,
+        origin_hub_id=body.origin_hub_id,
+        destination_hub_id=body.destination_hub_id,
+        payload_kg=body.payload_kg,
+    )
+    extra_wait_td = timedelta(minutes=readiness["total_extra_wait_minutes"])
+    adjusted_departure = estimated_departure + extra_wait_td if estimated_departure else None
+    adjusted_arrival = estimated_arrival + extra_wait_td if estimated_arrival else None
+
     return OrderEstimateResponse(
         delivery_fee=round(delivery_fee, 2),
         service_fee=round(service_fee, 2),
         total_fee=round(delivery_fee + service_fee, 2),
         fee_details=fee_details,
         distance_km=round(dist_km, 2),
-        estimated_departure=estimated_departure,
-        estimated_arrival=estimated_arrival,
-        handover_deadline=handover_deadline
+        estimated_departure=adjusted_departure,
+        estimated_arrival=adjusted_arrival,
+        handover_deadline=handover_deadline,
+        resource_readiness=readiness,
+        customer_notice=readiness["customer_notice"],
     )
 
 
@@ -242,25 +256,32 @@ async def create_order(
     flight_duration_sec = dist_km * 1000 / 10.0
     flight_mins = max(math.ceil(flight_duration_sec / 60.0), 10)
 
-    # Tính toán thời gian cam kết theo delivery mode
+    # Đánh giá tài nguyên Hub và bù thời gian chờ thực tế vào khung giờ giao hàng
+    readiness = await evaluate_hub_resource_readiness(
+        db=db,
+        origin_hub_id=body.origin_hub_id,
+        destination_hub_id=body.destination_hub_id,
+        payload_kg=body.payload_kg,
+    )
+    extra_wait_td = timedelta(minutes=readiness["total_extra_wait_minutes"])
+
+    # Tính toán thời gian cam kết theo delivery mode (có bù độ trễ tài nguyên nếu Hub đông đúc / sạc pin)
     req_at_naive = body.requested_delivery_at.replace(tzinfo=None) if body.requested_delivery_at else None
 
     if body.delivery_mode == DeliveryMode.EXPRESS:
-        window_start = now + timedelta(hours=3)
+        window_start = now + timedelta(hours=3) + extra_wait_td
         window_end   = window_start + timedelta(minutes=flight_mins + 30)
         order_aging_deadline = None
     elif body.delivery_mode == DeliveryMode.NORMAL:
-        # NORMAL: SLA 4h — phù hợp với cam kết khách, hệ thống tự lập lịch.
-        # FE không cần truyền requested_delivery_at.
         NORMAL_SLA_HOURS = 4
-        window_start = now
-        window_end   = now + timedelta(hours=NORMAL_SLA_HOURS)
-        order_aging_deadline = window_end - timedelta(hours=1)   # Operator phải assign 1h trước deadline
+        window_start = now + extra_wait_td
+        window_end   = now + timedelta(hours=NORMAL_SLA_HOURS) + extra_wait_td
+        order_aging_deadline = window_end - timedelta(hours=1)
     else:  # SCHEDULED
         if not req_at_naive:
             raise HTTPException(status_code=400, detail="requested_delivery_at là bắt buộc cho chế độ SCHEDULED.")
-        window_start = req_at_naive
-        window_end   = req_at_naive + timedelta(minutes=flight_mins + 15)
+        window_start = req_at_naive + extra_wait_td
+        window_end   = req_at_naive + timedelta(minutes=flight_mins + 15) + extra_wait_td
         order_aging_deadline = None
 
     new_order = Order(
@@ -275,8 +296,8 @@ async def create_order(
         requested_delivery_at=req_at_naive,
         estimated_window_start=window_start,
         estimated_window_end=window_end,
-        # aging_deadline=order_aging_deadline,
-        # is_aging_priority=False,
+        aging_deadline=order_aging_deadline,
+        is_aging_priority=False,
         status=OrderStatus.PENDING,
         delivery_fee=total_fee,
         sender_phone=body.sender_phone,
@@ -289,7 +310,47 @@ async def create_order(
     db.add(new_order)
     await db.commit()
     await db.refresh(new_order)
-    return new_order
+
+    # ── Notify tất cả Operators về đơn hàng mới ─────────────────────────────
+    try:
+        from app.modules.auth.models import User as _User, ROLE_NAME_TO_ID as _ROLE_MAP
+        from app.modules.system.models import Notification as _Notif, NotificationType as _NT
+        from app.shared.roles import UserRole as _Role
+        _op_role_id = _ROLE_MAP.get(_Role.OPERATOR)
+        if _op_role_id:
+            _ops = (await db.execute(select(_User.id).where(_User.role_id == _op_role_id))).scalars().all()
+            _mode_str = body.delivery_mode.value if hasattr(body.delivery_mode, "value") else str(body.delivery_mode)
+            for _op_id in _ops:
+                db.add(_Notif(
+                    user_id=_op_id,
+                    title=f"📦 Đơn hàng mới #{new_order.id}",
+                    message=(
+                        f"Khách hàng vừa đặt đơn #{new_order.id} "
+                        f"({_mode_str}, {body.payload_kg} kg). "
+                        f"ETA: {window_end.strftime('%H:%M %d/%m') if window_end else 'N/A'}. "
+                        f"Đơn đang chờ khách mang hàng đến Hub."
+                    ),
+                    notifications_type=_NT.MISSION_STATUS,
+                    reference_id=f"NEW_ORDER_{new_order.id}",
+                    created_at=now,
+                ))
+            await db.commit()
+    except Exception as _e:
+        print(f"[NOTIFY] Lỗi gửi thông báo đơn mới: {_e}")
+
+    return OrderCreateResponse(
+        id=new_order.id,
+        status=new_order.status,
+        delivery_mode=new_order.delivery_mode,
+        origin_hub_id=new_order.origin_hub_id,
+        destination_hub_id=new_order.destination_hub_id,
+        requested_delivery_at=new_order.requested_delivery_at,
+        estimated_window_start=new_order.estimated_window_start,
+        estimated_window_end=new_order.estimated_window_end,
+        created_at=new_order.created_at,
+        resource_readiness=readiness,
+        customer_notice=readiness["customer_notice"],
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -514,10 +575,7 @@ async def track_delivery(
             .limit(MAX_PATH_POINTS)
         )).all()
         resp.travelled_path = [RoutePointSchema(latitude=lat, longitude=lng) for lat, lng in path_logs]
-        cp_count = (await db.execute(
-            select(MissionHubCheckpoint).where(MissionHubCheckpoint.mission_id == mission.id)
-        )).scalars().all()
-        resp.checkpoints_passed = len(cp_count)
+        resp.checkpoints_passed = len(mission.checkpoints_json or [])
 
         # 3. Legs & Current Leg
         legs_list = []

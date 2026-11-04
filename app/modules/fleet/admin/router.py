@@ -18,7 +18,7 @@ allow_admin = RoleChecker([UserRole.ADMIN])
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
 class DroneCreate(BaseModel):
-    name: str
+    name: Optional[str] = None
     model: str
     payload_capacity_kg: float
     max_speed: float
@@ -124,11 +124,20 @@ async def create_drone(
     Tự động sinh mã ID theo chuẩn DRN-XXXX (ví dụ: DRN-0001).
     """
     from app.shared.id_generator import generate_sequential_id
+    from app.shared.fleet_naming import generate_drone_name
     drone_id = await generate_sequential_id(db, Drone, "DRN")
+
+    drone_name = (body.name or "").strip()
+    if not drone_name:
+        drone_name = await generate_drone_name(
+            db=db,
+            model=body.model,
+            payload_capacity_kg=body.payload_capacity_kg
+        )
 
     drone = Drone(
         id=drone_id,
-        name=body.name,
+        name=drone_name,
         model=body.model,
         payload_capacity_kg=body.payload_capacity_kg,
         max_speed=body.max_speed,
