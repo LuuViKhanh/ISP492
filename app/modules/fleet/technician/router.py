@@ -1275,6 +1275,22 @@ async def create_work_order(
         alert = await db.get(MaintenanceAlert, body.alert_id)
         if alert:
             alert.work_order_id = wo.id
+    else:
+        # Nếu không có alert_id, tự động tìm alert pending của drone này để gắn vào
+        if body.drone_id:
+            alert_res = await db.execute(
+                select(MaintenanceAlert)
+                .where(
+                    MaintenanceAlert.drone_id == body.drone_id,
+                    MaintenanceAlert.work_order_id == None,
+                    MaintenanceAlert.status.in_(["Pending", "PENDING", "Acknowledged"])
+                )
+                .order_by(MaintenanceAlert.id.desc())
+                .limit(1)
+            )
+            alert = alert_res.scalar_one_or_none()
+            if alert:
+                alert.work_order_id = wo.id
 
     await db.commit()
     await db.refresh(wo)
