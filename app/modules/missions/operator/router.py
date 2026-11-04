@@ -183,7 +183,7 @@ async def get_live_tracking(
     )
     latest_logs = {log.mission_id: log for log in latest_logs_result.scalars().all()}
 
-    cp_counts = {m.id: len(m.checkpoints_json or []) for m in missions}
+    cp_counts = {m.id: len(m.checkpoints_json or []) for m in flying_missions}
 
     # Lấy thông tin Legs cho các mission đang bay
     legs_result = await db.execute(
