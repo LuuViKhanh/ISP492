@@ -1254,12 +1254,15 @@ async def create_work_order(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
+    from app.core.timezone import get_vn_naive_datetime
+    
     wo = WorkOrder(
         drone_id=body.drone_id,
         battery_id=body.battery_id,
         technician_id=user.id,
         issue_description=body.issue_description,
         status=WorkOrderStatus.PENDING,
+        created_at=get_vn_naive_datetime(),
     )
     db.add(wo)
     await db.flush()  # lấy wo.id trước khi commit
