@@ -81,7 +81,7 @@ class OrderCreateResponse(BaseModel):
     estimated_window_start: Optional[datetime] = None
     estimated_window_end: Optional[datetime] = None
     aging_deadline: Optional[datetime] = None
-    is_aging_priority: bool = False
+    is_aging_priority: Optional[bool] = False
     created_at: datetime
     resource_readiness: Optional[HubResourceReadinessSchema] = None
     customer_notice: Optional[str] = None

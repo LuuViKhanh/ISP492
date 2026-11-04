@@ -534,9 +534,9 @@ async def track_delivery(
         hubs = {h.id: h for h in (await db.execute(select(Hub).where(Hub.id.in_(list(all_hub_ids))))).scalars().all()}
         o_hub = hubs.get(order.origin_hub_id)
         d_hub = hubs.get(order.destination_hub_id)
-        if o_hub and o_hub.latitude is not None:
+        if o_hub and o_hub.latitude is not None and o_hub.longitude is not None:
             resp.origin = RoutePointSchema(latitude=o_hub.latitude, longitude=o_hub.longitude, name=o_hub.name)
-        if d_hub and d_hub.latitude is not None:
+        if d_hub and d_hub.latitude is not None and d_hub.longitude is not None:
             resp.destination = RoutePointSchema(latitude=d_hub.latitude, longitude=d_hub.longitude, name=d_hub.name)
 
     if mission:

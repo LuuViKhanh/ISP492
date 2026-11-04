@@ -24,6 +24,7 @@ from app.modules.orders.schemas import (
     DroneEligibleSchema,
     BatteryEligibleSchema,
     OrderUpdateRequest,
+    OrderCancelRequest,
 )
 from app.core.config import settings
 
@@ -322,7 +323,7 @@ async def list_orders(
         # ── Urgency / Deadline fields ──────────────────────────────────
         # Tính flight_mins từ khoảng cách thực tế
         _dist = 8.0
-        if ohub and dhub and ohub.latitude and dhub.latitude:
+        if ohub and dhub and ohub.latitude is not None and ohub.longitude is not None and dhub.latitude is not None and dhub.longitude is not None:
             _dist = haversine_distance(ohub.latitude, ohub.longitude, dhub.latitude, dhub.longitude)
         _fmins = max(math.ceil((_dist * 1000 / 10.0) / 60.0), 10)
         cust_dl, coord_dl, overdue_mins, is_overdue, slack_mins, prio_score, prio_level = compute_urgency_fields(o, w_end, _fmins)
@@ -344,34 +345,11 @@ async def list_orders(
     return response_list
 
 
-@router.get("/{order_id}", response_model=OrderResponse)
-async def get_order(
-    order_id: str,
-    user: CurrentUser = Depends(allow_operator),
-    db: AsyncSession = Depends(get_async_db),
-):
-    """
-    **[Operator API] Lấy chi tiết một Đơn hàng (Order)**
-    
-    - **Mục đích**: Xem chi tiết thông tin đơn hàng trước khi bấm "Create Mission".
-    - **Hoạt động**:
-        1. Lấy thông tin đơn hàng theo `order_id`.
-        2. Truy vấn DB xem đơn hàng này đã có `Mission` nào chưa để trả về `planningState` tương ứng.
-    """
-    order_id = order_id.strip()
-    order = await db.get(Order, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-        
-    # Lấy mission mới nhất của đơn hàng
-    mission_result = await db.execute(
-        select(Mission)
-        .where(Mission.order_id == order_id)
-        .order_by(Mission.id.desc())
-        .limit(1)
-    )
-    latest_mission = mission_result.scalars().first()
-    
+async def _build_order_response_detail(
+    db: AsyncSession,
+    order: Order,
+    latest_mission: Optional[Mission],
+) -> OrderResponse:
     planning_state = calculate_planning_state(order, latest_mission)
     origin_pkg = compute_origin_package_status(order, latest_mission)
     
@@ -404,7 +382,7 @@ async def get_order(
 
     # Urgency fields
     _dist = 8.0
-    if ohub and dhub and ohub.latitude and dhub.latitude:
+    if ohub and dhub and ohub.latitude is not None and ohub.longitude is not None and dhub.latitude is not None and dhub.longitude is not None:
         _dist = haversine_distance(ohub.latitude, ohub.longitude, dhub.latitude, dhub.longitude)
     _fmins = max(math.ceil((_dist * 1000 / 10.0) / 60.0), 10)
     cust_dl, coord_dl, overdue_mins, is_overdue, slack_mins, prio_score, prio_level = compute_urgency_fields(order, w_end, _fmins)
@@ -418,6 +396,36 @@ async def get_order(
     order_resp.created_at = order.created_at
         
     return order_resp
+
+
+@router.get("/{order_id}", response_model=OrderResponse)
+async def get_order(
+    order_id: str,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    **[Operator API] Lấy chi tiết một Đơn hàng (Order)**
+    
+    - **Mục đích**: Xem chi tiết thông tin đơn hàng trước khi bấm "Create Mission".
+    - **Hoạt động**:
+        1. Lấy thông tin đơn hàng theo `order_id`.
+        2. Truy vấn DB xem đơn hàng này đã có `Mission` nào chưa để trả về `planningState` tương ứng.
+    """
+    order_id = order_id.strip()
+    order = await db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+        
+    # Lấy mission mới nhất của đơn hàng
+    mission_result = await db.execute(
+        select(Mission)
+        .where(Mission.order_id == order_id)
+        .order_by(Mission.id.desc())
+        .limit(1)
+    )
+    latest_mission = mission_result.scalars().first()
+    return await _build_order_response_detail(db, order, latest_mission)
 
 
 async def _get_reserved_battery_info_map(
@@ -966,16 +974,19 @@ async def get_eligible_batteries_for_order(
             return True
         return False
 
+    target_hub_id = drone.current_hub_id or hub.id
+    target_hub = await db.get(Hub, target_hub_id) if target_hub_id != hub.id else hub
+
     bats_stmt = select(Battery).where(
         Battery.status == batteries_status.ACTIVE,
         or_(
-            and_(Battery.current_hub_id == hub.id, Battery.drone_id.is_(None)),
+            and_(Battery.current_hub_id == target_hub_id, Battery.drone_id.is_(None)),
             Battery.drone_id == drone.id,
         )
     ).order_by(Battery.id)
     bats = [
         b for b in (await db.execute(bats_stmt)).scalars().all()
-        if ((b.current_hub_id == hub.id and b.drone_id is None) or b.drone_id == drone.id)
+        if ((b.current_hub_id == target_hub_id and b.drone_id is None) or b.drone_id == drone.id)
         and (not compat_models or (b.battery_model and b.battery_model in compat_models))
         and _is_battery_visible(b)
     ]
@@ -992,8 +1003,8 @@ async def get_eligible_batteries_for_order(
 
     return EligibleBatteriesResponse(
         order_id=order.id,
-        hub_id=hub.id,
-        hub_name=hub.name or f"Hub {hub.id}",
+        hub_id=target_hub.id if target_hub else hub.id,
+        hub_name=(target_hub.name if target_hub else hub.name) or f"Hub {target_hub.id if target_hub else hub.id}",
         drone_id=drone.id,
         drone_name=drone.name,
         drone_model=drone.model,
@@ -1006,22 +1017,58 @@ async def get_eligible_batteries_for_order(
 @router.post("/{order_id}/cancel", summary="Huỷ đơn hàng")
 async def cancel_order(
     order_id: str,
+    body: Optional[OrderCancelRequest] = None,
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Huỷ đơn hàng — chỉ cho phép khi order đang PENDING.
-    Tự động gửi email thông báo huỷ đến receiver_email.
+    Huỷ đơn hàng — cho phép khi order chưa cất cánh (PENDING, AWAITING_DROP_OFF, AT_HUB).
+    Tự động huỷ nhiệm vụ chưa bay nếu có, và gửi email thông báo huỷ đến receiver_email.
     """
     order = await db.get(Order, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    if order.status != OrderStatus.PENDING:
+    order_status_val = order.status.value if hasattr(order.status, "value") else str(order.status or "")
+    if order.status not in (OrderStatus.PENDING, OrderStatus.AWAITING_DROP_OFF, OrderStatus.AT_HUB):
         raise HTTPException(
             status_code=400,
-            detail=f"Chỉ có thể huỷ order đang PENDING, hiện tại: {order.status}"
+            detail=f"Chỉ có thể huỷ đơn hàng khi chưa cất cánh (PENDING, AWAITING_DROP_OFF, AT_HUB), hiện tại: {order_status_val}"
         )
+
+    # Chặn nếu đơn hàng đang trên chuyến bay active
+    active_m_res = await db.execute(
+        select(Mission).where(
+            Mission.order_id == order_id,
+            Mission.status.in_([
+                MissionStatus.IN_PROGRESS,
+                MissionStatus.FLYING,
+                MissionStatus.ACTIVE_MISSION,
+                MissionStatus.COMPLETED,
+                MissionStatus.MISSION_COMPLETED,
+            ])
+        )
+    )
+    if active_m_res.scalars().first():
+        raise HTTPException(
+            status_code=400,
+            detail="Đơn hàng đã hoặc đang trong chuyến bay, không thể hủy."
+        )
+
+    # Nếu có mission đã lên lịch nhưng chưa bay (SCHEDULED, PENDING_APPROVAL, APPROVED) thì huỷ luôn
+    sched_m_res = await db.execute(
+        select(Mission).where(
+            Mission.order_id == order_id,
+            Mission.status.in_([
+                MissionStatus.SCHEDULED,
+                MissionStatus.PENDING_APPROVAL,
+                MissionStatus.APPROVED,
+            ])
+        )
+    )
+    for m in sched_m_res.scalars().all():
+        m.status = MissionStatus.CANCELLED
+        m.handling_status = None
 
     now = get_vn_naive_datetime()
     order.status = OrderStatus.CANCELLED
@@ -1096,10 +1143,4 @@ async def update_order(
         .limit(1)
     )
     latest_mission = mission_result.scalars().first()
-
-    resp = OrderResponse.model_validate(order)
-    resp.mission_id = latest_mission.id if latest_mission else None
-    resp.payment_status = order.payment_status.value if hasattr(order.payment_status, "value") else str(order.payment_status or "")
-    resp.planningState = calculate_planning_state(order, latest_mission)
-    resp.originPackage = compute_origin_package_status(order, latest_mission)
-    return resp
+    return await _build_order_response_detail(db, order, latest_mission)

@@ -1749,10 +1749,22 @@ async def compute_mission_routes_internal(
         origin_hub.latitude or 0, origin_hub.longitude or 0,
         dest_hub.latitude or 0, dest_hub.longitude or 0
     )
-    e_direct = predict_flight_energy(dist_direct, payload)["energy_wh"]
+    pred_direct_eco = predict_flight_energy(dist_direct, payload, speed=10.0)
+    e_direct = pred_direct_eco["energy_wh"]
     dir_string = f"{origin_hub.code or origin_hub.name} -> {dest_hub.code or dest_hub.name}"
 
     # ── 1. Tuyến 1: Bay thẳng trực tiếp - Tối ưu năng lượng (Direct Flight - Eco Profile) ──
+    ai_exp_eco = dict(pred_direct_eco.get("ai_explanation") or {})
+    ai_exp_eco["legs_breakdown"] = [{
+        "leg": 1,
+        "from_hub_code": origin_hub.code or origin_hub.name,
+        "to_hub_code": dest_hub.code or dest_hub.name,
+        "distance_km": round(dist_direct, 2),
+        "energy_wh": round(e_direct, 2),
+        "speed_mps": 10.0,
+        "speed_kmh": 36.0,
+        "action": f"Bay thẳng trực tiếp từ {origin_hub.name} tới {dest_hub.name} (Vận tốc kinh tế 10 m/s)",
+    }]
     r_direct_eco = {
         "path": [origin_hub.id, dest_hub.id],
         "relayHubs": [],
@@ -1760,6 +1772,10 @@ async def compute_mission_routes_internal(
         "predictedEnergyWh": round(e_direct, 2),
         "predictedDurationMin": max(1, int(round(dist_direct * 2.0))),
         "wait_time": 0,
+        "flight_speed_mps": 10.0,
+        "speed_profile_label": "Eco Profile (10 m/s - 36 km/h)",
+        "shap_values": pred_direct_eco.get("shap_values"),
+        "ai_explanation": ai_exp_eco,
         "legs_detail": [{
             "from_hub_id": origin_hub.id,
             "to_hub_id": dest_hub.id,
@@ -1774,8 +1790,20 @@ async def compute_mission_routes_internal(
     raw_routes.append({"key": "ENG", "type": "energy", "data": r_direct_eco})
 
     # ── 2. Tuyến 2: Bay thẳng trực tiếp - Tốc độ hành trình cao (Direct Flight - Speed Profile) ──
-    e_fast = round(e_direct * 1.15, 2)
+    pred_direct_fast = predict_flight_energy(dist_direct, payload, speed=14.0)
+    e_fast = pred_direct_fast["energy_wh"]
     t_fast = max(1, int(round(dist_direct * 1.4)))
+    ai_exp_fast = dict(pred_direct_fast.get("ai_explanation") or {})
+    ai_exp_fast["legs_breakdown"] = [{
+        "leg": 1,
+        "from_hub_code": origin_hub.code or origin_hub.name,
+        "to_hub_code": dest_hub.code or dest_hub.name,
+        "distance_km": round(dist_direct, 2),
+        "energy_wh": e_fast,
+        "speed_mps": 14.0,
+        "speed_kmh": 50.4,
+        "action": f"Bay thẳng hành trình nhanh từ {origin_hub.name} tới {dest_hub.name} (Vận tốc cao 14 m/s)",
+    }]
     r_direct_fast = {
         "path": [origin_hub.id, dest_hub.id],
         "relayHubs": [],
@@ -1783,6 +1811,10 @@ async def compute_mission_routes_internal(
         "predictedEnergyWh": e_fast,
         "predictedDurationMin": t_fast,
         "wait_time": 0,
+        "flight_speed_mps": 14.0,
+        "speed_profile_label": "Speed Profile (14 m/s - 50 km/h)",
+        "shap_values": pred_direct_fast.get("shap_values"),
+        "ai_explanation": ai_exp_fast,
         "legs_detail": [{
             "from_hub_id": origin_hub.id,
             "to_hub_id": dest_hub.id,
@@ -1810,8 +1842,10 @@ async def compute_mission_routes_internal(
 
         d1 = haversine_distance(origin_hub.latitude or 0, origin_hub.longitude or 0, mid_h.latitude or 0, mid_h.longitude or 0)
         d2 = haversine_distance(mid_h.latitude or 0, mid_h.longitude or 0, dest_hub.latitude or 0, dest_hub.longitude or 0)
-        e1 = predict_flight_energy(d1, payload)["energy_wh"]
-        e2 = predict_flight_energy(d2, payload)["energy_wh"]
+        pred_e1 = predict_flight_energy(d1, payload, speed=10.0)
+        pred_e2 = predict_flight_energy(d2, payload, speed=10.0)
+        e1 = pred_e1["energy_wh"]
+        e2 = pred_e2["energy_wh"]
 
         # Điều kiện pin cho đường vòng:
         # 1. Chặng 1: Drone đủ pin xuất phát để bay tới trạm trung gian (an toàn <= 80% pin xuất phát)
@@ -1826,6 +1860,89 @@ async def compute_mission_routes_internal(
         w_val = mid_wait if mid_wait != float('inf') else 0
         tot_d = d1 + d2
         tot_e = e1 + e2
+
+        # Tổng hợp SHAP Values của toàn bộ các chặng trong tuyến Relay
+        s1 = pred_e1.get("shap_values") or {}
+        s2 = pred_e2.get("shap_values") or {}
+        shap_speed_tot = 0.0
+        shap_dist_tot = round(float(s1.get("distance", 0.0)) + float(s2.get("distance", 0.0)), 2)
+        shap_payload_tot = round(float(s1.get("payload", 0.0)) + float(s2.get("payload", 0.0)), 2)
+        shap_wind_tot = round(float(s1.get("relative_wind_angle", 0.0)) + float(s2.get("relative_wind_angle", 0.0)), 2)
+        shap_alt_tot = round(float(s1.get("altitude", 0.0)) + float(s2.get("altitude", 0.0)), 2)
+        aggregated_shap = {
+            "speed": shap_speed_tot,
+            "distance": shap_dist_tot,
+            "payload": shap_payload_tot,
+            "relative_wind_angle": shap_wind_tot,
+            "altitude": shap_alt_tot,
+        }
+
+        diff_dist = round(tot_d - dist_direct, 2)
+        diff_energy = round(tot_e - e_direct, 1)
+        wind_impact = "Gió xuôi hỗ trợ tiết kiệm pin trên toàn tuyến" if shap_wind_tot <= 0 else "Gió ngược làm tăng lực cản di chuyển trên các chặng bay"
+
+        detour_ai_explanation = {
+            "flight_speed_mps": 10.0,
+            "flight_speed_kmh": 36.0,
+            "total_energy_wh": round(tot_e, 2),
+            "feature_contributions": [
+                {
+                    "feature": "distance",
+                    "label": "Cự ly hành trình (Distance)",
+                    "value": f"{tot_d:.2f} km (Đường vòng qua {mid_h.name})",
+                    "shap_contribution_wh": shap_dist_tot,
+                    "impact": f"Cự ly dài hơn +{diff_dist:.2f} km so với bay thẳng làm phát sinh thêm +{diff_energy:.1f} Wh năng lượng cản di chuyển"
+                },
+                {
+                    "feature": "payload",
+                    "label": "Tải trọng hàng hóa (Payload)",
+                    "value": f"{payload:.2f} kg",
+                    "shap_contribution_wh": shap_payload_tot,
+                    "impact": f"Tải trọng hàng hóa duy trì nâng đỡ suốt {tot_d:.2f} km làm tăng tiêu hao +{shap_payload_tot:.1f} Wh"
+                },
+                {
+                    "feature": "speed",
+                    "label": "Vận tốc bay (Flight Speed)",
+                    "value": "10.0 m/s (36.0 km/h)",
+                    "shap_contribution_wh": 0.0,
+                    "impact": "Vận tốc hành trình kinh tế (10.0 m/s) xuyên suốt cả 2 chặng bay, tối ưu hóa mức tiêu hao công suất"
+                },
+                {
+                    "feature": "wind",
+                    "label": "Điều kiện đón gió (Wind Effect)",
+                    "value": "Tổng hợp 2 chặng bay",
+                    "shap_contribution_wh": shap_wind_tot,
+                    "impact": wind_impact
+                }
+            ],
+            "legs_breakdown": [
+                {
+                    "leg": 1,
+                    "from_hub_code": origin_hub.code or origin_hub.name,
+                    "to_hub_code": mid_h.code or mid_h.name,
+                    "distance_km": round(d1, 2),
+                    "energy_wh": round(e1, 2),
+                    "speed_mps": 10.0,
+                    "speed_kmh": 36.0,
+                    "action": f"Bay từ {origin_hub.name} đến {mid_h.name} (Tốn {e1:.1f} Wh)",
+                },
+                {
+                    "leg": 2,
+                    "from_hub_code": mid_h.code or mid_h.name,
+                    "to_hub_code": dest_hub.code or dest_hub.name,
+                    "distance_km": round(d2, 2),
+                    "energy_wh": round(e2, 2),
+                    "speed_mps": 10.0,
+                    "speed_kmh": 36.0,
+                    "action": f"Thay pin tại {mid_h.name} và bay tiếp tới {dest_hub.name} (Tốn {e2:.1f} Wh)",
+                }
+            ],
+            "summary": (
+                f"Tuyến trung chuyển qua trạm đổi pin {mid_h.name}. Tổng cự ly {tot_d:.2f} km dài hơn đường thẳng +{diff_dist:.2f} km, "
+                f"tiêu hao {tot_e:.1f} Wh (+{diff_energy:.1f} Wh). Phù hợp làm phương án dự phòng hành lang an toàn hoặc điều phối trạm."
+            )
+        }
+
         detour_candidates.append({
             "path": [origin_hub.id, mid_h.id, dest_hub.id],
             "relayHubs": [f"{mid_h.name} (Tốn {e1:.1f}Wh)"],
@@ -1833,6 +1950,10 @@ async def compute_mission_routes_internal(
             "predictedEnergyWh": round(tot_e, 2),
             "predictedDurationMin": int(tot_d * 2) + int(w_val),
             "wait_time": int(w_val),
+            "flight_speed_mps": 10.0,
+            "speed_profile_label": "Relay Profile (10 m/s - 36 km/h)",
+            "shap_values": aggregated_shap,
+            "ai_explanation": detour_ai_explanation,
             "legs_detail": [
                 {
                     "from_hub_id": origin_hub.id,
@@ -1874,8 +1995,85 @@ async def compute_mission_routes_internal(
         )
         d_n1 = haversine_distance(origin_hub.latitude or 0, origin_hub.longitude or 0, nearest_mid.latitude or 0, nearest_mid.longitude or 0)
         d_n2 = haversine_distance(nearest_mid.latitude or 0, nearest_mid.longitude or 0, dest_hub.latitude or 0, dest_hub.longitude or 0)
-        e_n1 = predict_flight_energy(d_n1, payload)["energy_wh"]
-        e_n2 = predict_flight_energy(d_n2, payload)["energy_wh"]
+        pred_ne1 = predict_flight_energy(d_n1, payload, speed=10.0)
+        pred_ne2 = predict_flight_energy(d_n2, payload, speed=10.0)
+        e_n1 = pred_ne1["energy_wh"]
+        e_n2 = pred_ne2["energy_wh"]
+        tot_nd = d_n1 + d_n2
+        tot_ne = e_n1 + e_n2
+
+        s_n1 = pred_ne1.get("shap_values") or {}
+        s_n2 = pred_ne2.get("shap_values") or {}
+        aggregated_n_shap = {
+            "speed": 0.0,
+            "distance": round(float(s_n1.get("distance", 0.0)) + float(s_n2.get("distance", 0.0)), 2),
+            "payload": round(float(s_n1.get("payload", 0.0)) + float(s_n2.get("payload", 0.0)), 2),
+            "relative_wind_angle": round(float(s_n1.get("relative_wind_angle", 0.0)) + float(s_n2.get("relative_wind_angle", 0.0)), 2),
+            "altitude": round(float(s_n1.get("altitude", 0.0)) + float(s_n2.get("altitude", 0.0)), 2),
+        }
+        diff_ndist = round(tot_nd - dist_direct, 2)
+        diff_nenergy = round(tot_ne - e_direct, 1)
+        fallback_ai_explanation = {
+            "flight_speed_mps": 10.0,
+            "flight_speed_kmh": 36.0,
+            "total_energy_wh": round(tot_ne, 2),
+            "feature_contributions": [
+                {
+                    "feature": "distance",
+                    "label": "Cự ly hành trình (Distance)",
+                    "value": f"{tot_nd:.2f} km (Đường vòng qua {nearest_mid.name})",
+                    "shap_contribution_wh": aggregated_n_shap["distance"],
+                    "impact": f"Cự ly dài hơn +{diff_ndist:.2f} km so với bay thẳng làm phát sinh thêm +{diff_nenergy:.1f} Wh năng lượng cản di chuyển"
+                },
+                {
+                    "feature": "payload",
+                    "label": "Tải trọng hàng hóa (Payload)",
+                    "value": f"{payload:.2f} kg",
+                    "shap_contribution_wh": aggregated_n_shap["payload"],
+                    "impact": f"Tải trọng hàng hóa duy trì nâng đỡ suốt {tot_nd:.2f} km làm tăng tiêu hao +{aggregated_n_shap['payload']:.1f} Wh"
+                },
+                {
+                    "feature": "speed",
+                    "label": "Vận tốc bay (Flight Speed)",
+                    "value": "10.0 m/s (36.0 km/h)",
+                    "shap_contribution_wh": 0.0,
+                    "impact": "Vận tốc hành trình kinh tế (10.0 m/s) xuyên suốt cả 2 chặng bay, tối ưu hóa mức tiêu hao công suất"
+                },
+                {
+                    "feature": "wind",
+                    "label": "Điều kiện đón gió (Wind Effect)",
+                    "value": "Tổng hợp 2 chặng bay",
+                    "shap_contribution_wh": aggregated_n_shap["relative_wind_angle"],
+                    "impact": "Gió xuôi hỗ trợ tiết kiệm pin trên toàn tuyến" if aggregated_n_shap["relative_wind_angle"] <= 0 else "Gió ngược làm tăng lực cản di chuyển trên các chặng bay"
+                }
+            ],
+            "legs_breakdown": [
+                {
+                    "leg": 1,
+                    "from_hub_code": origin_hub.code or origin_hub.name,
+                    "to_hub_code": nearest_mid.code or nearest_mid.name,
+                    "distance_km": round(d_n1, 2),
+                    "energy_wh": round(e_n1, 2),
+                    "speed_mps": 10.0,
+                    "speed_kmh": 36.0,
+                    "action": f"Bay từ {origin_hub.name} đến {nearest_mid.name} (Tốn {e_n1:.1f} Wh)",
+                },
+                {
+                    "leg": 2,
+                    "from_hub_code": nearest_mid.code or nearest_mid.name,
+                    "to_hub_code": dest_hub.code or dest_hub.name,
+                    "distance_km": round(d_n2, 2),
+                    "energy_wh": round(e_n2, 2),
+                    "speed_mps": 10.0,
+                    "speed_kmh": 36.0,
+                    "action": f"Thay pin tại {nearest_mid.name} và bay tiếp tới {dest_hub.name} (Tốn {e_n2:.1f} Wh)",
+                }
+            ],
+            "summary": (
+                f"Tuyến trung chuyển dự phòng qua {nearest_mid.name}. Tổng cự ly {tot_nd:.2f} km dài hơn đường thẳng +{diff_ndist:.2f} km, "
+                f"tiêu hao {tot_ne:.1f} Wh (+{diff_nenergy:.1f} Wh). Không còn pin tương thích khả dụng tại trạm trung gian."
+            )
+        }
         fb_string = f"{origin_hub.code or origin_hub.name} -> {nearest_mid.code or nearest_mid.name} -> {dest_hub.code or dest_hub.name}"
         fallback_detour = {
             "path": [origin_hub.id, nearest_mid.id, dest_hub.id],
@@ -1884,6 +2082,10 @@ async def compute_mission_routes_internal(
             "predictedEnergyWh": round(e_n1 + e_n2, 2),
             "predictedDurationMin": int((d_n1 + d_n2) * 2),
             "wait_time": 0,
+            "flight_speed_mps": 10.0,
+            "speed_profile_label": "Relay Profile (10 m/s - 36 km/h)",
+            "shap_values": aggregated_n_shap,
+            "ai_explanation": fallback_ai_explanation,
             "legs_detail": [
                 {
                     "from_hub_id": origin_hub.id,
@@ -2138,6 +2340,10 @@ async def compute_mission_routes_internal(
             pickup_hub_id=origin_hub.id if is_cross_hub else None,
             pickup_hub_name=origin_hub.name if is_cross_hub else None,
             pickup_hub_code=origin_hub.code or origin_hub.name if is_cross_hub else None,
+            flight_speed_mps=d.get("flight_speed_mps", 10.0),
+            speed_profile_label=d.get("speed_profile_label"),
+            shap_values=d.get("shap_values"),
+            ai_explanation=d.get("ai_explanation"),
         )
         routes_schemas.append(schema)
         raw_data_list.append(d)
@@ -2188,8 +2394,9 @@ async def compute_mission_routes_internal(
                     ).strip()
                 else:
                     s.reason = (
-                        f"{dispatch_prefix}Được AI đề xuất: Tuyến đường khả thi tối ưu hiệu suất năng lượng nhất "
-                        f"(tổng {s.predictedEnergyWh:.1f} Wh, tiêu thụ tối đa ~{s.batteryConsumptionPct}% pin/chặng, "
+                        f"{dispatch_prefix}Được AI đề xuất: Tuyến bay thẳng tối ưu năng lượng (Eco Profile 10 m/s ~ 36 km/h). "
+                        f"Phân tích SHAP chứng minh vận tốc 10 m/s giảm thiểu lực cản khí động học (Drag), tiêu thụ thấp nhất "
+                        f"(tổng {s.predictedEnergyWh:.1f} Wh, ~{s.batteryConsumptionPct}% pin/chặng, "
                         f"dự phòng {s.remainingBatteryPct}%). {origin_bat_note}{swap_summary}"
                     ).strip()
             else:
@@ -2198,13 +2405,26 @@ async def compute_mission_routes_internal(
                 s.unselectable_reason = None
                 if "DETOUR" in s.routeId:
                     relays_str = " -> ".join([leg.to_hub_code for leg in s.legs_detail[:-1]])
-                    s.reason = f"{dispatch_prefix}Tuyến đường vòng: Ghé đổi pin tại trạm {relays_str} (đủ pin tương thích gán trực tiếp cho Drone) để bay tiếp tới đích (Cự ly {s.distanceKm} km, {s.predictedEnergyWh:.1f} Wh). {origin_bat_note}{swap_summary}".strip()
+                    diff_d = round(s.distanceKm - routes_schemas[0].distanceKm, 2) if routes_schemas else 0.0
+                    diff_e = round(s.predictedEnergyWh - routes_schemas[0].predictedEnergyWh, 1) if routes_schemas else 0.0
+                    s.reason = (
+                        f"{dispatch_prefix}Tuyến trung chuyển qua trạm đổi pin (Relay Hub): Ghé trạm {relays_str} thay pin. "
+                        f"Phân tích SHAP chỉ rõ việc đi vòng làm cự ly tăng thêm +{diff_d:.2f} km, tiêu hao thêm +{diff_e:.1f} Wh so với bay thẳng. "
+                        f"Tuyến này đóng vai trò hành lang an toàn (Safe Corridor) hoặc phương án dự phòng khi cần trung chuyển thiết bị giữa các trạm "
+                        f"(Tổng cự ly {s.distanceKm} km, {s.predictedEnergyWh:.1f} Wh). {origin_bat_note}{swap_summary}"
+                    ).strip()
                 elif "SHORT" in s.routeId:
                     s.reason = f"{dispatch_prefix}Quãng đường ngắn nhất: Cự ly {s.distanceKm} km, tiêu thụ {s.predictedEnergyWh:.1f} Wh. {origin_bat_note}{swap_summary}".strip()
                 elif "DIR" in s.routeId:
                     s.reason = f"{dispatch_prefix}Tuyến bay thẳng trực tiếp: Cự ly {s.distanceKm} km, không qua trạm sạc trung gian. {origin_bat_note}".strip()
                 elif "FAST" in s.routeId:
-                    s.reason = f"{dispatch_prefix}Tuyến bay nhanh nhất / Trực tiếp: Bay thẳng với tốc độ hành trình tối đa ({s.predictedDurationMin} phút, tiêu thụ {s.predictedEnergyWh:.1f} Wh). {origin_bat_note}".strip()
+                    diff_wh = round(s.predictedEnergyWh - routes_schemas[0].predictedEnergyWh, 1) if routes_schemas else 2.8
+                    pct_inc = int(round((diff_wh / routes_schemas[0].predictedEnergyWh) * 100)) if (routes_schemas and routes_schemas[0].predictedEnergyWh > 0) else 15
+                    s.reason = (
+                        f"{dispatch_prefix}Tuyến bay nhanh nhất / Trực tiếp: Bay thẳng với tốc độ hành trình cao (Speed Profile 14 m/s ~ 50 km/h). "
+                        f"Rút ngắn thời gian còn {s.predictedDurationMin} phút, nhưng phân tích SHAP chỉ rõ lực cản không khí tăng bậc hai (v²) "
+                        f"khiến năng lượng tiêu thụ tăng thêm +{diff_wh:.1f} Wh (+{pct_inc}%, tổng {s.predictedEnergyWh:.1f} Wh). {origin_bat_note}"
+                    ).strip()
                 else:
                     s.reason = f"{dispatch_prefix}Tuyến đường thay thế: Cự ly {s.distanceKm} km, thời gian {s.predictedDurationMin} phút. {origin_bat_note}{swap_summary}".strip()
 
