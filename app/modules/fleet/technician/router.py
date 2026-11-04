@@ -12,7 +12,7 @@ from app.shared.roles import UserRole
 from app.modules.auth.models import User
 from app.modules.fleet.models import (
     Drone, Battery, WorkOrder, WorkOrderStatus, batteries_status,
-    MaintenanceAlert, MaintenanceSchedule,
+    MaintenanceAlert, MaintenanceSchedule, DroneStatus,
     PartCategory, PartsRequest, PartsRequestStatus, HubInventory, PartCategoryType
 )
 from app.modules.system.models import Hub
