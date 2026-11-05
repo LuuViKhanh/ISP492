@@ -1346,17 +1346,21 @@ async def update_inspection(
     if wo.status == WorkOrderStatus.COMPLETED and body.status == WorkOrderStatus.COMPLETED:
         return wo
 
-    # Khi Complete: bắt buộc phải có Maintenance Record trước
+    # Khi Complete: bắt buộc phải có action_taken
     if body.status == WorkOrderStatus.COMPLETED:
-        if not wo.diagnosis and not wo.resulting_drone_status and not wo.action_taken:
+        if not body.action_taken:
             raise HTTPException(
                 status_code=400,
-                detail="Chưa có Maintenance Record cho Work Order này. Vui lòng tạo Maintenance Record trước khi Complete."
+                detail="Phải cung cấp action_taken khi hoàn thành Work Order"
             )
 
     old_status = wo.status.value
     wo.action_taken = body.action_taken
     wo.status = body.status
+    if body.diagnosis:
+        wo.diagnosis = body.diagnosis
+    if body.resulting_drone_status:
+        wo.resulting_drone_status = body.resulting_drone_status
     now = get_vn_naive_datetime()
     
     if body.status == WorkOrderStatus.COMPLETED:
