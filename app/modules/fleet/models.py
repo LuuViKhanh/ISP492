@@ -19,8 +19,8 @@ class batteries_status(str, enum.Enum):
 class BatteryAvailableStatus(str, enum.Enum):
     """Computed status — không lưu DB, chỉ dùng trong API response."""
     CHARGING = "Charging"   # đang sạc tại hub (charge_level_pct < 100)
-    READY    = "Ready"      # sạc đầy 100%, sẵn sàng lắp
-    IN_USE   = "In Use"     # đang gắn trên drone
+    READY    = "Ready"      # sạc đầy 100%, sẵn sàng dùng
+    IN_USE   = "In Use"     # đang được dùng trong work order
     REPLACED = "Replaced"   # hết vòng đời
 
 
@@ -45,12 +45,15 @@ def compute_battery_available_status(battery: "Battery") -> BatteryAvailableStat
 
     Rules (ưu tiên từ trên xuống):
     1. status = Replaced                          → Replaced
-    2. drone_id IS NOT NULL                       → In Use (đang gắn trên drone)
-    3. charge_level_pct >= 100                    → Ready  (đủ 100%, có thể lắp ngay)
-    4. còn lại                                    → Charging (đang sạc tại hub)
+    2. work_order_id IS NOT NULL                  → In Use (đang dùng trong work order)
+    3. drone_id IS NOT NULL                       → Installed (đang gắn trên drone)
+    4. charge_level_pct >= 100                    → Ready  (đủ 100%, có thể dùng ngay)
+    5. còn lại                                    → Charging (đang sạc tại hub)
     """
     if battery.status == batteries_status.REPLACED:
         return BatteryAvailableStatus.REPLACED
+    if battery.work_order_id is not None:
+        return BatteryAvailableStatus.IN_USE
     if battery.drone_id is not None:
         return BatteryAvailableStatus.IN_USE
     if (battery.charge_level_pct or 0) >= 100:
@@ -141,6 +144,7 @@ class Battery(Base):
     battery_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # Thời điểm pin gần nhất được sạc đầy 100% (ghi bởi charging worker hoặc manual mark-charged)
     last_charged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    work_order_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("work_orders.id"), nullable=True)
     
     drone = relationship("Drone", back_populates="batteries")
 

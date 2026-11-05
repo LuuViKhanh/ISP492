@@ -1269,6 +1269,12 @@ async def create_work_order(
         drone = await db.get(Drone, body.drone_id)
         if drone:
             drone.status = DroneStatus.MAINTENANCE
+    
+    # Cập nhật battery: set work_order_id để tracking pin đang dùng
+    if body.battery_id:
+        battery = await db.get(Battery, body.battery_id)
+        if battery:
+            battery.work_order_id = wo.id
 
     # Nếu tạo từ một alert → gắn work_order_id vào alert, chuyển alert sang history
     if body.alert_id:
@@ -1365,6 +1371,12 @@ async def update_inspection(
     
     if body.status == WorkOrderStatus.COMPLETED:
         wo.resolved_at = now
+        
+        # Clear work_order_id từ battery (pin không còn dùng)
+        if wo.battery_id:
+            battery = await db.get(Battery, wo.battery_id)
+            if battery:
+                battery.work_order_id = None
         
         # ── Fix: Cập nhật maintenance schedule khi work order hoàn thành ──
         # Nếu work order được tạo từ 1 maintenance alert có schedule_id
