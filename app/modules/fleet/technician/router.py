@@ -1381,16 +1381,6 @@ async def update_inspection(
             if battery:
                 battery.work_order_id = None
         
-        # ── Fix: Cập nhật maintenance schedule khi work order hoàn thành ──
-        # Nếu work order được tạo từ 1 maintenance alert có schedule_id
-        # → Cập nhật next_inspection_at để lịch bảo trì tiếp theo là +interval_days
-        if wo.maintenance_schedule_id:
-            schedule = await db.get(MaintenanceSchedule, wo.maintenance_schedule_id)
-            if schedule and schedule.interval_days:
-                schedule.last_inspection_at = now
-                schedule.next_inspection_at = now + timedelta(days=schedule.interval_days)
-                print(f"[MAINTENANCE] Schedule #{schedule.id} updated: next inspection {schedule.next_inspection_at}")
-        
         # ── Tự động acknowledge maintenance alert liên quan ──
         # Tìm alert gắn với work order này (nếu có) và chuyển sang Acknowledged
         if wo.alert_id:
