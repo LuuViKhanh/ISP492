@@ -57,13 +57,27 @@ async def admin_dashboard(
         select(func.count()).select_from(Mission).where(comp)
     )).scalar() or 0
 
+    # Tính pending_payments (đơn PENDING chưa thanh toán)
+    pending_payments_result = (await db.execute(
+        select(func.coalesce(func.sum(Order.delivery_fee), 0))
+        .select_from(Order)
+        .where(Order.payment_status == PaymentStatus.PENDING)
+    )).scalar() or 0
+
+    # Tính refunds (tổng tiền đã hoàn lại)
+    refunds_result = (await db.execute(
+        select(func.coalesce(func.sum(Order.refund_amount), 0))
+        .select_from(Order)
+        .where(Order.payment_status == PaymentStatus.REFUNDED)
+    )).scalar() or 0
+
     revenue = AdminRevenue(
         total=round(float(total_rev), 2),
         today=round(float(today_rev), 2),
         this_month=round(float(month_rev), 2),
         paid_orders=int(paid_orders),
-        pending_payments=0.0,
-        refunds=0.0,
+        pending_payments=round(float(pending_payments_result), 2),
+        refunds=round(float(refunds_result), 2),
     )
 
     # ----- Users -----

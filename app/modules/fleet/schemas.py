@@ -61,6 +61,8 @@ class WorkOrderUpdate(BaseModel):
 class InspectionUpdate(BaseModel):
     action_taken: str
     status: WorkOrderStatus
+    diagnosis: Optional[str] = None
+    resulting_drone_status: Optional[str] = None
 
 class WorkOrderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

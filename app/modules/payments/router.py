@@ -64,6 +64,19 @@ class PaymentStatusResponse(BaseModel):
     amount: Optional[float] = None
 
 
+class RefundRequest(BaseModel):
+    amount: Optional[float] = None  # Nếu None thì hoàn toàn bộ
+    reason: str  # Lý do hoàn tiền
+
+
+class RefundResponse(BaseModel):
+    message: str
+    order_id: str
+    refund_amount: float
+    refund_reason: str
+    refund_at: datetime
+
+
 # ── Tạo payment link ──────────────────────────────────────────────────────────
 
 @router.post(
@@ -347,6 +360,81 @@ async def register_webhook(
             return {"status": resp.status_code, "response": resp.json()}
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+# ── Hoàn tiền (Refund) ────────────────────────────────────────────────────────
+
+@router.post(
+    "/orders/{order_id}/refund",
+    response_model=RefundResponse,
+    summary="Admin hoàn tiền cho khách (Refund)",
+)
+async def refund_order(
+    order_id: str,
+    body: RefundRequest,
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Admin hoàn tiền cho khách.
+    
+    - Chỉ có thể hoàn tiền cho đơn đã PAID
+    - Nếu không truyền amount → hoàn toàn bộ delivery_fee
+    - Gọi PayOS refund API → tiền về tài khoản ngân hàng khách (1-3 ngày)
+    """
+    order = await db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    if order.payment_status != PaymentStatus.PAID:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Chỉ có thể hoàn tiền cho đơn đã thanh toán. Trạng thái hiện tại: {order.payment_status.value}"
+        )
+    
+    if not order.payment_order_code:
+        raise HTTPException(status_code=400, detail="Đơn hàng không có thông tin thanh toán (order_code)")
+    
+    refund_amount = body.amount or order.delivery_fee
+    if refund_amount <= 0:
+        raise HTTPException(status_code=400, detail="Số tiền hoàn phải > 0")
+    
+    if refund_amount > (order.delivery_fee or 0):
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Số tiền hoàn không thể vượt quá delivery_fee ({order.delivery_fee} VND)"
+        )
+    
+    try:
+        payos = get_payos()
+        # Gọi PayOS refund API
+        refund_response = payos.refund(
+            orderId=order.payment_order_code,
+            amount=int(refund_amount),
+            description=body.reason[:255],
+        )
+        
+        # Cập nhật DB
+        now = get_vn_naive_datetime()
+        order.payment_status = PaymentStatus.REFUNDED
+        order.refund_at = now
+        order.refund_amount = refund_amount
+        order.refund_reason = body.reason
+        
+        await db.commit()
+        
+        return RefundResponse(
+            message="Hoàn tiền thành công",
+            order_id=order_id,
+            refund_amount=refund_amount,
+            refund_reason=body.reason,
+            refund_at=now,
+        )
+        
+    except Exception as e:
+        import traceback
+        print(f"[REFUND ERROR] {traceback.format_exc()}")
+        raise HTTPException(status_code=400, detail=f"Lỗi hoàn tiền PayOS: {str(e)}")
 
 
 # ── Huỷ payment link ──────────────────────────────────────────────────────────
