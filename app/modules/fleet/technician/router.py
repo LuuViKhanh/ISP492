@@ -1272,12 +1272,34 @@ async def create_work_order(
         drone = await db.get(Drone, body.drone_id)
         if drone:
             drone.status = DroneStatus.MAINTENANCE
+    
+    # Cập nhật battery: set work_order_id để tracking pin đang dùng
+    if body.battery_id:
+        battery = await db.get(Battery, body.battery_id)
+        if battery:
+            battery.work_order_id = wo.id
 
     # Nếu tạo từ một alert → gắn work_order_id vào alert, chuyển alert sang history
     if body.alert_id:
         alert = await db.get(MaintenanceAlert, body.alert_id)
         if alert:
             alert.work_order_id = wo.id
+    else:
+        # Nếu không có alert_id, tự động tìm alert pending của drone này để gắn vào
+        if body.drone_id:
+            alert_res = await db.execute(
+                select(MaintenanceAlert)
+                .where(
+                    MaintenanceAlert.drone_id == body.drone_id,
+                    MaintenanceAlert.work_order_id == None,
+                    MaintenanceAlert.status.in_(["Pending", "PENDING", "Acknowledged"])
+                )
+                .order_by(MaintenanceAlert.id.desc())
+                .limit(1)
+            )
+            alert = alert_res.scalar_one_or_none()
+            if alert:
+                alert.work_order_id = wo.id
 
     await db.commit()
     await db.refresh(wo)
@@ -1333,21 +1355,31 @@ async def update_inspection(
     if wo.status == WorkOrderStatus.COMPLETED and body.status == WorkOrderStatus.COMPLETED:
         return wo
 
-    # Khi Complete: bắt buộc phải có Maintenance Record trước
+    # Khi Complete: bắt buộc phải có action_taken
     if body.status == WorkOrderStatus.COMPLETED:
-        if not wo.diagnosis and not wo.resulting_drone_status and not wo.action_taken:
+        if not body.action_taken:
             raise HTTPException(
                 status_code=400,
-                detail="Chưa có Maintenance Record cho Work Order này. Vui lòng tạo Maintenance Record trước khi Complete."
+                detail="Phải cung cấp action_taken khi hoàn thành Work Order"
             )
 
     old_status = wo.status.value
     wo.action_taken = body.action_taken
     wo.status = body.status
+    if body.diagnosis:
+        wo.diagnosis = body.diagnosis
+    if body.resulting_drone_status:
+        wo.resulting_drone_status = body.resulting_drone_status
     now = get_vn_naive_datetime()
     
     if body.status == WorkOrderStatus.COMPLETED:
         wo.resolved_at = now
+        
+        # Clear work_order_id từ battery (pin không còn dùng)
+        if wo.battery_id:
+            battery = await db.get(Battery, wo.battery_id)
+            if battery:
+                battery.work_order_id = None
         
         # ── Fix: Cập nhật maintenance schedule khi work order hoàn thành ──
         # Nếu work order được tạo từ 1 maintenance alert có schedule_id
