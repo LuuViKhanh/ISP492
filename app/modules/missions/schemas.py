@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+﻿from pydantic import BaseModel
 from typing import Dict, Optional, Union, Any
 from datetime import datetime
 from app.modules.missions.models import MissionStatus
@@ -63,7 +63,7 @@ class RouteLegSchema(BaseModel):
     battery_energy_wh: Optional[float] = None
     battery_consumption_pct: Optional[int] = None
     remaining_battery_pct: Optional[int] = None
-    leg_type: str = "DISPATCH"  # DISPATCH (bay sang nhận hàng) hoặc DELIVERY (giao hàng)
+    leg_type: str = "DELIVERY"  # DISPATCH (bay sang nhận hàng) hoặc DELIVERY (giao hàng)
     is_dispatch: bool = False
     payload_kg: Optional[float] = None
     note: Optional[str] = None
