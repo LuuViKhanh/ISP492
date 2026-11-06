@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+﻿from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func
 from datetime import timedelta, datetime, timezone
@@ -153,7 +153,16 @@ async def get_live_tracking(
     Trả về `active_count = 0` và `drones = []` khi không có drone nào đang bay.
     """
     flying_result = await db.execute(
-        select(Mission).where(Mission.status == MissionStatus.FLYING)
+        select(Mission).where(
+            or_(
+                Mission.status == MissionStatus.FLYING,
+                and_(
+                    Mission.status == MissionStatus.INCIDENT_RETURN,
+                    Mission.arrived_at.is_(None),
+                    Mission.end_time.is_(None),
+                )
+            )
+        )
     )
     flying_missions = flying_result.scalars().all()
 
@@ -338,6 +347,13 @@ async def get_live_tracking(
         elif inc and "[FAILSAFE RTH]" in (inc.description or ""):
             failsafe_status = "RTH"
             failsafe_alert = inc.description
+            is_diverted = True
+            divert_hub_id = mission.origin_hub_id
+            if divert_hub_id and divert_hub_id in hubs_map:
+                divert_hub_name = hubs_map[divert_hub_id].name
+        elif mission.status == MissionStatus.INCIDENT_RETURN:
+            failsafe_status = "RTH"
+            failsafe_alert = inc.description if inc else "Sự cố trong chuyến bay — Drone đang quay về Hub an toàn."
             is_diverted = True
             divert_hub_id = mission.origin_hub_id
             if divert_hub_id and divert_hub_id in hubs_map:
@@ -2541,6 +2557,13 @@ async def build_missions_response_list(
                 leg_rem_pct = max(0, 100 - leg_pct)
                 leg_consumption_pcts.append(leg_pct)
 
+                is_dispatch_leg = False
+                if m.origin_hub_id and leg.to_hub_id == m.origin_hub_id and leg.from_hub_id != m.origin_hub_id and idx == 0 and len(m_legs) > 1:
+                    is_dispatch_leg = True
+
+                leg_type_val = "DISPATCH" if is_dispatch_leg else "DELIVERY"
+                leg_payload_val = 0.0 if is_dispatch_leg else (payload if payload > 0 else None)
+
                 legs_detail.append(
                     RouteLegSchema(
                         from_hub_code=from_code,
@@ -2565,6 +2588,9 @@ async def build_missions_response_list(
                         battery_energy_wh=round(leg_energy_avail, 2),
                         battery_consumption_pct=leg_pct,
                         remaining_battery_pct=leg_rem_pct,
+                        leg_type=leg_type_val,
+                        is_dispatch=is_dispatch_leg,
+                        payload_kg=leg_payload_val,
                     )
                 )
 
@@ -2666,6 +2692,9 @@ async def build_missions_response_list(
                         battery_energy_wh=round(origin_bat_energy, 2),
                         battery_consumption_pct=leg_pct,
                         remaining_battery_pct=leg_rem_pct,
+                        leg_type="DELIVERY",
+                        is_dispatch=False,
+                        payload_kg=payload if payload > 0 else None,
                     )
                 )
 
