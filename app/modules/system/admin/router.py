@@ -20,14 +20,17 @@ from app.modules.system.schemas import (
     HubAssignedTechnician,
     KPIDashboardResponse,
     KPIChartData,
+    SimulatorConfigResponse,
+    SimulatorConfigUpdate,
 )
 from app.modules.system.models import Hub
 from app.modules.fleet.models import Drone, Battery
 from app.modules.auth.models import User
 from app.modules.missions.models import Mission, MissionStatus
 from app.modules.system import service
-from app.shared.dependencies import RoleChecker
+from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
+from app.shared.drone_simulator import simulator_config
 
 router = APIRouter(tags=["System"])
 
@@ -397,3 +400,34 @@ async def get_dashboard_kpi(db: AsyncSession = Depends(get_async_db)):
         total_revenue=float(total_revenue),
         revenue_chart=revenue_chart
     )
+
+
+allow_config_access = RoleChecker([UserRole.ADMIN, UserRole.OPERATOR])
+
+
+@router.get("/system/simulator-config", response_model=SimulatorConfigResponse, summary="Lấy cấu hình Drone Simulator hiện tại")
+async def get_simulator_config(
+    user: CurrentUser = Depends(allow_config_access),
+):
+    return SimulatorConfigResponse(**simulator_config.to_dict())
+
+
+@router.patch("/system/simulator-config", response_model=SimulatorConfigResponse, summary="Cập nhật cấu hình Drone Simulator (bật/tắt sự cố, chỉnh xác suất)")
+async def update_simulator_config(
+    body: SimulatorConfigUpdate,
+    user: CurrentUser = Depends(allow_config_access),
+):
+    if body.incident_enabled is not None:
+        simulator_config.incident_enabled = body.incident_enabled
+    if body.incident_probability is not None:
+        simulator_config.incident_probability = max(0.0, min(1.0, float(body.incident_probability)))
+    if body.incident_min_step is not None:
+        simulator_config.incident_min_step = max(1, body.incident_min_step)
+    if body.incident_severity is not None:
+        simulator_config.incident_severity = body.incident_severity
+    if body.interval_sec is not None:
+        simulator_config.interval_sec = max(1, body.interval_sec)
+    if body.steps_per_leg is not None:
+        simulator_config.steps_per_leg = max(5, body.steps_per_leg)
+    return SimulatorConfigResponse(**simulator_config.to_dict())
+

@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func
 from datetime import timedelta, datetime, timezone
@@ -3329,10 +3329,11 @@ async def create_mission(
     )
     db.add(ai_pred)
 
-    # 4. Ghi nhận thời gian planning trên tất cả các đơn hàng thuộc nhiệm vụ
+    # 4. Ghi nhận thời gian planning trên tất cả các đơn hàng thuộc nhiệm vụ (xóa cờ replan_required_at nếu có)
     now_naive = get_vn_naive_datetime()
     for o_item in bundled_order_objs:
         o_item.planning_at = now_naive
+        o_item.replan_required_at = None
 
     await db.commit()
     await db.refresh(mission)

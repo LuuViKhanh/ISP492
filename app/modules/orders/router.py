@@ -150,15 +150,19 @@ def calculate_planning_state(order: Order, mission: Mission = None) -> str | Non
     ):
         return None
 
+    # Nếu đơn hàng đang ở Hub và có cờ cần lập lịch lại (do sự cố chuyến bay quay về)
+    if order.status == OrderStatus.AT_HUB and order.replan_required_at:
+        return "NEEDS_REPLANNING"
+
     # 2. Nếu đơn hàng đã có Mission liên kết
     if mission:
         ms_str = (mission.status.value if hasattr(mission.status, "value") else str(mission.status or "")).upper()
-        if ms_str in COMPLETED_MISSION_STATUS_STRINGS or mission.arrived_at is not None:
-            return None
         if ms_str in ACTIVE_MISSION_STATUS_STRINGS:
             return "PLANNED"
         if ms_str in FAILED_MISSION_STATUS_STRINGS:
             return "NEEDS_REPLANNING"
+        if ms_str in COMPLETED_MISSION_STATUS_STRINGS or mission.arrived_at is not None:
+            return None
 
     # 3. Chưa tới Hub -> Đang chờ nhận hàng
     if order.status != OrderStatus.AT_HUB:
@@ -305,12 +309,12 @@ async def list_orders(
         order_resp.planning_state_label = PLANNING_STATE_LABELS.get(planning_state)
         order_resp.originPackage = origin_pkg
 
-        # Chỉ cho phép tạo mission khi hàng thực sự đã nhận tại Hub, đơn đã AT_HUB và chưa có mission active
+        # Chỉ cho phép tạo mission khi hàng thực sự đã nhận tại Hub, đơn đã AT_HUB và chưa có mission active (hoặc cần lập lịch lại do sự cố)
         ms_val = (latest_mission.status.value if hasattr(latest_mission.status, "value") else str(latest_mission.status or "")).upper() if latest_mission else ""
         order_resp.can_create_mission = bool(
             origin_pkg.received
             and o.status == OrderStatus.AT_HUB 
-            and (latest_mission is None or ms_val in FAILED_MISSION_STATUS_STRINGS)
+            and (latest_mission is None or ms_val in FAILED_MISSION_STATUS_STRINGS or o.replan_required_at is not None)
         )
 
         # Mốc thời gian giao hàng dự kiến có cộng thời gian bay của AI Model
@@ -364,7 +368,7 @@ async def _build_order_response_detail(
     order_resp.can_create_mission = bool(
         origin_pkg.received
         and order.status == OrderStatus.AT_HUB 
-        and (latest_mission is None or ms_val in FAILED_MISSION_STATUS_STRINGS)
+        and (latest_mission is None or ms_val in FAILED_MISSION_STATUS_STRINGS or order.replan_required_at is not None)
     )
 
     ohub = None

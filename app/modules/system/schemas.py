@@ -157,3 +157,22 @@ class KPIDashboardResponse(BaseModel):
     failed_flights: int
     total_revenue: float
     revenue_chart: list[KPIChartData]
+
+
+class SimulatorConfigResponse(BaseModel):
+    incident_enabled: bool
+    incident_probability: float
+    incident_min_step: int
+    incident_severity: str
+    interval_sec: int
+    steps_per_leg: int
+
+
+class SimulatorConfigUpdate(BaseModel):
+    incident_enabled: Optional[bool] = None
+    incident_probability: Optional[float] = None
+    incident_min_step: Optional[int] = None
+    incident_severity: Optional[str] = None
+    interval_sec: Optional[int] = None
+    steps_per_leg: Optional[int] = None
+
