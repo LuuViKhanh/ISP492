@@ -389,12 +389,9 @@ async def confirm_arrival(
     mission.end_time = mission.end_time or now
     mission.handling_status = None     # xóa handling_status để không còn nằm trong /incoming (Transit)
 
-    # Nếu là chuyến bay sự cố, drone quay về Hub tiếp nhận và kết thúc chặng bay này.
-    # Ghi nhận arrival_confirmed_at để không treo ở hàng đợi chờ khách nhận hàng (/confirmations)
-    # và không kích hoạt pickup_reminder_watcher hủy đơn nhầm.
-    if is_incident_flight:
-        mission.arrival_confirmed_at = now
-        mission.arrival_confirmed_by = user.id
+    # Ghi nhận arrival_confirmed_at khi drone đáp hub (bình thường hay incident)
+    mission.arrival_confirmed_at = now
+    mission.arrival_confirmed_by = user.id
 
     # ── 2. Mark tất cả MissionLeg còn lại → COMPLETED ────────────────────────
     legs_result = await db.execute(
@@ -505,8 +502,6 @@ async def confirm_arrival(
                 else:
                     # Chuyến bay đáp hub đích thành công
                     order_obj.status = OrderStatus.DELIVERED_TO_HUB
-                    order_obj.destination_received_at = now
-                    order_obj.destination_received_by = str(user.id)
                     order_obj.updated_at = now
 
                     if order_obj.receiver_email:

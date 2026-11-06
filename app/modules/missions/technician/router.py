@@ -661,19 +661,28 @@ async def confirm_pickup(
     db: AsyncSession = Depends(get_async_db)
 ):
     """Xác nhận khách đã tới lấy hàng thành công."""
+    from app.modules.missions.models import Order as OrderModel, OrderStatus
+    
     mission = await get_mission_by_order_id(db, orderId)
     
     if mission.arrived_at is None:
         raise HTTPException(status_code=400, detail="Mission has not arrived yet")
         
-    if mission.arrival_confirmed_at is not None and mission.status == MissionStatus.MISSION_COMPLETED:
+    if mission.status == MissionStatus.MISSION_COMPLETED:
         raise HTTPException(status_code=400, detail="Pickup already confirmed")
         
     now = get_vn_naive_datetime()
-    mission.arrival_confirmed_at = now
-    mission.arrival_confirmed_by = user.id
     mission.status = MissionStatus.MISSION_COMPLETED
     mission.handling_status = None
+    
+    # Update order status and timestamp when customer picks up
+    if mission.order_id:
+        order = await db.get(OrderModel, mission.order_id)
+        if order:
+            order.status = OrderStatus.DELIVERED_TO_CUSTOMER
+            order.destination_received_at = now
+            order.destination_received_by = user.id
+            order.updated_at = now
     
     await db.commit()
     await db.refresh(mission)
@@ -823,10 +832,20 @@ async def get_order_audit_trail(
     if mission.arrival_confirmed_at:
         timeline.append({
             "timestamp": mission.arrival_confirmed_at,
-            "event": "Customer Confirmed Pickup",
+            "event": "Drone Delivery Confirmed at Hub",
             "confirmed_by": mission.arrival_confirmed_by,
-            "actor": "Customer"
+            "actor": "Technician"
         })
+    
+    # Customer picked up
+    if order:
+        if order.destination_received_at:
+            timeline.append({
+                "timestamp": order.destination_received_at,
+                "event": "Customer Picked Up Package",
+                "received_by": order.destination_received_by,
+                "actor": "Customer"
+            })
     
     # Work orders
     for wo in work_orders[:5]:  # Show last 5
