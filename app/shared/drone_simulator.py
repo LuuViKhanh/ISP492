@@ -104,18 +104,9 @@ async def _trigger_incident(
     from_hub: Hub,
     severity: str = "Medium",
 ) -> None:
-    """Tạo Incident, MaintenanceAlert và Notification cho Operators khi sự cố xảy ra."""
-    from app.modules.missions.models import Incident, IncidentStatus, IncidentSeverity
-    from app.modules.fleet.models import MaintenanceAlert
+    """Xử lý Failsafe RTH cho mission khi sự cố xảy ra, thông báo cho Operators."""
     from app.modules.system.models import Notification, NotificationType
     from app.shared.workers import get_operator_ids
-
-    severity_map = {
-        "Low": IncidentSeverity.LOW,
-        "Medium": IncidentSeverity.MEDIUM,
-        "High": IncidentSeverity.HIGH,
-    }
-    sev = severity_map.get(severity, IncidentSeverity.MEDIUM)
 
     async with AsyncSessionLocal() as db:
         try:
@@ -129,45 +120,16 @@ async def _trigger_incident(
             mission.status = MissionStatus.INCIDENT_RETURN
             mission.handling_status = HandlingStatus.INCOMING
 
-            # 2. Tạo Incident
-            incident = Incident(
-                mission_id=mission_id,
-                drone_id=str(mission.drone_id) if mission.drone_id else None,
-                reporter_id="SIMULATOR",
-                severity=sev,
-                description=(
-                    f"[SIMULATOR] Sự cố xảy ra tại ({incident_lat:.5f}, {incident_lng:.5f}) "
-                    f"trong chuyến bay {mission_id}. Drone đang quay về {from_hub.name}."
-                ),
-                status=IncidentStatus.OPEN,
-                reported_at=now,
-                requires_technical_inspection=True,
-            )
-            db.add(incident)
-            await db.flush()
-
-            # 3. Tạo MaintenanceAlert
-            alert = MaintenanceAlert(
-                drone_id=str(mission.drone_id) if mission.drone_id else None,
-                source="Incident",
-                mission_id=str(mission_id),
-                incident_id=incident.id,
-                title=f"Sự cố chuyến bay {mission_id} — {severity} severity",
-                status="Pending",
-                created_at=now,
-            )
-            db.add(alert)
-
-            # 4. Gửi Notification cho tất cả Operators
+            # 2. Gửi Notification cho tất cả Operators (theo dõi chú ý trên Live-tracking, không tạo rác trong tab Incidents)
             try:
                 operator_ids = await get_operator_ids(db)
                 for op_id in operator_ids:
                     db.add(Notification(
                         user_id=op_id,
-                        title=f"⚠️ Sự cố Mission #{mission_id}",
+                        title=f"⚠️ Failsafe RTH: Mission #{mission_id}",
                         message=(
-                            f"Drone #{mission.drone_id} gặp sự cố tại ({incident_lat:.5f}, {incident_lng:.5f}). "
-                            f"Đang quay về {from_hub.name}. Severity: {severity}."
+                            f"Drone #{mission.drone_id} kích hoạt Failsafe RTH tại ({incident_lat:.5f}, {incident_lng:.5f}). "
+                            f"Đang quay về {from_hub.name} an toàn."
                         ),
                         notifications_type=NotificationType.SYSTEM_ALERT,
                         mission_id=str(mission_id),
@@ -177,10 +139,10 @@ async def _trigger_incident(
                 print(f"[SIMULATOR] Lỗi gửi notification incident: {e}")
 
             await db.commit()
-            print(f"[SIMULATOR] Incident #{incident.id} đã tạo, mission → INCIDENT_RETURN.")
+            print(f"[SIMULATOR] Failsafe RTH kích hoạt: mission {mission_id} → INCIDENT_RETURN, quay về {from_hub.name}.")
 
         except Exception as e:
-            print(f"[SIMULATOR] Lỗi tạo incident: {e}")
+            print(f"[SIMULATOR] Lỗi kích hoạt Failsafe RTH: {e}")
 
 
 async def _fly_incident_return(
@@ -259,12 +221,30 @@ async def _fly_incident_return(
         try:
             mission = await db.get(Mission, mission_id)
             if mission:
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                mission.arrived_at = now
                 mission.handling_status = HandlingStatus.CANNOT_CONTINUE
+
+                # Cập nhật chặng bay (leg) kết thúc khi tiếp đất Hub
+                leg_res = await db.execute(
+                    select(MissionLeg)
+                    .where(
+                        MissionLeg.mission_id == mission_id,
+                        MissionLeg.status == MissionLegStatus.IN_PROGRESS,
+                    )
+                    .order_by(MissionLeg.sequence_no)
+                    .limit(1)
+                )
+                leg = leg_res.scalars().first()
+                if leg:
+                    leg.arrived_at = now
+                    leg.status = MissionLegStatus.COMPLETED
+
                 drone = await db.get(Drone, mission.drone_id) if mission.drone_id else None
                 if drone:
                     drone.current_hub_id = return_hub.id
                 await db.commit()
-                print(f"[SIMULATOR] Drone đáp {return_hub.name} — handling_status = Cannot continue.")
+                print(f"[SIMULATOR] Drone đáp {return_hub.name} an toàn — arrived_at={now}, handling_status = Cannot continue.")
         except Exception as e:
             print(f"[SIMULATOR] Lỗi cập nhật sau khi quay về hub: {e}")
 
