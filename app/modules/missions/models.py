@@ -55,7 +55,8 @@ class MissionStatus(str, enum.Enum):
     FLYING           = "Flying"
     REJECTED         = "Rejected"
     ACTIVE_MISSION   = "Active mission"
-    MISSION_COMPLETED = "Mission completed"
+    ARRIVAL_COMPLETED = "Arrival completed"  # Drone tới hub (confirm-arrival)
+    MISSION_COMPLETED = "Mission completed"  # Khách lấy hàng xong (confirm-pickup)
     INCIDENT_RETURN  = "Incident return"
     # Awaiting Payment
     AWAITING_PAYMENT = "Awaiting Payment"

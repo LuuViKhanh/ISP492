@@ -47,11 +47,11 @@ async def tool_get_operator_kpi(db: AsyncSession, **kwargs) -> Dict[str, Any]:
     missions = result.scalars().all()
 
     total = len(missions)
-    completed = sum(1 for m in missions if m.status == MissionStatus.COMPLETED)
+    completed = sum(1 for m in missions if m.status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED))
     cancelled = sum(1 for m in missions if m.status == MissionStatus.CANCELLED)
     rejected = sum(1 for m in missions if m.status == MissionStatus.REJECTED)
     finished = completed + cancelled + rejected
-    revenue = sum(m.delivery_fee for m in missions if m.delivery_fee and m.status == MissionStatus.COMPLETED)
+    revenue = sum(m.delivery_fee for m in missions if m.delivery_fee and m.status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED))
 
     return {
         "success": True,

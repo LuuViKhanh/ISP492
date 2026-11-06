@@ -37,7 +37,7 @@ from app.modules.system.models import Hub
 router = APIRouter(prefix="/admin/inventory", tags=["Admin - Inventory"])
 allow_admin = RoleChecker([UserRole.ADMIN])
 
-COMPLETED_MS = (MissionStatus.COMPLETED, MissionStatus.MISSION_COMPLETED)
+COMPLETED_MS = (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED)
 
 
 # ── Schemas ────────────────────────────────────────────────────────

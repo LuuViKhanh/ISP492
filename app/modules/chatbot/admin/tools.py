@@ -22,8 +22,8 @@ async def tool_get_system_executive_summary(db: AsyncSession, **kwargs) -> Dict[
     missions_res = await db.execute(select(Mission))
     missions = missions_res.scalars().all()
     total_missions = len(missions)
-    completed_missions = sum(1 for m in missions if m.status == MissionStatus.COMPLETED)
-    revenue = sum(m.delivery_fee for m in missions if m.delivery_fee and m.status == MissionStatus.COMPLETED)
+    completed_missions = sum(1 for m in missions if m.status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED))
+    revenue = sum(m.delivery_fee for m in missions if m.delivery_fee and m.status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED))
 
     # Orders
     orders_res = await db.execute(select(func.count(Order.id)))
