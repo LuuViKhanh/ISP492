@@ -1381,6 +1381,15 @@ async def update_inspection(
             if battery:
                 battery.work_order_id = None
         
+        # Update drone status based on resulting_drone_status
+        if wo.drone_id and body.resulting_drone_status:
+            drone = await db.get(Drone, wo.drone_id)
+            if drone:
+                try:
+                    drone.status = DroneStatus(body.resulting_drone_status)
+                except ValueError:
+                    pass  # Invalid status, skip
+        
         # ── Tự động acknowledge maintenance alert liên quan ──
         # Tìm alert gắn với work order này (nếu có) và chuyển sang Acknowledged
         if wo.alert_id:
@@ -2464,32 +2473,6 @@ async def get_my_parts_requests(
     return result.scalars().all()
 
 
-@router.get("/parts-requests", response_model=List[PartsRequestResponse], summary="Admin: Xem tất cả yêu cầu cấp phát")
-async def list_all_parts_requests(
-    hub_id: Optional[int] = None,
-    status: Optional[str] = None,
-    user: CurrentUser = Depends(allow_admin),
-    db: AsyncSession = Depends(get_async_db),
-):
-    """
-    ADMIN ONLY: Xem tất cả yêu cầu cấp phát vật tư (có thể lọc theo hub_id hoặc status).
-    """
-    query = select(PartsRequest).order_by(PartsRequest.created_at.desc())
-
-    if hub_id is not None:
-        query = query.where(PartsRequest.hub_id == hub_id)
-
-    if status:
-        try:
-            status_enum = PartsRequestStatus(status)
-            query = query.where(PartsRequest.status == status_enum)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
-
-    result = await db.execute(query)
-    return result.scalars().all()
-
-
 @router.get("/parts-requests/{request_id}", response_model=PartsRequestResponse, summary="Lấy chi tiết yêu cầu cấp phát")
 async def get_parts_request(
     request_id: int,
@@ -2506,77 +2489,6 @@ async def get_parts_request(
         if str(parts_request.requested_by) != str(user.id):
             raise HTTPException(status_code=403, detail="Bạn không có quyền xem yêu cầu này")
 
-    return parts_request
-
-
-@router.post("/parts-requests/{request_id}/approve", response_model=PartsRequestResponse, summary="Admin: Duyệt yêu cầu cấp phát")
-async def approve_parts_request(
-    request_id: int,
-    body: PartsRequestApprove,
-    user: CurrentUser = Depends(allow_admin),
-    db: AsyncSession = Depends(get_async_db),
-):
-    """
-    ADMIN ONLY: Duyệt yêu cầu cấp phát vật tư.
-    - Chuyển status từ PENDING → APPROVED.
-    - Lưu reviewed_by, admin_note, reviewed_at, actual_cost.
-    """
-    parts_request = await db.get(PartsRequest, request_id)
-    if not parts_request:
-        raise HTTPException(status_code=404, detail="Parts request not found")
-
-    if parts_request.status != PartsRequestStatus.PENDING:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Chỉ có thể duyệt yêu cầu ở trạng thái PENDING, hiện tại là {parts_request.status.value}"
-        )
-
-    now = get_vn_naive_datetime()
-    parts_request.status = PartsRequestStatus.APPROVED
-    parts_request.reviewed_by = str(user.id)
-    parts_request.admin_note = body.admin_note
-    parts_request.reviewed_at = now
-
-    # Calculate actual cost if available
-    part_category = await db.get(PartCategory, parts_request.part_category_id)
-    if part_category and part_category.unit_cost:
-        parts_request.actual_cost = part_category.unit_cost * parts_request.quantity_needed
-
-    await db.commit()
-    await db.refresh(parts_request)
-    return parts_request
-
-
-@router.post("/parts-requests/{request_id}/reject", response_model=PartsRequestResponse, summary="Admin: Từ chối yêu cầu cấp phát")
-async def reject_parts_request(
-    request_id: int,
-    body: PartsRequestReject,
-    user: CurrentUser = Depends(allow_admin),
-    db: AsyncSession = Depends(get_async_db),
-):
-    """
-    ADMIN ONLY: Từ chối yêu cầu cấp phát vật tư.
-    - Chuyển status từ PENDING → REJECTED.
-    - Lưu reviewed_by, admin_note, reviewed_at.
-    """
-    parts_request = await db.get(PartsRequest, request_id)
-    if not parts_request:
-        raise HTTPException(status_code=404, detail="Parts request not found")
-
-    if parts_request.status != PartsRequestStatus.PENDING:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Chỉ có thể từ chối yêu cầu ở trạng thái PENDING, hiện tại là {parts_request.status.value}"
-        )
-
-    now = get_vn_naive_datetime()
-    parts_request.status = PartsRequestStatus.REJECTED
-    parts_request.reviewed_by = str(user.id)
-    parts_request.admin_note = body.admin_note
-    parts_request.reviewed_at = now
-
-    await db.commit()
-    await db.refresh(parts_request)
     return parts_request
 
 
