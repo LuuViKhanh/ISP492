@@ -310,7 +310,7 @@ class CustomerStatusService:
             }
 
         # 3. Completed (Arrival confirmed at destination)
-        if mis_status in (MissionStatus.COMPLETED, MissionStatus.MISSION_COMPLETED) and (
+        if mis_status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED) and (
             mission and mission.arrival_confirmed_at is not None
         ):
             return {
@@ -325,7 +325,7 @@ class CustomerStatusService:
             order.destination_received_at is not None
             or ord_status == OrderStatus.DELIVERED_TO_HUB
             or (mission and mission.arrived_at is not None and mission.arrival_confirmed_at is None)
-            or mis_status in (MissionStatus.COMPLETED, MissionStatus.MISSION_COMPLETED)
+            or mis_status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED)
         ):
             return {
                 "customer_status": "ready_for_collection",

@@ -275,7 +275,7 @@ def run(conn: Connection):
                 "end": end_t, "oh": o_hub, "dh": d_hub,
                 "dep": start_t if m_status != "Scheduled" else None,
                 "arr": arr_t,
-                "arrconf": arr_t if m_status == "Completed" else None,
+                "arrconf": arr_t if m_status == "Arrival completed" else None,
             })
 
     print(f"    OK — {len(scenarios)} scenario")

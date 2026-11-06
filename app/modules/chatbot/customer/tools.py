@@ -848,7 +848,7 @@ async def tool_check_cancellation_eligibility(
         MissionStatus.IN_PROGRESS,
         MissionStatus.FLYING,
         MissionStatus.ACTIVE_MISSION,
-        MissionStatus.COMPLETED,
+        MissionStatus.ARRIVAL_COMPLETED,
         MissionStatus.MISSION_COMPLETED,
     ):
         eligible = False

@@ -32,14 +32,14 @@ async def get_mission_kpi(
     missions = result.scalars().all()
 
     total = len(missions)
-    completed = sum(1 for m in missions if m.status == MissionStatus.COMPLETED)
+    completed = sum(1 for m in missions if m.status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED))
     cancelled = sum(1 for m in missions if m.status == MissionStatus.CANCELLED)
     rejected = sum(1 for m in missions if m.status == MissionStatus.REJECTED)
     finished = completed + cancelled + rejected
 
     distances = [m.distance_m for m in missions if m.distance_m]
     payloads = [m.payload_weight for m in missions if m.payload_weight]
-    revenues = [m.delivery_fee for m in missions if m.delivery_fee and m.status == MissionStatus.COMPLETED]
+    revenues = [m.delivery_fee for m in missions if m.delivery_fee and m.status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED)]
 
     return MissionKPIResponse(
         total_missions=total,

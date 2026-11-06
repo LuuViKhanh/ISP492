@@ -20,7 +20,7 @@ from app.modules.dashboard.service import now_naive
 router = APIRouter(prefix="/operator/dashboard", tags=["Operator - Dashboard"])
 allow_operator = RoleChecker([UserRole.OPERATOR, UserRole.ADMIN])
 
-_COMPLETED = (MissionStatus.COMPLETED, MissionStatus.MISSION_COMPLETED)
+_COMPLETED = (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED)
 _ACTIVE = (MissionStatus.FLYING, MissionStatus.IN_PROGRESS, MissionStatus.ACTIVE_MISSION)
 
 
