@@ -1378,6 +1378,15 @@ async def update_inspection(
             if battery:
                 battery.work_order_id = None
         
+        # Update drone status based on resulting_drone_status
+        if wo.drone_id and body.resulting_drone_status:
+            drone = await db.get(Drone, wo.drone_id)
+            if drone:
+                try:
+                    drone.status = DroneStatus(body.resulting_drone_status)
+                except ValueError:
+                    pass  # Invalid status, skip
+        
         # ── Tự động acknowledge maintenance alert liên quan ──
         # Tìm alert gắn với work order này (nếu có) và chuyển sang Acknowledged
         if wo.alert_id:
