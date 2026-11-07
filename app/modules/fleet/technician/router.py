@@ -107,7 +107,7 @@ async def get_incoming_drones(
                 Mission.status.in_([
                     MissionStatus.FLYING,
                     MissionStatus.INCIDENT_RETURN,
-                    MissionStatus.COMPLETED,
+                    MissionStatus.ARRIVAL_COMPLETED,
                     MissionStatus.MISSION_COMPLETED,
                 ]),
                 Mission.handling_status.in_([
@@ -168,7 +168,7 @@ async def get_incoming_drones(
             # Map về 3 trạng thái cố định cho FE
             if m_status == MissionStatus.INCIDENT_RETURN or m_handling == HandlingStatus.CANNOT_CONTINUE:
                 mission_state = "Incident"
-            elif m_status in (MissionStatus.COMPLETED, MissionStatus.MISSION_COMPLETED):
+            elif m_status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED):
                 mission_state = "Completed"
             elif m_status == MissionStatus.FLYING:
                 mission_state = "Flying"
@@ -231,7 +231,7 @@ async def get_transit_history(
             .outerjoin(Battery, Mission.battery_id == Battery.id)
             .where(
                 Mission.status.in_([
-                    MissionStatus.COMPLETED,
+                    MissionStatus.ARRIVAL_COMPLETED,
                     MissionStatus.MISSION_COMPLETED,
                 ])
             )
@@ -336,7 +336,7 @@ async def confirm_arrival(
 
     # Nếu mission đã xử lý hoàn tất trước đó (handling_status đã được xóa và drone đã được tiếp nhận)
     if (
-        mission.status in [MissionStatus.COMPLETED, MissionStatus.MISSION_COMPLETED]
+        mission.status in [MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED]
         and mission.handling_status is None
         and mission.arrived_at is not None
     ):
@@ -385,16 +385,13 @@ async def confirm_arrival(
     if not mission.arrived_at:
         mission.arrived_at = now       # ghi nhận thời điểm drone đáp hub
     if mission.status != MissionStatus.MISSION_COMPLETED:
-        mission.status = MissionStatus.COMPLETED
+        mission.status = MissionStatus.ARRIVAL_COMPLETED
     mission.end_time = mission.end_time or now
     mission.handling_status = None     # xóa handling_status để không còn nằm trong /incoming (Transit)
 
-    # Nếu là chuyến bay sự cố, drone quay về Hub tiếp nhận và kết thúc chặng bay này.
-    # Ghi nhận arrival_confirmed_at để không treo ở hàng đợi chờ khách nhận hàng (/confirmations)
-    # và không kích hoạt pickup_reminder_watcher hủy đơn nhầm.
-    if is_incident_flight:
-        mission.arrival_confirmed_at = now
-        mission.arrival_confirmed_by = user.id
+    # Ghi nhận arrival_confirmed_at khi drone đáp hub (bình thường hay incident)
+    mission.arrival_confirmed_at = now
+    mission.arrival_confirmed_by = user.id
 
     # ── 2. Mark tất cả MissionLeg còn lại → COMPLETED ────────────────────────
     legs_result = await db.execute(
@@ -505,8 +502,6 @@ async def confirm_arrival(
                 else:
                     # Chuyến bay đáp hub đích thành công
                     order_obj.status = OrderStatus.DELIVERED_TO_HUB
-                    order_obj.destination_received_at = now
-                    order_obj.destination_received_by = str(user.id)
                     order_obj.updated_at = now
 
                     if order_obj.receiver_email:
@@ -628,7 +623,7 @@ async def get_drone_profile(
     # last_flight_at
     mission_res = await db.execute(
         select(Mission.arrived_at)
-        .where(Mission.drone_id == drone_id, Mission.status == MissionStatus.COMPLETED)
+        .where(Mission.drone_id == drone_id, Mission.status == MissionStatus.ARRIVAL_COMPLETED)
         .order_by(Mission.arrived_at.desc())
         .limit(1)
     )
@@ -693,7 +688,7 @@ async def get_drone_flight_history(
         .outerjoin(OrderModel, Mission.order_id == OrderModel.id)
         .where(
             Mission.drone_id == drone_id,
-            Mission.status == MissionStatus.COMPLETED
+            Mission.status == MissionStatus.ARRIVAL_COMPLETED
         )
         .order_by(Mission.arrived_at.desc())
         .limit(limit)
