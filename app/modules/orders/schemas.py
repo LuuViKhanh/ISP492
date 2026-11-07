@@ -45,7 +45,7 @@ class OrderResponse(BaseModel):
     priority_score: Optional[float] = None
     priority_level: Optional[str] = None
     # Aging Priority fields
-    is_aging_priority: bool = False
+    is_aging_priority: Optional[bool] = False
     aging_deadline: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
@@ -263,7 +263,7 @@ class ReportPredictionSchema(BaseModel):
 
 
 class ReportDroneSchema(BaseModel):
-    id: Optional[int] = None
+    id: Optional[Union[str, int]] = None
     name: Optional[str] = None
     model: Optional[str] = None
 

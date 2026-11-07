@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Dict, Optional, Union
+﻿from pydantic import BaseModel
+from typing import Dict, Optional, Union, Any
 from datetime import datetime
 from app.modules.missions.models import MissionStatus
 
@@ -63,7 +63,7 @@ class RouteLegSchema(BaseModel):
     battery_energy_wh: Optional[float] = None
     battery_consumption_pct: Optional[int] = None
     remaining_battery_pct: Optional[int] = None
-    leg_type: str = "DISPATCH"  # DISPATCH (bay sang nhận hàng) hoặc DELIVERY (giao hàng)
+    leg_type: str = "DELIVERY"  # DISPATCH (bay sang nhận hàng) hoặc DELIVERY (giao hàng)
     is_dispatch: bool = False
     payload_kg: Optional[float] = None
     note: Optional[str] = None
@@ -87,6 +87,34 @@ class HubBatteryStatus(BaseModel):
     swap_battery_id: Optional[str] = None
     swap_battery_serial: Optional[str] = None
     available_batteries: list[RelayHubBatteryOptionSchema] = []
+
+
+class FeatureContributionSchema(BaseModel):
+    feature: str
+    label: str
+    value: str
+    shap_contribution_wh: float
+    impact: str
+
+
+class LegBreakdownSchema(BaseModel):
+    leg: int
+    from_hub_code: str
+    to_hub_code: str
+    distance_km: float
+    energy_wh: float
+    speed_mps: float
+    speed_kmh: Optional[float] = None
+    action: Optional[str] = None
+
+
+class AIExplanationSchema(BaseModel):
+    flight_speed_mps: float
+    flight_speed_kmh: float
+    total_energy_wh: float
+    feature_contributions: list[FeatureContributionSchema] = []
+    legs_breakdown: list[LegBreakdownSchema] = []
+    summary: str
 
 
 class RouteOptionSchema(BaseModel):
@@ -125,6 +153,11 @@ class RouteOptionSchema(BaseModel):
     pickup_hub_id: Optional[int] = None
     pickup_hub_name: Optional[str] = None
     pickup_hub_code: Optional[str] = None
+    # Thông tin tốc độ hành trình & giải thích AI XAI (SHAP theo FA26IS01)
+    flight_speed_mps: Optional[float] = None
+    speed_profile_label: Optional[str] = None
+    shap_values: Optional[Dict[str, float]] = None
+    ai_explanation: Optional[Union[AIExplanationSchema, Dict[str, Any]]] = None
 
 
 class MissionResponse(BaseModel):
