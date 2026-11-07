@@ -355,7 +355,7 @@ async def get_dashboard_kpi(db: AsyncSession = Depends(get_async_db)):
     # Successful flights (MISSION_COMPLETED hoặc COMPLETED)
     succ_res = await db.execute(
         select(func.count(Mission.id)).where(
-            Mission.status.in_([MissionStatus.MISSION_COMPLETED, MissionStatus.COMPLETED])
+            Mission.status.in_([MissionStatus.MISSION_COMPLETED, MissionStatus.ARRIVAL_COMPLETED])
         )
     )
     successful_flights = succ_res.scalar() or 0
@@ -367,7 +367,7 @@ async def get_dashboard_kpi(db: AsyncSession = Depends(get_async_db)):
     # Total Revenue (sum of delivery_fee where status is completed)
     rev_res = await db.execute(
         select(func.coalesce(func.sum(Mission.delivery_fee), 0.0)).where(
-            Mission.status.in_([MissionStatus.MISSION_COMPLETED, MissionStatus.COMPLETED])
+            Mission.status.in_([MissionStatus.MISSION_COMPLETED, MissionStatus.ARRIVAL_COMPLETED])
         )
     )
     total_revenue = rev_res.scalar() or 0.0
@@ -378,7 +378,7 @@ async def get_dashboard_kpi(db: AsyncSession = Depends(get_async_db)):
             cast(func.coalesce(Mission.arrived_at, Mission.departed_at), Date).label("date"),
             func.sum(Mission.delivery_fee).label("revenue")
         )
-        .where(Mission.status.in_([MissionStatus.MISSION_COMPLETED, MissionStatus.COMPLETED]))
+        .where(Mission.status.in_([MissionStatus.MISSION_COMPLETED, MissionStatus.ARRIVAL_COMPLETED]))
         .where(or_(Mission.arrived_at.isnot(None), Mission.departed_at.isnot(None)))
         .group_by(cast(func.coalesce(Mission.arrived_at, Mission.departed_at), Date))
         .order_by(cast(func.coalesce(Mission.arrived_at, Mission.departed_at), Date))

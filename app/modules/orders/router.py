@@ -1048,7 +1048,7 @@ async def cancel_order(
                 MissionStatus.IN_PROGRESS,
                 MissionStatus.FLYING,
                 MissionStatus.ACTIVE_MISSION,
-                MissionStatus.COMPLETED,
+                MissionStatus.ARRIVAL_COMPLETED,
                 MissionStatus.MISSION_COMPLETED,
             ])
         )
