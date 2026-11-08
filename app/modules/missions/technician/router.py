@@ -621,13 +621,16 @@ async def get_confirmations(
         ).outerjoin(
             Battery, Mission.battery_id == Battery.id
         ).outerjoin(
+            Order, Mission.order_id == Order.id
+        ).outerjoin(
             User, (Mission.customer_id == User.id) | (Mission.customer_id == User.email)
         ).where(
             Mission.arrived_at.is_not(None),
-            Mission.arrival_confirmed_at.is_(None),
-            Mission.status.notin_([
+            Order.destination_received_at.is_(None),  # ← Khách chưa tới nhận
+            Mission.status.in_([
+                MissionStatus.ARRIVAL_COMPLETED,
+                MissionStatus.INCIDENT_RETURN,
                 MissionStatus.MISSION_COMPLETED,
-                MissionStatus.CANCELLED,
             ])
         )
         if user.hub_id and str(user.hub_id).isdigit():
