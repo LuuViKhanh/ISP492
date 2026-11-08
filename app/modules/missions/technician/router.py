@@ -634,7 +634,15 @@ async def get_confirmations(
             ])
         )
         if user.hub_id and str(user.hub_id).isdigit():
-            query = query.where(Mission.destination_hub_id == int(user.hub_id))
+            from sqlalchemy import or_
+            tech_hub_id = int(user.hub_id)
+            query = query.where(
+                or_(
+                    Mission.destination_hub_id == tech_hub_id,  # Normal delivery
+                    Mission.origin_hub_id == tech_hub_id,       # Incident return to origin
+                    # Để xử lý mission đáp tại hub khác (relay), cần check MissionLeg
+                )
+            )
             
         result = await db.execute(query.order_by(Mission.id.desc()))
         rows = result.all()
