@@ -119,6 +119,7 @@ class TelemetryLog(Base):
     altitude: Mapped[float] = mapped_column(Float, nullable=False)
     speed: Mapped[float] = mapped_column(Float, nullable=False)
     battery_voltage: Mapped[float | None] = mapped_column(Float, nullable=True)
+    battery_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0-100%
     energy_consumed_wh: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_speed: Mapped[float | None] = mapped_column(Float, nullable=True)
     # ── Weather fields (từ Open-Meteo) ────────────────────────

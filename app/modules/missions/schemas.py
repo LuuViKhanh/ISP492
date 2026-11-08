@@ -234,6 +234,7 @@ class TelemetryDataCreate(BaseModel):
     altitude: float
     speed: float
     battery_voltage: Optional[float] = None
+    battery_pct: Optional[float] = None  # 0-100%
     energy_consumed_wh: Optional[float] = None
     wind_speed: Optional[float] = None
 
