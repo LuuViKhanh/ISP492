@@ -1392,11 +1392,12 @@ async def update_inspection(
     if body.status == WorkOrderStatus.COMPLETED:
         wo.resolved_at = now
         
-        # Clear work_order_id từ battery (pin không còn dùng)
+        # Clear work_order_id từ battery (pin không còn dùng) & update status → Ready
         if wo.battery_id:
             battery = await db.get(Battery, wo.battery_id)
             if battery:
                 battery.work_order_id = None
+                battery.status = batteries_status.READY  # ← Cập nhật pin status sang Ready
         
         # Update drone status based on resulting_drone_status
         if wo.drone_id and body.resulting_drone_status:
