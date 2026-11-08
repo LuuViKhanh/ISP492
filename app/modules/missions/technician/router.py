@@ -630,7 +630,6 @@ async def get_confirmations(
             Mission.status.in_([
                 MissionStatus.ARRIVAL_COMPLETED,
                 MissionStatus.INCIDENT_RETURN,
-                MissionStatus.MISSION_COMPLETED,
             ])
         )
         if user.hub_id and str(user.hub_id).isdigit():
