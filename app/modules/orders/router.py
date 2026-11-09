@@ -271,8 +271,10 @@ async def list_orders(
         3. Cung cấp nhanh trạng thái nhận kiện hàng (`originPackage`).
     - **FE tương ứng**: Màn hình "Order Management / Order Planning" của Operator.
     """
-    query = select(Order)
+    query = select(Order).where(Order.status != OrderStatus.CANCELLED)
     if status:
+        if status == OrderStatus.CANCELLED:
+            return []
         query = query.where(Order.status == status)
     if search:
         query = query.where(Order.id.ilike(f"%{search}%"))
@@ -285,13 +287,16 @@ async def list_orders(
     hubs = hubs_result.scalars().all()
     hub_dict = {h.id: h.name for h in hubs}
 
-    # Lấy Mission mới nhất của từng Order để tính chính xác planningState
+    # Lấy Mission mới nhất của từng Order để tính chính xác planningState (loại bỏ mission đã CANCELLED)
     order_ids = [o.id for o in orders]
     mission_by_order: dict[str, Mission] = {}
     if order_ids:
         missions_result = await db.execute(
             select(Mission)
-            .where(Mission.order_id.in_(order_ids))
+            .where(
+                Mission.order_id.in_(order_ids),
+                Mission.status != MissionStatus.CANCELLED,
+            )
             .order_by(Mission.id.desc())
         )
         for m in missions_result.scalars().all():
@@ -432,13 +437,16 @@ async def get_order(
     """
     order_id = order_id.strip()
     order = await db.get(Order, order_id)
-    if not order:
+    if not order or order.status == OrderStatus.CANCELLED:
         raise HTTPException(status_code=404, detail="Order not found")
         
-    # Lấy mission mới nhất của đơn hàng
+    # Lấy mission mới nhất của đơn hàng (loại trừ mission đã CANCELLED)
     mission_result = await db.execute(
         select(Mission)
-        .where(Mission.order_id == order_id)
+        .where(
+            Mission.order_id == order_id,
+            Mission.status != MissionStatus.CANCELLED,
+        )
         .order_by(Mission.id.desc())
         .limit(1)
     )

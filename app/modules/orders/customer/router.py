@@ -117,7 +117,12 @@ def calculate_delivery_cost(
 
 async def _latest_mission_for_order(db: AsyncSession, order_id: str) -> Optional[Mission]:
     res = await db.execute(
-        select(Mission).where(Mission.order_id == order_id).order_by(Mission.id.desc())
+        select(Mission)
+        .where(
+            Mission.order_id == order_id,
+            Mission.status != MissionStatus.CANCELLED,
+        )
+        .order_by(Mission.id.desc())
     )
     return res.scalars().first()
 
@@ -434,7 +439,7 @@ async def delete_order(
     - Nếu đã có Mission hoặc đã thanh toán → không cho xóa.
     """
     order = await db.get(Order, order_id)
-    if not order:
+    if not order or order.status == OrderStatus.CANCELLED:
         raise HTTPException(status_code=404, detail="Order not found")
 
     if str(order.customer_id) != str(current_user.id):
@@ -489,7 +494,7 @@ async def track_delivery(
     điểm đầu/cuối tuyến, đường đã bay (polyline) và số checkpoint đã qua.
     """
     order = await db.get(Order, order_id)
-    if not order:
+    if not order or order.status == OrderStatus.CANCELLED:
         raise HTTPException(status_code=404, detail="Order not found")
     if order.customer_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not your order")
@@ -665,7 +670,7 @@ async def get_mission_report(
     dự đoán vs thực tế (năng lượng/thời lượng), thông tin drone và trạng thái cuối.
     """
     order = await db.get(Order, order_id)
-    if not order:
+    if not order or order.status == OrderStatus.CANCELLED:
         raise HTTPException(status_code=404, detail="Order not found")
     if order.customer_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not your order")

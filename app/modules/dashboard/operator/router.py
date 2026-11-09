@@ -33,7 +33,9 @@ async def operator_dashboard(
     **[Operator] Dashboard điều hành:** Mission KPI, phân bố trạng thái, chuyến đang bay,
     Energy KPI, Route Efficiency và Alerts (bảo trì / sự cố / duyệt quá hạn).
     """
-    missions = (await db.execute(select(Mission))).scalars().all()
+    missions = (await db.execute(
+        select(Mission).where(Mission.status != MissionStatus.CANCELLED)
+    )).scalars().all()
     ai_preds = (await db.execute(select(AIPrediction).order_by(AIPrediction.id.desc()))).scalars().all()
     pred_by_mission: dict[str, AIPrediction] = {}
     for p in ai_preds:
@@ -42,7 +44,7 @@ async def operator_dashboard(
 
     total = len(missions)
     completed = sum(1 for m in missions if m.status in _COMPLETED)
-    cancelled = sum(1 for m in missions if m.status == MissionStatus.CANCELLED)
+    cancelled = 0
     rejected = sum(1 for m in missions if m.status == MissionStatus.REJECTED)
     failed = sum(1 for m in missions if m.status == MissionStatus.FAILED)
     terminal = completed + cancelled + rejected + failed
@@ -70,6 +72,8 @@ async def operator_dashboard(
     status_breakdown: dict[str, int] = {}
     for m in missions:
         val = m.status.value if m.status else "UNKNOWN"
+        if val == "Cancelled":
+            continue
         key = MissionStatus.FLYING.value if val in ("In Progress", "Active mission") else val
         status_breakdown[key] = status_breakdown.get(key, 0) + 1
 

@@ -99,10 +99,11 @@ async def admin_dashboard(
     )
 
     # ----- Missions -----
-    mission_by_status = await group_counts(db, Mission.status)
+    raw_mission_by_status = await group_counts(db, Mission.status)
+    mission_by_status = {k: v for k, v in raw_mission_by_status.items() if k != MissionStatus.CANCELLED.value}
     total_missions = sum(mission_by_status.values())
     m_completed = mission_by_status.get(MissionStatus.ARRIVAL_COMPLETED.value, 0) + mission_by_status.get(MissionStatus.MISSION_COMPLETED.value, 0)
-    m_cancelled = mission_by_status.get(MissionStatus.CANCELLED.value, 0)
+    m_cancelled = 0
     m_rejected = mission_by_status.get(MissionStatus.REJECTED.value, 0)
     m_failed = mission_by_status.get(MissionStatus.FAILED.value, 0)
     m_terminal = m_completed + m_cancelled + m_rejected + m_failed

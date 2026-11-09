@@ -98,7 +98,7 @@ async def _find_customer_order(
         res = await db.execute(stmt)
         order = res.scalar_one_or_none()
 
-        if not order:
+        if not order or order.status == OrderStatus.CANCELLED:
             return {
                 "ok": False,
                 "error_payload": {
@@ -126,7 +126,10 @@ async def _find_customer_order(
     else:
         stmt = (
             select(Order)
-            .where(Order.customer_id == uid_str)
+            .where(
+                Order.customer_id == uid_str,
+                Order.status != OrderStatus.CANCELLED,
+            )
             .order_by(Order.created_at.desc())
             .limit(1)
         )
@@ -156,7 +159,10 @@ async def _find_customer_order(
 
     mission_stmt = (
         select(Mission)
-        .where(Mission.order_id == order.id)
+        .where(
+            Mission.order_id == order.id,
+            Mission.status != MissionStatus.CANCELLED,
+        )
         .order_by(Mission.scheduled_time.desc().nullslast())
     )
     mission_res = await db.execute(mission_stmt)
@@ -512,7 +518,10 @@ async def tool_get_my_orders(
     safe_limit = min(max(int(limit or 5), 1), 15)
     stmt = (
         select(Order)
-        .where(Order.customer_id == str(current_user_id))
+        .where(
+            Order.customer_id == str(current_user_id),
+            Order.status != OrderStatus.CANCELLED,
+        )
         .order_by(Order.created_at.desc())
         .limit(safe_limit)
     )
@@ -524,7 +533,14 @@ async def tool_get_my_orders(
 
     order_items = []
     for o in orders:
-        m_stmt = select(Mission).where(Mission.order_id == o.id).order_by(Mission.scheduled_time.desc().nullslast())
+        m_stmt = (
+            select(Mission)
+            .where(
+                Mission.order_id == o.id,
+                Mission.status != MissionStatus.CANCELLED,
+            )
+            .order_by(Mission.scheduled_time.desc().nullslast())
+        )
         m_res = await db.execute(m_stmt)
         mission = m_res.scalars().first()
         status_info = CustomerStatusService.compute_customer_delivery_status(o, mission)

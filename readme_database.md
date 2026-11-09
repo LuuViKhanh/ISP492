@@ -1,8 +1,8 @@
 # Database Schema Documentation
 Đây là tài liệu Single Source of Truth cho cấu trúc cơ sở dữ liệu của dự án Drone-backend, được tự động cập nhật và đồng bộ theo models và các bản migration mới nhất (tuân thủ quy định `GEMINI.md`).
 
-> **Kiến trúc Cơ sở dữ liệu Tinh gọn (Core Schema - 19 Bảng Lõi)**:
-> Hệ thống đã được chuẩn hóa và loại bỏ các bảng/thuộc tính dư thừa, hợp nhất dữ liệu phi cấu trúc vào JSONB, đổi tên bảng `users` thành `accounts` (đồng thời duy trì alias `User = Account` để code backend tương thích 100%).
+> **Kiến trúc Cơ sở dữ liệu Chuẩn hóa (Database Schema - 24 Bảng)**:
+> Hệ thống gồm 24 bảng lưu trữ và điều phối toàn bộ chu trình vận hành bay, phân phối trạm, bảo trì, quản lý pin, đơn hàng và nhật ký hệ thống. Toàn bộ các bảng được đồng bộ 100% với cấu trúc live database mới nhất.
 
 > **Lưu ý về Múi giờ (Timezone)**: 
 > Toàn bộ các trường kiểu thời gian (`DATETIME`, `TIMESTAMP`) trong hệ thống được quản lý, khởi tạo và ghi nhận đồng bộ theo múi giờ chuẩn Việt Nam (GMT+7 / `Asia/Ho_Chi_Minh`) thông qua module `app.core.timezone`.
@@ -12,7 +12,7 @@
 
 ---
 
-## I. Cấu trúc 19 Bảng Lõi (Core Tables)
+## I. Cấu trúc 24 Bảng Hệ Thống (Database Tables)
 
 ### 1. Bảng accounts (trước đây là users)
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
@@ -64,6 +64,7 @@
 | update_at | DATETIME | Nullable |
 | battery_model | VARCHAR(100) | Nullable |
 | last_charged_at | DATETIME | Nullable |
+| work_order_id | INTEGER | **FK** (`work_orders.id`), Nullable |
 
 ### 5. Bảng drones
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
@@ -258,6 +259,9 @@
 | paid_at | DATETIME | Nullable |
 | is_aging_priority | BOOLEAN | Non-nullable, Default `false` |
 | aging_deadline | DATETIME | Nullable |
+| refund_at | DATETIME | Nullable |
+| refund_amount | FLOAT | Nullable |
+| refund_reason | VARCHAR(255) | Nullable |
 
 ### 16. Bảng part_categories
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
@@ -301,6 +305,7 @@
 | altitude | FLOAT | Non-nullable |
 | speed | FLOAT | Non-nullable |
 | battery_voltage | FLOAT | Nullable |
+| battery_pct | FLOAT | Nullable (Dung lượng pin thực tế 0-100% đồng bộ Telemetry) |
 | energy_consumed_wh | FLOAT | Nullable |
 | wind_speed | FLOAT | Nullable |
 | weather_temperature | FLOAT | Nullable |
@@ -338,6 +343,68 @@
 | record_completed_at | DATETIME | Nullable (Hợp nhất từ maintenance_records) |
 | inspection_items_json | JSONB | Nullable (Hợp nhất từ maintenance_inspection_items) |
 | status_logs_json | JSONB | Nullable (Hợp nhất từ work_order_logs) |
+| created_at | TIMESTAMP WITH TIME ZONE | Nullable, Default `now()` |
+
+### 20. Bảng activity_logs
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| user_id | VARCHAR | Nullable |
+| user_email | VARCHAR | Nullable |
+| role | VARCHAR | Nullable |
+| action | VARCHAR | Non-nullable |
+| resource_type | VARCHAR | Nullable |
+| resource_id | VARCHAR | Nullable |
+| description | TEXT | Nullable |
+| status | VARCHAR | Non-nullable, Default `'success'` |
+| details_json | JSONB | Nullable |
+| created_at | TIMESTAMP WITH TIME ZONE | Non-nullable, Default `now()` |
+
+### 21. Bảng battery_model_catalog
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| name | VARCHAR(100) | Non-nullable |
+| compatible_drone_models | JSONB | Nullable |
+| capacity_wh | FLOAT | Non-nullable |
+| unit_cost | FLOAT | Nullable |
+| description | TEXT | Nullable |
+| is_active | BOOLEAN | Non-nullable, Default `true` |
+| created_at | TIMESTAMP WITH TIME ZONE | Nullable |
+
+### 22. Bảng hub_supplies
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| hub_id | INTEGER | **FK** (`hubs.id`), Non-nullable |
+| part_category_id | BIGINT | **FK** (`part_categories.id`), Non-nullable |
+| quantity | INTEGER | Non-nullable, Default `0` |
+| min_stock_threshold | INTEGER | Non-nullable, Default `2` |
+| updated_at | TIMESTAMP WITH TIME ZONE | Nullable |
+
+### 23. Bảng supply_transactions
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| hub_id | INTEGER | **FK** (`hubs.id`), Non-nullable |
+| part_category_id | BIGINT | **FK** (`part_categories.id`), Non-nullable |
+| quantity_delta | INTEGER | Non-nullable |
+| reason | VARCHAR(50) | Non-nullable (`supply_txn_reason_enum`) |
+| performed_by | VARCHAR | Nullable |
+| reference_id | VARCHAR | Nullable |
+| note | TEXT | Nullable |
+| created_at | TIMESTAMP WITH TIME ZONE | Non-nullable |
+
+### 24. Bảng system_logs
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| source | VARCHAR | Non-nullable |
+| level | VARCHAR | Non-nullable, Default `'INFO'` |
+| event | VARCHAR | Non-nullable |
+| message | TEXT | Non-nullable |
+| details_json | JSONB | Nullable |
+| created_at | TIMESTAMP WITH TIME ZONE | Non-nullable, Default `now()` |
 
 ---
 

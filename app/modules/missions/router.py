@@ -28,12 +28,12 @@ async def get_mission_kpi(
     tỷ lệ thành công, khoảng cách trung bình, tải trọng trung bình và tổng doanh thu.
     Dành cho Operator hoặc Admin.
     """
-    result = await db.execute(select(Mission))
+    result = await db.execute(select(Mission).where(Mission.status != MissionStatus.CANCELLED))
     missions = result.scalars().all()
 
     total = len(missions)
     completed = sum(1 for m in missions if m.status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED))
-    cancelled = sum(1 for m in missions if m.status == MissionStatus.CANCELLED)
+    cancelled = 0
     rejected = sum(1 for m in missions if m.status == MissionStatus.REJECTED)
     finished = completed + cancelled + rejected
 
@@ -64,12 +64,16 @@ async def get_mission_status(
     Dành cho Operator hoặc Admin.
     """
     result = await db.execute(
-        select(Mission.status, func.count().label("count")).group_by(Mission.status)
+        select(Mission.status, func.count().label("count"))
+        .where(Mission.status != MissionStatus.CANCELLED)
+        .group_by(Mission.status)
     )
     rows = result.all()
     breakdown: dict[str, int] = {}
     for row in rows:
         val = row.status.value if hasattr(row.status, "value") else str(row.status or "")
+        if val == "Cancelled":
+            continue
         key = MissionStatus.FLYING.value if val in ("In Progress", "Active mission") else val
         breakdown[key] = breakdown.get(key, 0) + row.count
     return MissionStatusResponse(status_breakdown=breakdown)
@@ -135,7 +139,11 @@ async def get_missions(
     """
     from app.modules.missions.operator.router import build_missions_response_list
 
-    result = await db.execute(select(Mission).order_by(Mission.id.desc()))
+    result = await db.execute(
+        select(Mission)
+        .where(Mission.status != MissionStatus.CANCELLED)
+        .order_by(Mission.id.desc())
+    )
     missions = result.scalars().all()
 
     return await build_missions_response_list(db, missions)
@@ -153,7 +161,7 @@ async def get_mission_detail_general(
     from app.modules.missions.operator.router import build_mission_detail_response
 
     mission = await db.get(Mission, mission_id)
-    if not mission:
+    if not mission or mission.status == MissionStatus.CANCELLED:
         raise HTTPException(status_code=404, detail="Mission not found")
     return await build_mission_detail_response(db, mission)
 
