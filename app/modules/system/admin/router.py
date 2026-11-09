@@ -9,6 +9,8 @@ from app.core.timezone import get_vn_naive_datetime
 from app.database.db import get_async_db
 from app.modules.system.schemas import (
     AuditLogListResponse,
+    ActivityLogListResponse,
+    SystemLogListResponse,
     HubCreate,
     HubUpdate,
     HubResponse,
@@ -77,6 +79,46 @@ async def get_audit_logs(
     db: AsyncSession = Depends(get_async_db),
 ):
     return await service.get_audit_logs(db, page, page_size, user_id, action, resource_table)
+
+
+@router.get("/admin/activity-logs", response_model=ActivityLogListResponse,
+            dependencies=[Depends(require_admin)],
+            summary="Activity Logs — Hành động của người dùng")
+async def get_activity_logs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user_id: Optional[str] = Query(None, description="Lọc theo user_id hoặc email"),
+    action: Optional[str] = Query(None, description="Lọc theo action (LOGIN, CREATE_ORDER...)"),
+    role: Optional[str] = Query(None, description="ADMIN / OPERATOR / TECHNICIAN / CUSTOMER"),
+    resource_type: Optional[str] = Query(None, description="order / mission / drone / user..."),
+    status: Optional[str] = Query(None, description="success / failed"),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    **[Admin] Activity Logs** — lịch sử hành động của tất cả người dùng.
+
+    Ghi nhận: LOGIN, REGISTER, CREATE_ORDER, CANCEL_MISSION, APPROVE_REQUEST, STOCK_RECEIVE...
+    """
+    return await service.get_activity_logs(db, page, page_size, user_id, action, role, resource_type, status)
+
+
+@router.get("/admin/system-logs", response_model=SystemLogListResponse,
+            dependencies=[Depends(require_admin)],
+            summary="System Logs — Sự kiện tự động của hệ thống")
+async def get_system_logs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    source: Optional[str] = Query(None, description="Worker/module name"),
+    level: Optional[str] = Query(None, description="INFO / WARNING / ERROR / CRITICAL"),
+    event: Optional[str] = Query(None, description="WORKER_RUN / MISSION_AUTO_CANCEL..."),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    **[Admin] System Logs** — sự kiện tự động: workers, cron, errors nền.
+
+    Sources: run_critical_order_notifier, run_deadline_alert_watcher, run_pickup_reminder_watcher...
+    """
+    return await service.get_system_logs(db, page, page_size, source, level, event)
 
 
 # ── Hubs Endpoints for Admin (Hỗ trợ cả prefix /admin/system/hubs và /admin/fleet/hubs) ──

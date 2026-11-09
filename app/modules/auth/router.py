@@ -6,7 +6,7 @@ from app.core.config import settings
 from app.database.db import get_async_db
 from app.modules.auth import service
 from app.modules.auth.schemas import LoginRequest, RegisterRequest, TokenResponse, UserResponse, ForgotPasswordRequest, ResetPasswordRequest
-from app.modules.system.service import log_action
+from app.modules.system.service import log_activity
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -48,13 +48,17 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_async_d
         db.add(existing_user)
         await db.flush()
         
-        await log_action(
-            db, old_id, "ARCHIVE_OLD_ACCOUNT_ON_REREGISTER", "users",
-            {"old_email": old_email, "archived_email": archived_email}
+        await log_activity(
+            db, action="ARCHIVE_OLD_ACCOUNT", user_id=old_id,
+            resource_type="users", resource_id=old_id,
+            description=f"Archive tài khoản cũ {old_email} để đăng ký lại",
+            details={"old_email": old_email, "archived_email": archived_email}
         )
 
     user = await service.register_user(db, body.email, body.full_name, body.password)
-    await log_action(db, user.id, "REGISTER", "users", {"email": user.email})
+    await log_activity(db, action="REGISTER", user_id=user.id, user_email=user.email,
+                       resource_type="users", resource_id=user.id,
+                       description=f"Đăng ký tài khoản mới: {user.email}")
     return user
 
 
@@ -74,7 +78,9 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_async_db)):
             status_code=403, 
             detail="Tài khoản này đã bị xóa hoặc tạm khóa. Vui lòng liên hệ quản trị viên để được hỗ trợ."
         )
-    await log_action(db, user.id, "LOGIN", "users", {"email": user.email})
+    await log_activity(db, action="LOGIN", user_id=user.id, user_email=user.email,
+                       role=user.role.value, resource_type="users", resource_id=user.id,
+                       description=f"Đăng nhập thành công: {user.email}")
     return TokenResponse(
         access_token=service.create_access_token(user.id, user.role.value),
         refresh_token=service.create_refresh_token(user.id),

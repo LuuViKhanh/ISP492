@@ -3,6 +3,7 @@ from typing import Optional, Any
 from datetime import datetime
 
 
+# ── Backward compat ───────────────────────────────────────────────
 class AuditLogResponse(BaseModel):
     id: int
     user_id: Optional[Any]
@@ -17,6 +18,46 @@ class AuditLogListResponse(BaseModel):
     page: int
     page_size: int
     items: list[AuditLogResponse]
+
+
+# ── Activity Log Schemas ──────────────────────────────────────────
+class ActivityLogResponse(BaseModel):
+    id: int
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+    role: Optional[str] = None
+    action: str
+    resource_type: Optional[str] = None
+    resource_id: Optional[str] = None
+    description: Optional[str] = None
+    status: str
+    details_json: Optional[dict] = None
+    created_at: datetime
+
+
+class ActivityLogListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: list[ActivityLogResponse]
+
+
+# ── System Log Schemas ────────────────────────────────────────────
+class SystemLogResponse(BaseModel):
+    id: int
+    source: str
+    level: str
+    event: str
+    message: str
+    details_json: Optional[dict] = None
+    created_at: datetime
+
+
+class SystemLogListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: list[SystemLogResponse]
 
 
 class HubCreate(BaseModel):
