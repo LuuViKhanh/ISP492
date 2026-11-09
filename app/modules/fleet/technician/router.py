@@ -1398,8 +1398,9 @@ async def create_work_order(
                     # Trừ số lượng từ kho
                     hub_inv.quantity = max(0, hub_inv.quantity - quantity)
     
-    # Lưu parts_replaced vào work order
-    wo.parts_replaced_json = body.parts_replaced or []
+    # Lưu parts_replaced vào work order (nếu cột tồn tại trong model)
+    if hasattr(wo, 'parts_replaced_json'):
+        wo.parts_replaced_json = body.parts_replaced or []
 
     await db.commit()
     await db.refresh(wo)

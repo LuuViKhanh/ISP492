@@ -108,7 +108,7 @@ class DroneAdminListItemResponse(BaseModel):
     id: str
     name: str
     model: str
-    serial_number: str
+    serial_number: Optional[str] = None
     hub_id: Optional[int] = None
     hub_name: Optional[str] = None
     hub_code: Optional[str] = None
@@ -141,7 +141,7 @@ class DroneOverviewMaintenanceStatus(BaseModel):
     last_maintenance: Optional[str] = None
     next_maintenance: Optional[str] = None
     schedule_status: str = "Normal"  # Overdue, Normal
-    maintenance_note: str = "Periodic inspection (500 flight hours)"
+    maintenance_note: Optional[str] = None
 
 
 class DroneOverviewFlightActivity(BaseModel):
@@ -162,7 +162,7 @@ class DroneDetailAdminResponse(BaseModel):
     id: str
     name: str
     model: str
-    serial_number: str
+    serial_number: Optional[str] = None
     payload_capacity_kg: float
     max_speed: float
     status: str
@@ -376,7 +376,7 @@ async def list_drones(
                 id=d.id,
                 name=d.name,
                 model=d.model,
-                serial_number=get_drone_asset_serial(d, hub_code),
+                serial_number=None,
                 hub_id=d.current_hub_id,
                 hub_name=hub_name,
                 hub_code=hub_code,
@@ -493,15 +493,22 @@ async def get_drone(
 
     recent_wos: list[DroneOverviewWorkOrderItem] = []
     for w in work_orders[:2]:
+        upd = (w.resolved_at or w.created_at).strftime("%d/%m/%Y, %H:%M") if (w.resolved_at or w.created_at) else None
         recent_wos.append(
             DroneOverviewWorkOrderItem(
                 work_order_code=f"WO-2026-{w.id:03d}",
                 issue=w.issue_description or w.title or "General inspection",
                 status=w.status.value.upper() if hasattr(w.status, "value") else str(w.status).upper(),
-                technician_name=tech_map.get(w.technician_id, "Tran An"),
-                updated_at=(w.resolved_at or w.created_at).strftime("%d/%m/%Y, %H:%M") if (w.resolved_at or w.created_at) else "06/11/2026, 10:24",
+                technician_name=tech_map.get(w.technician_id),
+                updated_at=upd,
             )
         )
+
+    # Maintenance Schedule từ DB thật
+    sched_res = await db.execute(
+        select(MaintenanceSchedule).where(MaintenanceSchedule.drone_id == drone.id).order_by(MaintenanceSchedule.next_inspection_at.asc())
+    )
+    sched = sched_res.scalars().first()
 
     last_maint_date = None
     if comp_wos and comp_wos[0].resolved_at:
@@ -509,34 +516,32 @@ async def get_drone(
     elif work_orders and (work_orders[0].resolved_at or work_orders[0].created_at):
         dt = work_orders[0].resolved_at or work_orders[0].created_at
         last_maint_date = dt.strftime("%d/%m/%Y, %H:%M")
-    else:
-        last_maint_date = "12/09/2026, 09:00"
+    elif sched and sched.last_inspection_at:
+        last_maint_date = sched.last_inspection_at.strftime("%d/%m/%Y, %H:%M")
 
-    next_maint_date = "12/10/2026, 09:00"
-    maint_schedule_status = "Overdue" if len(open_wos) > 0 else "Normal"
+    next_maint_date = sched.next_inspection_at.strftime("%d/%m/%Y, %H:%M") if sched and sched.next_inspection_at else None
+    maint_schedule_status = "Overdue" if len(open_wos) > 0 else (str(sched.status).capitalize() if sched and sched.status else "Normal")
     maint_note = (
         open_wos[0].issue_description if open_wos and open_wos[0].issue_description
-        else "Periodic inspection (500 flight hours)"
+        else (f"{sched.maintenance_type} (mỗi {sched.interval_days} ngày / {sched.interval_flight_hours:.0f}h bay)" if sched else None)
     )
 
-    # Missions / Flight activity
+    # Missions / Flight activity từ DB thật
     msn_res = await db.execute(
         select(Mission).where(Mission.drone_id == drone.id).order_by(Mission.departed_at.desc().nullslast())
     )
     missions = msn_res.scalars().all()
-    total_flights = len(missions) if len(missions) > 0 else 128
+    total_flights = len(missions)
     
     total_hours = 0.0
     for m in missions:
         if m.arrived_at and m.departed_at:
             total_hours += (m.arrived_at - m.departed_at).total_seconds() / 3600.0
-    if total_hours == 0.0:
-        total_hours = 56.4
 
     last_flight_str = (
         missions[0].departed_at.strftime("%d/%m/%Y, %H:%M")
         if missions and missions[0].departed_at
-        else "06/11/2026, 08:42"
+        else None
     )
 
     st_val = drone.status.value.upper() if hasattr(drone.status, "value") else str(drone.status).upper()
@@ -545,7 +550,7 @@ async def get_drone(
         id=drone.id,
         name=drone.name,
         model=drone.model,
-        serial_number=get_drone_asset_serial(drone, hub_code),
+        serial_number=None,
         payload_capacity_kg=drone.payload_capacity_kg,
         max_speed=drone.max_speed,
         status=st_val,
@@ -561,8 +566,8 @@ async def get_drone(
         installed_battery_serial=bat.serial_number if bat else None,
         installed_battery_model=bat.battery_model if bat else None,
         maintenance_status=DroneOverviewMaintenanceStatus(
-            open_work_orders=len(open_wos) if len(open_wos) > 0 else 2,
-            completed_work_orders=len(comp_wos) if len(comp_wos) > 0 else 1,
+            open_work_orders=len(open_wos),
+            completed_work_orders=len(comp_wos),
             last_maintenance=last_maint_date,
             next_maintenance=next_maint_date,
             schedule_status=maint_schedule_status,
@@ -607,32 +612,35 @@ async def get_drone_maintenance_tab(
             "work_order": f"WO-2026-{w.id:03d}",
             "issue": w.issue_description or w.title or "General maintenance",
             "status": w.status.value.upper() if hasattr(w.status, "value") else str(w.status).upper(),
-            "technician": tech_map.get(w.technician_id, "Tran An"),
+            "technician": tech_map.get(w.technician_id, "Unassigned"),
             "action": "View",
         })
 
-    # Sample fallback nếu chưa có bản ghi
-    if not recent_records:
-        recent_records = [
-            {"work_order": "WO-2026-004", "issue": "Motor inspection", "status": "IN PROGRESS", "technician": "Tran An", "action": "View"},
-            {"work_order": "WO-2026-003", "issue": "Propeller replacement", "status": "COMPLETED", "technician": "Do Minh", "action": "View"},
-            {"work_order": "WO-2026-002", "issue": "Battery connector inspection", "status": "IN PROGRESS", "technician": "Tran An", "action": "View"},
-        ]
+    sched_res = await db.execute(
+        select(MaintenanceSchedule).where(MaintenanceSchedule.drone_id == drone.id).order_by(MaintenanceSchedule.next_inspection_at.asc())
+    )
+    sched = sched_res.scalars().first()
 
-    open_cnt = len(open_wos) if open_wos else 2
-    comp_cnt = len(comp_wos) if comp_wos else 1
-    sched = "Overdue" if open_cnt > 0 else "Normal"
+    open_cnt = len(open_wos)
+    comp_cnt = len(comp_wos)
+    sched_status = "Overdue" if open_cnt > 0 else (str(sched.status).capitalize() if sched and sched.status else "Normal")
+
+    last_m_str = (
+        comp_wos[0].resolved_at.strftime("%d/%m/%Y, %H:%M") if comp_wos and comp_wos[0].resolved_at
+        else (sched.last_inspection_at.strftime("%d/%m/%Y, %H:%M") if sched and sched.last_inspection_at else None)
+    )
+    next_m_str = sched.next_inspection_at.strftime("%d/%m/%Y, %H:%M") if sched and sched.next_inspection_at else None
 
     return DroneMaintenanceTabResponse(
         open_work_orders=open_cnt,
         completed_work_orders=comp_cnt,
-        maintenance_schedule=sched,
+        maintenance_schedule=sched_status,
         maintenance_overview={
-            "last_maintenance": "12/09/2026, 09:00",
-            "next_maintenance": "12/10/2026, 09:00",
-            "status": sched,
+            "last_maintenance": last_m_str,
+            "next_maintenance": next_m_str,
+            "status": sched_status,
             "open_work_orders": open_cnt,
-            "maintenance_note": "Periodic inspection (500 flight hours)",
+            "maintenance_note": open_wos[0].issue_description if open_wos and open_wos[0].issue_description else (f"{sched.maintenance_type} (mỗi {sched.interval_days} ngày / {sched.interval_flight_hours:.0f}h bay)" if sched else None),
         },
         recent_technician_records=recent_records,
     )
@@ -670,7 +678,7 @@ async def get_drone_work_orders(
     results = []
     for w in wos:
         st_val = w.status.value.upper() if hasattr(w.status, "value") else str(w.status).upper()
-        upd = (w.resolved_at or w.created_at).strftime("%d/%m/%Y, %H:%M") if (w.resolved_at or w.created_at) else "06/11/2026, 10:24"
+        upd = (w.resolved_at or w.created_at).strftime("%d/%m/%Y, %H:%M") if (w.resolved_at or w.created_at) else None
         results.append(
             AdminWorkOrderItemResponse(
                 id=w.id,
@@ -680,49 +688,13 @@ async def get_drone_work_orders(
                 issue=w.issue_description or w.title or "General maintenance",
                 status=st_val,
                 technician_id=w.technician_id,
-                technician_name=tech_map.get(w.technician_id, "Tran An"),
+                technician_name=tech_map.get(w.technician_id),
                 updated_at=upd,
-                diagnosis=w.diagnosis or "Abnormal vibration during routine inspection.",
-                corrective_action=w.action_taken or "Inspect mount and verify torque settings.",
+                diagnosis=w.diagnosis,
+                corrective_action=w.action_taken,
             )
         )
 
-    if not results:
-        results = [
-            AdminWorkOrderItemResponse(
-                id=4,
-                work_order_code="WO-2026-004",
-                drone_id=drone_id,
-                issue="Motor inspection",
-                status="IN PROGRESS",
-                technician_name="Tran An",
-                updated_at="06/11/2026, 10:24",
-                diagnosis="Abnormal vibration during routine inspection.",
-                corrective_action="Inspect mount and verify torque settings.",
-            ),
-            AdminWorkOrderItemResponse(
-                id=3,
-                work_order_code="WO-2026-003",
-                drone_id=drone_id,
-                issue="Propeller replacement",
-                status="COMPLETED",
-                technician_name="Do Minh",
-                updated_at="29/10/2026, 16:12",
-                diagnosis="Minor cracks on front-left blade.",
-                corrective_action="Replaced propeller set and calibrated motors.",
-            ),
-            AdminWorkOrderItemResponse(
-                id=2,
-                work_order_code="WO-2026-002",
-                drone_id=drone_id,
-                issue="Battery connector inspection",
-                status="IN PROGRESS",
-                technician_name="Tran An",
-                updated_at="04/11/2026, 09:30",
-                diagnosis="Connector pin oxidation.",
-                corrective_action="Cleaned contacts and applied protective coating.",
-            ),
-        ]
     return results
 
 
@@ -751,34 +723,24 @@ async def get_admin_work_order_detail(
     if wo_int_id:
         wo = await db.get(WorkOrder, wo_int_id)
     if not wo:
-        # Fallback tạo object mẫu đúng với mã yêu cầu
-        return AdminWorkOrderItemResponse(
-            id=wo_int_id or 4,
-            work_order_code=work_order_id if work_order_id.startswith("WO-") else f"WO-2026-{wo_int_id or 4:03d}",
-            issue="Motor inspection",
-            status="IN PROGRESS",
-            technician_name="Tran An",
-            updated_at="06/11/2026, 10:24",
-            diagnosis="Abnormal vibration during routine inspection.",
-            corrective_action="Inspect mount and verify torque settings.",
-        )
+        raise HTTPException(status_code=404, detail="Work order not found")
 
     tech = await db.get(User, wo.technician_id) if wo.technician_id else None
     st_val = wo.status.value.upper() if hasattr(wo.status, "value") else str(wo.status).upper()
-    upd = (wo.resolved_at or wo.created_at).strftime("%d/%m/%Y, %H:%M") if (wo.resolved_at or wo.created_at) else "06/11/2026, 10:24"
+    upd = (wo.resolved_at or wo.created_at).strftime("%d/%m/%Y, %H:%M") if (wo.resolved_at or wo.created_at) else None
 
     return AdminWorkOrderItemResponse(
         id=wo.id,
         work_order_code=f"WO-2026-{wo.id:03d}",
         drone_id=wo.drone_id,
         battery_id=wo.battery_id,
-        issue=wo.issue_description or wo.title or "Motor inspection",
+        issue=wo.issue_description or wo.title or "General maintenance",
         status=st_val,
         technician_id=wo.technician_id,
-        technician_name=tech.full_name if tech else "Tran An",
+        technician_name=tech.full_name if tech else None,
         updated_at=upd,
-        diagnosis=wo.diagnosis or "Abnormal vibration during routine inspection.",
-        corrective_action=wo.action_taken or "Inspect mount and verify torque settings.",
+        diagnosis=wo.diagnosis,
+        corrective_action=wo.action_taken,
     )
 
 
@@ -813,11 +775,11 @@ async def get_drone_flight_history(
         c2 = format_ui_code(h2.code if h2 else None, "HCM-02")
         route_str = f"{c1} -> {c2}"
         
-        dep_str = dep.strftime("%d/%m/%Y, %H:%M") if dep else "06/11/2026, 08:17"
-        arr_str = arr.strftime("%d/%m/%Y, %H:%M") if arr else "06/11/2026, 08:42"
+        dep_str = dep.strftime("%d/%m/%Y, %H:%M") if dep else None
+        arr_str = arr.strftime("%d/%m/%Y, %H:%M") if arr else None
 
-        date_prefix = dep.strftime("%Y%m%d") if dep else "20261106"
-        seq = m.id.split("-")[-1] if "-" in m.id else "001"
+        date_prefix = dep.strftime("%Y%m%d") if dep else "2026"
+        seq = m.id.split("-")[-1] if "-" in m.id else m.id
         flt_id = f"FLT-{date_prefix}-{seq}"
         st_val = m.status.value.upper() if hasattr(m.status, "value") else str(m.status).upper()
 
@@ -828,56 +790,21 @@ async def get_drone_flight_history(
                 route=route_str,
                 departure=dep_str,
                 arrival=arr_str,
-                duration_minutes=dur_min or 25,
-                energy_wh=round(float(m.payload_weight or 1.0) * 91.2, 1),
+                duration_minutes=dur_min,
+                energy_wh=round(float(m.payload_weight or 1.0) * 91.2, 1) if m.payload_weight else None,
                 status=st_val,
             )
         )
-
-    if not flights:
-        flights = [
-            AdminFlightItemResponse(
-                flight_id="FLT-20261106-001",
-                mission_id="MSN-20261106-002",
-                route="HCM-01 -> HCM-02",
-                departure="06/11/2026, 08:17",
-                arrival="06/11/2026, 08:42",
-                duration_minutes=25,
-                energy_wh=182.4,
-                status="COMPLETED",
-            ),
-            AdminFlightItemResponse(
-                flight_id="FLT-20261104-012",
-                mission_id="MSN-20261104-012",
-                route="HCM-01 -> HCM-03",
-                departure="04/11/2026, 16:02",
-                arrival="04/11/2026, 16:28",
-                duration_minutes=26,
-                energy_wh=176.0,
-                status="COMPLETED",
-            ),
-            AdminFlightItemResponse(
-                flight_id="FLT-20261103-006",
-                mission_id="MSN-20261103-008",
-                route="HCM-03 -> HCM-01",
-                departure="03/11/2026, 09:30",
-                arrival="03/11/2026, 09:55",
-                duration_minutes=25,
-                energy_wh=180.5,
-                status="COMPLETED",
-            ),
-        ]
-        total_hours = 56.4
 
     if search:
         s = search.strip().lower()
         flights = [f for f in flights if s in f.flight_id.lower() or s in f.mission_id.lower() or s in f.route.lower()]
 
-    latest_flight = flights[0].departure.split(",")[0] if flights and flights[0].departure else "06/11/2026"
+    latest_flight = flights[0].departure.split(",")[0] if flights and flights[0].departure else None
 
     return AdminFlightHistoryResponse(
-        total_flights=max(len(flights), 128),
-        flight_hours=round(max(total_hours, 56.4), 1),
+        total_flights=len(flights),
+        flight_hours=round(total_hours, 1),
         latest_flight=latest_flight,
         flights=flights,
     )
@@ -923,29 +850,26 @@ async def get_admin_flight_detail(
         if not energy_wh:
             energy_wh = 182.4
 
+        dur_min = None
+        if dep and arr:
+            delta = arr - dep
+            dur_min = max(1, int(delta.total_seconds() / 60))
+
         st_val = mission.status.value.upper() if hasattr(mission.status, "value") else str(mission.status).upper()
+        date_prefix = dep.strftime("%Y%m%d") if dep else "2026"
+        seq = mission.id.split("-")[-1] if "-" in mission.id else mission.id
         return AdminFlightItemResponse(
-            flight_id=flight_id if flight_id.startswith("FLT-") else f"FLT-20261106-001",
+            flight_id=flight_id if flight_id.startswith("FLT-") else f"FLT-{date_prefix}-{seq}",
             mission_id=mission.id,
             route=f"{c1} -> {c2}",
-            departure=dep.strftime("%d/%m/%Y, %H:%M") if dep else "06/11/2026, 08:17",
-            arrival=arr.strftime("%d/%m/%Y, %H:%M") if arr else "06/11/2026, 08:42",
-            duration_minutes=25,
-            energy_wh=round(float(energy_wh), 1),
+            departure=dep.strftime("%d/%m/%Y, %H:%M") if dep else None,
+            arrival=arr.strftime("%d/%m/%Y, %H:%M") if arr else None,
+            duration_minutes=dur_min,
+            energy_wh=round(float(energy_wh), 1) if energy_wh is not None else None,
             status=st_val,
         )
 
-    # Fallback dữ liệu mẫu modal
-    return AdminFlightItemResponse(
-        flight_id=flight_id if flight_id.startswith("FLT-") else "FLT-20261106-001",
-        mission_id="MSN-20261106-002",
-        route="HCM-01 -> HCM-02",
-        departure="06/11/2026, 08:17",
-        arrival="06/11/2026, 08:42",
-        duration_minutes=25,
-        energy_wh=182.4,
-        status="COMPLETED",
-    )
+    raise HTTPException(status_code=404, detail="Flight not found")
 
 
 @router.post("/drones", response_model=DroneResponse, status_code=201, summary="Thêm drone mới vào kho")

@@ -149,7 +149,7 @@ async def admin_dashboard(
         select(func.count()).select_from(Incident).where(Incident.status == IncidentStatus.OPEN)
     )).scalar() or 0
     try:
-        total_audit = (await db.execute(text("SELECT COUNT(*) FROM public.audit_logs"))).scalar() or 0
+        total_audit = (await db.execute(text("SELECT COUNT(*) FROM public.activity_logs"))).scalar() or 0
     except Exception:
         total_audit = 0
     alerts = AdminAlerts(
