@@ -3343,7 +3343,25 @@ async def create_mission(
     try:
         from app.core.email import send_mission_scheduled_email
         from app.core.config import settings
+        from app.modules.system.models import Notification, NotificationType
+        from app.core.timezone import get_vn_naive_datetime as _now_vn
+        _ts = _now_vn()
         for o_item in bundled_order_objs:
+            # In-app notification cho Customer
+            if o_item.customer_id:
+                _eta = (mission.scheduled_time or _ts).strftime("%H:%M %d/%m") if (mission.scheduled_time or _ts) else "N/A"
+                db.add(Notification(
+                    user_id=o_item.customer_id,
+                    title=f"✈️ Đơn #{o_item.id} đã được lên lịch bay",
+                    message=(
+                        f"Chuyến bay #{mission.id} đã được lên lịch để giao đơn hàng #{o_item.id} của bạn. "
+                        f"ETA dự kiến: {_eta}. Bạn sẽ nhận được thông báo khi hàng đến nơi."
+                    ),
+                    notifications_type=NotificationType.MISSION_STATUS,
+                    mission_id=str(mission.id),
+                    reference_id=f"MISSION_SCHEDULED_{mission.id}",
+                    created_at=_ts,
+                ))
             if o_item.receiver_email:
                 await send_mission_scheduled_email(
                     to_email=o_item.receiver_email,
@@ -3351,8 +3369,9 @@ async def create_mission(
                     mission_id=mission.id,
                     frontend_url=settings.FRONTEND_URL,
                 )
+        await db.commit()
     except Exception as e:
-        print(f"[EMAIL] Lỗi gửi mission scheduled email: {e}")
+        print(f"[EMAIL/NOTIF] Lỗi gửi mission scheduled: {e}")
 
     resp_mission = await build_mission_detail_response(db, mission)
     resp_mission.bundled_order_ids = all_mission_order_ids

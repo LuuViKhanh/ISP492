@@ -515,6 +515,25 @@ async def approve_request(
             created_at=now,
         ))
         await db.commit()
+
+        # Notify Technician: được duyệt
+        try:
+            from app.modules.system.models import Notification, NotificationType
+            db.add(Notification(
+                user_id=req.requested_by,
+                title=f"✅ Đề xuất #{request_id} được duyệt",
+                message=(
+                    f"Đề xuất sử dụng {req.quantity_needed}x {cat.name if cat else 'linh kiện'} "
+                    f"đã được Admin duyệt. Vui lòng tiến hành sửa chữa và xác nhận hoàn tất."
+                ),
+                notifications_type=NotificationType.MAINTENANCE,
+                reference_id=f"PARTS_REQUEST_{request_id}",
+                created_at=now,
+            ))
+            await db.commit()
+        except Exception:
+            pass
+
         return {"message": "Đã duyệt, linh kiện đã được trừ tại Hub.",
                 "request_id": request_id, "status": PartsRequestStatus.APPROVED.value,
                 "remaining_stock": inv.quantity}
@@ -547,6 +566,25 @@ async def reject_request(
     req.reviewed_at = now
     req.admin_note = body.admin_note or "Từ chối bởi Admin."
     await db.commit()
+
+    # Notify Technician: bị từ chối
+    try:
+        from app.modules.system.models import Notification, NotificationType
+        db.add(Notification(
+            user_id=req.requested_by,
+            title=f"❌ Đề xuất #{request_id} bị từ chối",
+            message=(
+                f"Đề xuất linh kiện của bạn đã bị Admin từ chối. "
+                f"Lý do: {req.admin_note}"
+            ),
+            notifications_type=NotificationType.MAINTENANCE,
+            reference_id=f"PARTS_REQUEST_{request_id}",
+            created_at=now,
+        ))
+        await db.commit()
+    except Exception:
+        pass
+
     return {"message": "Đã từ chối đề xuất.", "request_id": request_id}
 
 

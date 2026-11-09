@@ -185,6 +185,35 @@ async def create_parts_request(
     await db.refresh(req)
     out = PartsRequestOut.model_validate(req)
     out.part_name = cat.name
+
+    # Notify Admin khi có đề xuất mới chờ duyệt
+    if not has_stock:
+        try:
+            from app.modules.system.models import Notification, NotificationType
+            from app.modules.auth.models import User as _User, ROLE_NAME_TO_ID as _ROLE_MAP
+            from app.shared.roles import UserRole as _Role
+            _admin_role = _ROLE_MAP.get(_Role.ADMIN)
+            if _admin_role:
+                _admin_ids = (await db.execute(
+                    select(_User.id).where(_User.role_id == _admin_role)
+                )).scalars().all()
+                for _uid in _admin_ids:
+                    db.add(Notification(
+                        user_id=_uid,
+                        title=f"🔧 Đề xuất linh kiện mới — Hub #{hub_id}",
+                        message=(
+                            f"Kỹ thuật viên đề xuất sử dụng {body.quantity_needed}x {cat.name} "
+                            f"{'cho drone ' + body.drone_id if body.drone_id else ''}. "
+                            f"Hub #{hub_id} không đủ hàng — cần Admin duyệt."
+                        ),
+                        notifications_type=NotificationType.MAINTENANCE,
+                        reference_id=f"PARTS_REQUEST_{req.id}",
+                        created_at=now,
+                    ))
+                await db.commit()
+        except Exception as _e:
+            print(f"[NOTIF] Parts request notify error: {_e}")
+
     return out
 
 

@@ -1428,6 +1428,44 @@ async def update_inspection(
         "created_at": now.isoformat() if hasattr(now, "isoformat") else str(now),
     }
     cur_logs = list(wo.status_logs_json or [])
+
+    # Notify Admin + Operator khi Work Order COMPLETED
+    if body.status == WorkOrderStatus.COMPLETED:
+        try:
+            from app.modules.system.models import Notification, NotificationType
+            from app.modules.auth.models import User as _User, ROLE_NAME_TO_ID as _ROLE_MAP
+            from app.shared.roles import UserRole as _Role
+            from datetime import timezone as _tz
+            _ts = datetime.now(_tz.utc)
+            _drone_label = f"Drone #{wo.drone_id}" if wo.drone_id else f"Work Order #{wo.id}"
+            _admin_role = _ROLE_MAP.get(_Role.ADMIN)
+            _op_role = _ROLE_MAP.get(_Role.OPERATOR)
+            _notif_ids = []
+            if _admin_role:
+                _notif_ids += (await db.execute(
+                    select(_User.id).where(_User.role_id == _admin_role)
+                )).scalars().all()
+            if _op_role:
+                _notif_ids += (await db.execute(
+                    select(_User.id).where(_User.role_id == _op_role)
+                )).scalars().all()
+            for _uid in set(_notif_ids):
+                db.add(Notification(
+                    user_id=_uid,
+                    title=f"✅ Work Order #{wo.id} hoàn tất",
+                    message=(
+                        f"{_drone_label} đã được sửa chữa xong. "
+                        f"Kỹ thuật viên: {user.id}. "
+                        f"Xử lý: {body.action_taken or 'N/A'}."
+                    ),
+                    notifications_type=NotificationType.MAINTENANCE,
+                    drone_id=wo.drone_id,
+                    work_order_id=wo.id,
+                    reference_id=f"WO_COMPLETED_{wo.id}",
+                    created_at=_ts,
+                ))
+        except Exception as _e:
+            print(f"[NOTIF] Work order completed notify error: {_e}")
     cur_logs.append(new_log)
     wo.status_logs_json = cur_logs
     await db.commit()
