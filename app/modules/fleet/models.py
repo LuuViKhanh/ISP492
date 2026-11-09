@@ -177,6 +177,7 @@ class WorkOrder(Base):
     record_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     inspection_items_json: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
     status_logs_json: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
+    parts_replaced_json: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)  # [{part_category_id, quantity}, ...]
 
 
 class MaintenanceAlert(Base):

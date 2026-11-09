@@ -1202,6 +1202,41 @@ async def acknowledge_alert(
 
 # ── Work Order CRUD ───────────────────────────────────────────────────────────
 
+@router.get("/hub-inventory", response_model=list[HubInventoryDetailedResponse])
+async def get_hub_inventory_for_work_order(
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Lấy danh sách linh kiện trong kho của hub để technician chọn khi làm work order."""
+    if not user.hub_id or not str(user.hub_id).isdigit():
+        raise HTTPException(status_code=400, detail="Hub ID không hợp lệ")
+    
+    query = (
+        select(HubInventory)
+        .where(HubInventory.hub_id == int(user.hub_id))
+        .order_by(HubInventory.id)
+    )
+    
+    result = await db.execute(query)
+    hub_inventories = result.scalars().all()
+    
+    # Map sang HubInventoryDetailedResponse (include thông tin PartCategory)
+    response = []
+    for hi in hub_inventories:
+        part_cat = await db.get(PartCategory, hi.part_category_id)
+        response.append({
+            "id": hi.id,
+            "hub_id": hi.hub_id,
+            "part_category": part_cat.__dict__ if part_cat else None,
+            "quantity": hi.quantity,
+            "min_stock_threshold": hi.min_stock_threshold,
+            "is_low_stock": hi.quantity < hi.min_stock_threshold,
+            "updated_at": hi.updated_at,
+        })
+    
+    return response
+
+
 @router.get("/work-orders", response_model=list[WorkOrderResponse])
 async def list_work_orders(
     user: CurrentUser = Depends(allow_technician),
@@ -1317,6 +1352,29 @@ async def create_work_order(
             alert = alert_res.scalar_one_or_none()
             if alert:
                 alert.work_order_id = wo.id
+
+    # Xử lý parts_replaced: cập nhật HubInventory (trừ số lượng)
+    if body.parts_replaced:
+        for part_item in body.parts_replaced:
+            part_category_id = part_item.get("part_category_id")
+            quantity = part_item.get("quantity", 1)
+            
+            if part_category_id:
+                # Tìm HubInventory cho hub của technician
+                hub_inventory_res = await db.execute(
+                    select(HubInventory)
+                    .where(
+                        HubInventory.hub_id == int(user.hub_id),
+                        HubInventory.part_category_id == part_category_id
+                    )
+                )
+                hub_inv = hub_inventory_res.scalar_one_or_none()
+                if hub_inv:
+                    # Trừ số lượng từ kho
+                    hub_inv.quantity = max(0, hub_inv.quantity - quantity)
+    
+    # Lưu parts_replaced vào work order
+    wo.parts_replaced_json = body.parts_replaced or []
 
     await db.commit()
     await db.refresh(wo)
@@ -2423,72 +2481,8 @@ async def delete_hub_inventory(
     await db.commit()
 
 
-# ==================== PARTS REQUEST ENDPOINTS ====================
-
-@router.post("/parts-requests", response_model=PartsRequestResponse, status_code=201, summary="Technician: Yêu cầu cấp phát vật tư")
-async def create_parts_request(
-    body: PartsRequestCreate,
-    user: CurrentUser = Depends(allow_technician),
-    db: AsyncSession = Depends(get_async_db),
-):
-    """
-    Technician gửi yêu cầu cấp phát vật tư.
-    - Tự động lấy technician_id từ user.id.
-    - Tự động lấy hub_id từ user.hub_id.
-    """
-    if not user.hub_id:
-        raise HTTPException(status_code=400, detail="Technician chưa được gán Hub nào")
-
-    # Verify part category exists
-    part_category = await db.get(PartCategory, body.part_category_id)
-    if not part_category:
-        raise HTTPException(status_code=404, detail=f"Part category #{body.part_category_id} không tồn tại")
-
-    now = get_vn_naive_datetime()
-
-    parts_request = PartsRequest(
-        requested_by=str(user.id),
-        hub_id=int(user.hub_id),
-        drone_id=body.drone_id,
-        part_category_id=body.part_category_id,
-        quantity_needed=body.quantity_needed,
-        description=body.description,
-        photo_urls=body.photo_urls,
-        status=PartsRequestStatus.PENDING,
-        created_at=now,
-    )
-    db.add(parts_request)
-    await db.commit()
-    await db.refresh(parts_request)
-    return parts_request
-
-
-@router.get("/parts-requests/my", response_model=List[PartsRequestResponse], summary="Technician: Xem yêu cầu của mình")
-async def get_my_parts_requests(
-    status: Optional[str] = None,
-    user: CurrentUser = Depends(allow_technician),
-    db: AsyncSession = Depends(get_async_db),
-):
-    """
-    Technician xem danh sách yêu cầu cấp phát của mình.
-    - Query param `status=pending|approved|rejected|fulfilled` để lọc.
-    """
-    query = (
-        select(PartsRequest)
-        .where(PartsRequest.requested_by == str(user.id))
-        .order_by(PartsRequest.created_at.desc())
-    )
-
-    if status:
-        try:
-            status_enum = PartsRequestStatus(status)
-            query = query.where(PartsRequest.status == status_enum)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
-
-    result = await db.execute(query)
-    return result.scalars().all()
-
+# ==================== PARTS REQUEST ENDPOINTS (REMOVED - Use HubInventory instead) ====================
+# Technician không gửi yêu cầu cho admin nữa, thay vào đó chọn trực tiếp từ HubInventory khi làm work order
 
 @router.get("/parts-requests/{request_id}", response_model=PartsRequestResponse, summary="Lấy chi tiết yêu cầu cấp phát")
 async def get_parts_request(
