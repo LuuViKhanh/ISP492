@@ -219,14 +219,16 @@ class MaintenanceSchedule(Base):
 
 
 # ==================== PARTS MANAGEMENT (Quản lý vật tư - Parts) ====================
-from app.modules.inventory.models import (
+from app.modules.supplies.models import (
     PartCategoryType,
     PartsRequestStatus,
-    TxnReason,
+    SupplyTxnReason as TxnReason,
     PartCategory,
     PartsRequest,
-    HubInventory,
-    InventoryTransaction,
+    HubSupply,
+    SupplyTransaction,
+    HubInventory,        # backward-compat alias
+    InventoryTransaction, # backward-compat alias
 )
 
 

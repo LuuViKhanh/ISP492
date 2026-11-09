@@ -25,7 +25,8 @@ import app.modules.auth.models  # noqa: F401
 import app.modules.fleet.models  # noqa: F401
 import app.modules.missions.models  # noqa: F401
 import app.modules.system.models  # noqa: F401
-import app.modules.inventory.models  # noqa: F401
+import app.modules.inventory.models  # noqa: F401 — backward-compat, keeps old tables mapped
+import app.modules.supplies.models   # noqa: F401
 
 # Import routers từ các module
 from app.modules.auth.router import router as auth_router
@@ -190,7 +191,7 @@ app.include_router(db_router)
 # Tự động include các router của các roles
 import importlib
 loaded_chatbot_roles = []
-for mod in ["auth", "users", "missions", "fleet", "ai_predictions", "orders", "chatbot", "dashboard", "inventory"]:
+for mod in ["auth", "users", "missions", "fleet", "ai_predictions", "orders", "chatbot", "dashboard", "inventory", "supplies"]:
     for role in ["admin", "operator", "technician", "customer"]:
         target_mod = f"app.modules.{mod}.{role}.router"
         try:

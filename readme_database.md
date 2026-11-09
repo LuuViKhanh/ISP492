@@ -260,35 +260,82 @@
 | aging_deadline | DATETIME | Nullable |
 
 ### 16. Bảng part_categories
+Danh mục loại linh kiện / vật tư — dùng chung toàn hệ thống.
+
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
 | :--- | :--- | :--- |
 | id | BIGINT | **PK**, Non-nullable |
 | name | VARCHAR(100) | Unique, Non-nullable |
 | category_type | VARCHAR(50) | Non-nullable (`part_category_type_enum`) |
-| compatible_drone_models | JSONB | Non-nullable, Default `'[]'` |
-| unit_cost | FLOAT | Non-nullable, Default `0.0` |
+| compatible_drone_models | JSONB | Nullable |
+| unit_cost | FLOAT | Nullable (VNĐ / đơn vị) |
 | description | TEXT | Nullable |
 | is_active | BOOLEAN | Non-nullable, Default `true` |
-| created_at | DATETIME | Nullable |
+| created_at | TIMESTAMPTZ | Nullable |
 
-### 17. Bảng parts_requests
+### 20. Bảng hub_supplies *(đổi tên từ hub_inventories)*
+Số lượng linh kiện / vật tư tại từng Hub. Không có kho trung tâm — mỗi Hub quản lý vật tư riêng.
+
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
 | :--- | :--- | :--- |
 | id | BIGINT | **PK**, Non-nullable |
-| requested_by | VARCHAR | Non-nullable |
+| hub_id | INTEGER | **FK** (`hubs.id`), Non-nullable |
+| part_category_id | BIGINT | **FK** (`part_categories.id`), Non-nullable |
+| quantity | INTEGER | Non-nullable, Default `0` |
+| min_stock_threshold | INTEGER | Non-nullable, Default `2` |
+| updated_at | TIMESTAMPTZ | Nullable |
+
+> Unique: `uq_hub_supply_part` trên `(hub_id, part_category_id)`.
+
+### 21. Bảng supply_transactions *(đổi tên từ inventory_transactions)*
+Log mọi biến động vật tư tại Hub. `quantity_delta > 0` = nhập, `< 0` = xuất.
+
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| hub_id | INTEGER | **FK** (`hubs.id`), Non-nullable |
+| part_category_id | BIGINT | **FK** (`part_categories.id`), Non-nullable |
+| quantity_delta | INTEGER | Non-nullable (+/−) |
+| reason | VARCHAR(20) | Non-nullable (`supply_txn_reason_enum`: Receive, RepairUse, TransferIn, TransferOut, Adjust, Discard) |
+| performed_by | VARCHAR | Nullable |
+| reference_id | VARCHAR | Nullable |
+| note | TEXT | Nullable |
+| created_at | TIMESTAMPTZ | Non-nullable |
+
+### 22. Bảng battery_model_catalog
+Catalog model pin với giá và danh sách drone tương thích.
+
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| name | VARCHAR(100) | Unique, Non-nullable |
+| compatible_drone_models | JSONB | Nullable |
+| capacity_wh | FLOAT | Non-nullable |
+| unit_cost | FLOAT | Nullable (VNĐ / viên) |
+| description | TEXT | Nullable |
+| is_active | BOOLEAN | Non-nullable, Default `true` |
+| created_at | TIMESTAMPTZ | Nullable |
+
+### 17. Bảng parts_requests
+Technician đề xuất sử dụng linh kiện để sửa chữa drone. Admin duyệt hoặc điều phối.
+
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGINT | **PK**, Non-nullable |
+| requested_by | VARCHAR | Non-nullable (user_id Technician) |
 | hub_id | INTEGER | **FK** (`hubs.id`), Non-nullable |
 | drone_id | VARCHAR(50) | Nullable |
 | part_category_id | BIGINT | **FK** (`part_categories.id`), Non-nullable |
 | quantity_needed | INTEGER | Non-nullable |
 | description | TEXT | Non-nullable |
-| photo_urls | JSONB | Non-nullable, Default `'[]'` |
+| photo_urls | JSONB | Nullable |
 | status | VARCHAR(20) | Non-nullable (`parts_request_status_enum`) |
 | reviewed_by | VARCHAR | Nullable |
 | admin_note | TEXT | Nullable |
-| reviewed_at | DATETIME | Nullable |
+| reviewed_at | TIMESTAMPTZ | Nullable |
 | actual_cost | FLOAT | Nullable |
-| created_at | DATETIME | Nullable |
-| fulfilled_at | DATETIME | Nullable |
+| created_at | TIMESTAMPTZ | Non-nullable |
+| fulfilled_at | TIMESTAMPTZ | Nullable |
 
 ### 18. Bảng telemetry_logs
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
