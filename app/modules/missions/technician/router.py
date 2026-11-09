@@ -621,17 +621,27 @@ async def get_confirmations(
         ).outerjoin(
             Battery, Mission.battery_id == Battery.id
         ).outerjoin(
+            Order, Mission.order_id == Order.id
+        ).outerjoin(
             User, (Mission.customer_id == User.id) | (Mission.customer_id == User.email)
         ).where(
             Mission.arrived_at.is_not(None),
-            Mission.arrival_confirmed_at.is_(None),
-            Mission.status.notin_([
-                MissionStatus.MISSION_COMPLETED,
-                MissionStatus.CANCELLED,
+            Order.destination_received_at.is_(None),  # ← Khách chưa tới nhận
+            Mission.status.in_([
+                MissionStatus.ARRIVAL_COMPLETED,
+                MissionStatus.INCIDENT_RETURN,
             ])
         )
         if user.hub_id and str(user.hub_id).isdigit():
-            query = query.where(Mission.destination_hub_id == int(user.hub_id))
+            from sqlalchemy import or_
+            tech_hub_id = int(user.hub_id)
+            query = query.where(
+                or_(
+                    Mission.destination_hub_id == tech_hub_id,  # Normal delivery
+                    Mission.origin_hub_id == tech_hub_id,       # Incident return to origin
+                    # Để xử lý mission đáp tại hub khác (relay), cần check MissionLeg
+                )
+            )
             
         result = await db.execute(query.order_by(Mission.id.desc()))
         rows = result.all()

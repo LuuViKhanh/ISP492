@@ -623,6 +623,7 @@ async def collect_telemetry(
             altitude=data.altitude,
             speed=data.speed,
             battery_voltage=data.battery_voltage,
+            battery_pct=data.battery_pct,
             energy_consumed_wh=data.energy_consumed_wh,
             wind_speed=data.wind_speed,
             # Weather fields từ Open-Meteo

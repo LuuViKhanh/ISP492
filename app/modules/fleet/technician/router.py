@@ -27,7 +27,7 @@ from app.modules.fleet.technician.schemas import (
     PartsRequestCreate, PartsRequestApprove, PartsRequestReject, PartsRequestResponse,
     HubInventoryCreate, HubInventoryUpdate, HubInventoryResponse, HubInventoryDetailedResponse
 )
-from app.modules.missions.models import Mission, MissionStatus, HandlingStatus, Incident, IncidentStatus
+from app.modules.missions.models import Mission, MissionStatus, HandlingStatus, Incident, IncidentStatus, Order
 from app.core.config import settings
 
 router = APIRouter(prefix="/technician/fleet", tags=["Fleet"])
@@ -226,9 +226,11 @@ async def get_transit_history(
                 Battery.serial_number.label("battery_code"),
                 Battery.charge_level_pct.label("battery_percent"),
                 Mission.arrival_confirmed_at,
+                Order.destination_received_at,
             )
             .outerjoin(Drone, Mission.drone_id == Drone.id)
             .outerjoin(Battery, Mission.battery_id == Battery.id)
+            .outerjoin(Order, Mission.order_id == Order.id)
             .where(
                 Mission.status.in_([
                     MissionStatus.ARRIVAL_COMPLETED,
@@ -278,6 +280,7 @@ async def get_transit_history(
                 battery_code,
                 battery_percent,
                 arrival_confirmed_at,
+                destination_received_at,
             ) = row
             status_val = m_status.value if hasattr(m_status, "value") else m_status
             handling_val = m_handling.value if hasattr(m_handling, "value") else m_handling
@@ -300,6 +303,7 @@ async def get_transit_history(
                 "battery_percent": battery_percent,
                 "handling_status": handling_val if m_handling else None,
                 "arrival_confirmed_at": arrival_confirmed_at.isoformat() if arrival_confirmed_at else None,
+                "destination_received_at": destination_received_at.isoformat() if destination_received_at else None,
             })
         return response
     except Exception as e:
@@ -1086,11 +1090,29 @@ async def list_maintenance_alerts(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Chỉ trả alerts chưa được xử lý (chưa có work order) tại hub của technician."""
+    """Chỉ trả alert mới nhất chưa được xử lý của mỗi drone tại hub của technician."""
+    from sqlalchemy import func, desc
+    from sqlalchemy.orm import aliased
+    
+    # Subquery: lấy alert_id mới nhất của mỗi drone (chưa có work order)
+    latest_alert_subq = (
+        select(func.max(MaintenanceAlert.id).label("max_id"))
+        .where(MaintenanceAlert.work_order_id == None)
+        .group_by(MaintenanceAlert.drone_id)
+        .alias("latest_alerts")
+    )
+    
     query = (
         select(MaintenanceAlert)
         .outerjoin(Drone, MaintenanceAlert.drone_id == Drone.id)
-        .where(MaintenanceAlert.work_order_id == None)
+        .where(
+            MaintenanceAlert.work_order_id == None,
+            MaintenanceAlert.id.in_(
+                select(func.max(MaintenanceAlert.id))
+                .where(MaintenanceAlert.work_order_id == None)
+                .group_by(MaintenanceAlert.drone_id)
+            )
+        )
         .order_by(MaintenanceAlert.id.desc())
     )
     
