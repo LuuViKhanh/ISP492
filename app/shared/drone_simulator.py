@@ -19,13 +19,14 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.database.db import AsyncSessionLocal
 from app.modules.missions.models import (
     Mission, MissionStatus, MissionLeg, MissionLegStatus,
     TelemetryLog, HandlingStatus, Incident, IncidentStatus, IncidentSeverity,
 )
+from app.modules.ai_predictions.models import AIPrediction
 from app.modules.system.models import Hub
 from app.modules.fleet.models import Drone, Battery
 
@@ -186,6 +187,7 @@ async def _fly_incident_return(
                     latitude=lat, longitude=lng,
                     altitude=altitude, speed=speed,
                     battery_voltage=battery_volt,
+                    battery_pct=float(new_charge_pct),
                     energy_consumed_wh=energy_wh,
                     wind_speed=round(3.0 + random.uniform(-0.5, 0.5), 2),
                     weather_temperature=weather.temperature if weather else None,
@@ -311,7 +313,7 @@ async def simulate_mission_flight(mission_id: str) -> None:
             active_battery_id = leg.battery_id or mission.battery_id
             active_drone_id = mission.drone_id
             battery_capacity_wh = 150.0
-            current_battery_pct = 100.0
+            initial_battery_pct = 100.0
 
             if active_battery_id:
                 bat_init = await db.get(Battery, active_battery_id)
@@ -319,17 +321,49 @@ async def simulate_mission_flight(mission_id: str) -> None:
                     if bat_init.capacity_wh and bat_init.capacity_wh > 0:
                         battery_capacity_wh = float(bat_init.capacity_wh)
                     if bat_init.charge_level_pct is not None:
-                        current_battery_pct = float(bat_init.charge_level_pct)
+                        initial_battery_pct = float(bat_init.charge_level_pct)
             elif active_drone_id:
                 dr_init = await db.get(Drone, active_drone_id)
                 if dr_init and dr_init.battery_level_pct is not None:
-                    current_battery_pct = float(dr_init.battery_level_pct)
+                    initial_battery_pct = float(dr_init.battery_level_pct)
+
+            current_battery_pct = initial_battery_pct
+
+            # Lấy planned_leg_energy_wh từ AIPrediction hoặc predict_flight_energy
+            planned_leg_energy_wh = None
+            ai_pred_res = await db.execute(
+                select(AIPrediction)
+                .where(AIPrediction.mission_id == str(mission_id))
+                .order_by(AIPrediction.id.desc())
+                .limit(1)
+            )
+            ai_pred = ai_pred_res.scalars().first()
+            if ai_pred and ai_pred.estimated_energy_wh:
+                total_legs_cnt = await db.scalar(
+                    select(func.count(MissionLeg.id)).where(MissionLeg.mission_id == mission_id)
+                ) or 1
+                planned_leg_energy_wh = float(ai_pred.estimated_energy_wh) / float(total_legs_cnt)
+
+            if not planned_leg_energy_wh or planned_leg_energy_wh <= 0:
+                from app.modules.ai_predictions.service import predict_flight_energy
+                payload_val = 0.5
+                if mission.drone_id:
+                    dr = await db.get(Drone, mission.drone_id)
+                    if dr and dr.max_payload_kg:
+                        payload_val = float(dr.max_payload_kg) * 0.5
+                pred_res = predict_flight_energy(
+                    distance_km=dist_m / 1000.0,
+                    payload_weight=payload_val,
+                    speed=CRUISE_SPEED,
+                    altitude=CRUISE_ALTITUDE
+                )
+                planned_leg_energy_wh = float(pred_res.get("energy_wh", 50.0))
 
             print(
                 f"[SIMULATOR] Mission {mission_id} | Leg {leg.sequence_no}: "
                 f"{from_hub.name} → {to_hub.name} | "
                 f"{dist_m/1000:.2f} km | {len(waypoints)} điểm | interval={INTERVAL_SEC}s | "
-                f"Battery start: {current_battery_pct:.1f}% (cap: {battery_capacity_wh}Wh)"
+                f"Battery start: {initial_battery_pct:.1f}% (cap: {battery_capacity_wh}Wh, planned_leg_energy: {planned_leg_energy_wh:.1f}Wh)"
             )
 
         except Exception as e:
@@ -349,14 +383,13 @@ async def simulate_mission_flight(mission_id: str) -> None:
         altitude     = round(CRUISE_ALTITUDE + math.sin(idx * 0.3) * 3, 2)
         speed        = round(CRUISE_SPEED + math.cos(idx * 0.2) * 1.5, 2)
         battery_volt = round(max(18.0, battery_volt - 0.04), 2)
-        energy_wh    = round(energy_wh + 0.8, 3)
         wind_speed   = round(2.0 + math.sin(idx * 0.5) * 1.5 + random.uniform(-0.2, 0.2), 2)
 
-        # Khấu trừ mức pin theo năng lượng tiêu hao mỗi bước
-        step_wh = 0.8
-        pct_consumed = (step_wh / battery_capacity_wh) * 100.0
-        current_battery_pct = max(1.0, current_battery_pct - pct_consumed)
+        # Khấu trừ mức pin theo năng lượng tiêu hao kế hoạch
+        consumed_pct = ((idx + 1) / total_points) * ((planned_leg_energy_wh / battery_capacity_wh) * 100.0)
+        current_battery_pct = max(1.0, initial_battery_pct - consumed_pct)
         new_charge_pct = int(round(current_battery_pct))
+        energy_wh = round(((idx + 1) / total_points) * planned_leg_energy_wh, 3)
 
         async with AsyncSessionLocal() as db:
             try:
@@ -379,6 +412,7 @@ async def simulate_mission_flight(mission_id: str) -> None:
                     altitude=altitude,
                     speed=speed,
                     battery_voltage=battery_volt,
+                    battery_pct=float(new_charge_pct),
                     energy_consumed_wh=energy_wh,
                     wind_speed=wind_speed,
                     weather_temperature=weather.temperature if weather else None,

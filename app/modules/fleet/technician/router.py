@@ -1761,6 +1761,10 @@ async def swap_battery_at_relay(
     new_battery.drone_id = mission.drone_id
     new_battery.current_hub_id = relay_hub_id
     mission.battery_id = new_battery.id
+    if mission.drone_id:
+        drone = await db.get(Drone, mission.drone_id)
+        if drone and new_battery.charge_level_pct is not None:
+            drone.battery_level_pct = new_battery.charge_level_pct
 
     # Cập nhật battery_id cho leg tiếp theo (PENDING)
     if next_leg:

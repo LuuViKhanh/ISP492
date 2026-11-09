@@ -551,6 +551,11 @@ async def prepare_battery_for_delivery(
     if hub_id:
         battery.current_hub_id = hub_id
 
+    if mission.drone_id:
+        drone = await db.get(Drone, mission.drone_id)
+        if drone and battery.charge_level_pct is not None:
+            drone.battery_level_pct = battery.charge_level_pct
+
     # Đồng bộ battery_id cho chặng đầu tiên (sequence_no = 1) của MissionLeg
     from app.modules.missions.models import MissionLeg
     leg1_res = await db.execute(

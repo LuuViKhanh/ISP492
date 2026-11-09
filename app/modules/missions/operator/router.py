@@ -1195,9 +1195,9 @@ async def check_relay_hub_battery_availability(
             leg0["battery_capacity_wh"] = round(origin_cap_wh, 2)
             leg0["battery_charge_pct"] = origin_charge_pct
             leg0["battery_energy_wh"] = round(origin_energy_wh, 2)
-            leg0_cons_pct = int(round((leg0_energy / origin_energy_wh) * 100)) if origin_energy_wh > 0 else 100
+            leg0_cons_pct = int(round((leg0_energy / origin_cap_wh) * 100)) if origin_cap_wh > 0 else 100
             leg0["battery_consumption_pct"] = leg0_cons_pct
-            leg0["remaining_battery_pct"] = max(0, 100 - leg0_cons_pct)
+            leg0["remaining_battery_pct"] = max(0, origin_charge_pct - leg0_cons_pct)
 
             if leg0_energy > max_safe_origin_wh:
                 infeasible_reasons.append(
@@ -1207,9 +1207,9 @@ async def check_relay_hub_battery_availability(
                     f"sạc {origin_charge_pct}%, cần dự phòng tối thiểu 20%)"
                 )
         else:
-            leg0_cons_pct = int(round((leg0_energy / origin_energy_wh) * 100)) if origin_energy_wh > 0 else 100
+            leg0_cons_pct = int(round((leg0_energy / origin_cap_wh) * 100)) if origin_cap_wh > 0 else 100
             leg0["battery_consumption_pct"] = leg0_cons_pct
-            leg0["remaining_battery_pct"] = max(0, 100 - leg0_cons_pct)
+            leg0["remaining_battery_pct"] = max(0, origin_charge_pct - leg0_cons_pct)
             infeasible_reasons.append(
                 f"Hub xuất phát không có viên pin tương thích{model_str} khả dụng để gán cho Drone"
             )
@@ -1301,9 +1301,9 @@ async def check_relay_hub_battery_availability(
                 next_leg["battery_capacity_wh"] = round(sel_cap_wh, 2)
                 next_leg["battery_charge_pct"] = sel_charge_pct
                 next_leg["battery_energy_wh"] = round(sel_energy_wh, 2)
-                leg_cons_pct = int(round((next_leg_energy / sel_energy_wh) * 100)) if sel_energy_wh > 0 else 100
+                leg_cons_pct = int(round((next_leg_energy / sel_cap_wh) * 100)) if sel_cap_wh > 0 else 100
                 next_leg["battery_consumption_pct"] = leg_cons_pct
-                next_leg["remaining_battery_pct"] = max(0, 100 - leg_cons_pct)
+                next_leg["remaining_battery_pct"] = max(0, sel_charge_pct - leg_cons_pct)
 
             if next_leg is not None and next_leg_energy > sel_max_safe_wh:
                 leg_pct = int(round((next_leg_energy / sel_energy_wh) * 100)) if sel_energy_wh > 0 else 100
@@ -2204,8 +2204,8 @@ async def compute_mission_routes_internal(
         if not relay_hub_ids:
             # Direct route — kiểm tra năng lượng chặng duy nhất dựa trên năng lượng của pin được assign cho Drone
             leg0_energy = float(legs_raw[0].get("energy_wh") or d["predictedEnergyWh"]) if legs_raw else float(d["predictedEnergyWh"])
-            batt_pct = int(round((leg0_energy / origin_bat_energy_wh) * 100)) if origin_bat_energy_wh > 0 else 100
-            rem_batt_pct = max(0, 100 - batt_pct)
+            batt_pct = int(round((leg0_energy / origin_bat_capacity_wh) * 100)) if origin_bat_capacity_wh > 0 else 100
+            rem_batt_pct = max(0, origin_bat_charge_pct - batt_pct)
 
             if legs_raw:
                 legs_raw[0]["battery_id"] = assigned_battery.id if assigned_battery else None
@@ -2554,8 +2554,15 @@ async def build_missions_response_list(
                 leg_cap, leg_charge, leg_energy_avail = _compute_battery_energy_wh(
                     leg_bat_obj, drone_capacity_wh
                 )
-                leg_pct = int(round((e / leg_energy_avail) * 100)) if leg_energy_avail > 0 else 50
-                leg_rem_pct = max(0, 100 - leg_pct)
+                leg_pct = int(round((e / leg_cap) * 100)) if leg_cap > 0 else 50
+                is_leg_done = (
+                    leg.status == MissionLegStatus.COMPLETED
+                    or str(m.status.value if hasattr(m.status, "value") else (m.status or "")).strip().lower() in ("completed", "mission completed")
+                )
+                if is_leg_done:
+                    leg_rem_pct = int(round(leg_charge))
+                else:
+                    leg_rem_pct = max(0, leg_charge - leg_pct)
                 leg_consumption_pcts.append(leg_pct)
 
                 is_dispatch_leg = False
@@ -2657,8 +2664,12 @@ async def build_missions_response_list(
                 )
                 e = float(predict_flight_energy(d, payload)["energy_wh"])
                 leg_energies.append(e)
-                leg_pct = int(round((e / origin_bat_energy) * 100)) if origin_bat_energy > 0 else 50
-                leg_rem_pct = max(0, 100 - leg_pct)
+                leg_pct = int(round((e / origin_bat_cap) * 100)) if origin_bat_cap > 0 else 50
+                is_mission_done = str(m.status.value if hasattr(m.status, "value") else (m.status or "")).strip().lower() in ("completed", "mission completed")
+                if is_mission_done:
+                    leg_rem_pct = int(round(origin_bat_charge))
+                else:
+                    leg_rem_pct = max(0, origin_bat_charge - leg_pct)
                 leg_consumption_pcts.append(leg_pct)
                 legs_detail.append(
                     RouteLegSchema(
@@ -3198,6 +3209,9 @@ async def create_mission(
             ob.drone_id = None
         assigned_battery.drone_id = drone.id
 
+    if assigned_battery.charge_level_pct is not None:
+        drone.battery_level_pct = assigned_battery.charge_level_pct
+
     compatible_models = await get_compatible_battery_models(db, drone.model)
     reserved_bat_ids, _ = await _get_reserved_batteries_and_virtual_holds(db)
 
@@ -3496,6 +3510,10 @@ async def operator_battery_swap(
     new_battery.drone_id = str(mission.drone_id)
     new_battery.current_hub_id = hub_id
     mission.battery_id = new_battery.id
+    if mission.drone_id:
+        drone_to_sync = await db.get(Drone, mission.drone_id)
+        if drone_to_sync and new_battery.charge_level_pct is not None:
+            drone_to_sync.battery_level_pct = new_battery.charge_level_pct
 
     # ── 5. Hoàn tất swap pin ──────────────────────────────────────────────────
 
