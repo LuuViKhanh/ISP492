@@ -191,7 +191,7 @@ async def get_admin_hubs(
                 name=d.name,
                 model=d.model,
                 status=d.status.value if hasattr(d.status, "value") else str(d.status),
-                serial_number=d.id,
+                serial_number=None,
                 battery_level_pct=d.battery_level_pct,
                 payload_capacity_kg=d.payload_capacity_kg,
             )
@@ -281,7 +281,7 @@ async def get_admin_hub_detail(hub_id: int, db: AsyncSession = Depends(get_async
             name=d.name,
             model=d.model,
             status=d.status.value if hasattr(d.status, "value") else str(d.status),
-            serial_number=d.id,
+            serial_number=None,
             battery_level_pct=d.battery_level_pct,
             payload_capacity_kg=d.payload_capacity_kg,
         )
@@ -296,7 +296,7 @@ async def get_admin_hub_detail(hub_id: int, db: AsyncSession = Depends(get_async
         HubAssignedBatteryItem(
             id=b.id,
             serial_number=b.serial_number or b.id,
-            battery_model=b.battery_model or "FC30 Battery Pack",
+            battery_model=b.battery_model,
             status=compute_battery_ui_status(b),
             capacity_wh=b.capacity_wh,
             charge_level_pct=b.charge_level_pct,
