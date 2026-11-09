@@ -632,10 +632,7 @@ async def get_confirmations(
         ).where(
             Mission.arrived_at.is_not(None),
             Order.destination_received_at.is_(None),  # ← Khách chưa tới nhận
-            Mission.status.in_([
-                MissionStatus.ARRIVAL_COMPLETED,
-                MissionStatus.INCIDENT_RETURN,
-            ])
+            Mission.status == MissionStatus.ARRIVAL_COMPLETED
         )
         if user.hub_id and str(user.hub_id).isdigit():
             from sqlalchemy import or_
@@ -680,6 +677,12 @@ async def confirm_pickup(
     
     mission = await get_mission_by_order_id(db, orderId)
     
+    if mission.status == MissionStatus.INCIDENT_RETURN:
+        raise HTTPException(
+            status_code=400,
+            detail="Chuyến bay gặp sự cố (Incident), kiện hàng chưa được giao tới Hub đích nên không thể xác nhận khách nhận hàng."
+        )
+
     if mission.arrived_at is None:
         raise HTTPException(status_code=400, detail="Mission has not arrived yet")
         

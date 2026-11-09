@@ -32,12 +32,9 @@ router = APIRouter(prefix="/operator/orders", tags=["Orders"])
 allow_operator = RoleChecker([UserRole.OPERATOR, UserRole.ADMIN])
 
 ACTIVE_MISSION_STATUS_STRINGS = {
-    "SCHEDULED",
-    "IN_PROGRESS",
-    "APPROVED",
-    "FLYING",
-    "ACTIVE_MISSION",
-    "PENDING_APPROVAL",
+    "SCHEDULED", "IN_PROGRESS", "IN PROGRESS", "APPROVED",
+    "FLYING", "ACTIVE_MISSION", "ACTIVE MISSION",
+    "PENDING_APPROVAL", "PENDING APPROVAL",
 }
 
 ACTIVE_MISSION_STATUSES = [
@@ -50,15 +47,13 @@ ACTIVE_MISSION_STATUSES = [
 ]
 
 COMPLETED_MISSION_STATUS_STRINGS = {
-    "COMPLETED",
-    "MISSION_COMPLETED",
+    "COMPLETED", "ARRIVAL_COMPLETED", "ARRIVAL COMPLETED",
+    "MISSION_COMPLETED", "MISSION COMPLETED",
 }
 
 FAILED_MISSION_STATUS_STRINGS = {
-    "CANCELLED",
-    "FAILED",
-    "REJECTED",
-    "INCIDENT_RETURN",
+    "CANCELLED", "FAILED", "REJECTED",
+    "INCIDENT_RETURN", "INCIDENT RETURN",
 }
 
 
@@ -159,6 +154,13 @@ def calculate_planning_state(order: Order, mission: Mission = None) -> str | Non
         ms_str = (mission.status.value if hasattr(mission.status, "value") else str(mission.status or "")).upper()
         if ms_str in ACTIVE_MISSION_STATUS_STRINGS:
             return "PLANNED"
+        if ms_str in ("INCIDENT_RETURN", "INCIDENT RETURN"):
+            # Nếu sự cố chưa được Technician confirm thu hồi kiện hàng tại Hub (chưa có arrival_confirmed_at hoặc còn handling_status)
+            if mission.arrival_confirmed_at is None or mission.handling_status is not None:
+                return None  # Đang xử lý sự cố / đang bay về / chờ xác nhận thu hồi tại Hub, CHƯA ĐƯỢC lập lịch lại!
+            if order.status == OrderStatus.AT_HUB:
+                return "NEEDS_REPLANNING"
+            return None
         if ms_str in FAILED_MISSION_STATUS_STRINGS:
             return "NEEDS_REPLANNING"
         if ms_str in COMPLETED_MISSION_STATUS_STRINGS or mission.arrived_at is not None:
@@ -311,9 +313,15 @@ async def list_orders(
 
         # Chỉ cho phép tạo mission khi hàng thực sự đã nhận tại Hub, đơn đã AT_HUB và chưa có mission active (hoặc cần lập lịch lại do sự cố)
         ms_val = (latest_mission.status.value if hasattr(latest_mission.status, "value") else str(latest_mission.status or "")).upper() if latest_mission else ""
+        is_incident_active = (
+            latest_mission is not None
+            and ms_val in ("INCIDENT_RETURN", "INCIDENT RETURN")
+            and (latest_mission.arrival_confirmed_at is None or latest_mission.handling_status is not None)
+        )
         order_resp.can_create_mission = bool(
             origin_pkg.received
             and o.status == OrderStatus.AT_HUB 
+            and not is_incident_active
             and (latest_mission is None or ms_val in FAILED_MISSION_STATUS_STRINGS or o.replan_required_at is not None)
         )
 
@@ -365,9 +373,15 @@ async def _build_order_response_detail(
     order_resp.originPackage = origin_pkg
 
     ms_val = (latest_mission.status.value if hasattr(latest_mission.status, "value") else str(latest_mission.status or "")).upper() if latest_mission else ""
+    is_incident_active = (
+        latest_mission is not None
+        and ms_val in ("INCIDENT_RETURN", "INCIDENT RETURN")
+        and (latest_mission.arrival_confirmed_at is None or latest_mission.handling_status is not None)
+    )
     order_resp.can_create_mission = bool(
         origin_pkg.received
         and order.status == OrderStatus.AT_HUB 
+        and not is_incident_active
         and (latest_mission is None or ms_val in FAILED_MISSION_STATUS_STRINGS or order.replan_required_at is not None)
     )
 

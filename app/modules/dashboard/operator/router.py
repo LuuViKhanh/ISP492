@@ -69,7 +69,8 @@ async def operator_dashboard(
 
     status_breakdown: dict[str, int] = {}
     for m in missions:
-        key = m.status.value if m.status else "UNKNOWN"
+        val = m.status.value if m.status else "UNKNOWN"
+        key = MissionStatus.FLYING.value if val in ("In Progress", "Active mission") else val
         status_breakdown[key] = status_breakdown.get(key, 0) + 1
 
     active_flights = sum(1 for m in missions if m.status in _ACTIVE)

@@ -121,6 +121,26 @@ async def _trigger_incident(
             mission.status = MissionStatus.INCIDENT_RETURN
             mission.handling_status = HandlingStatus.INCOMING
 
+            # Tạo bản ghi Incident nếu chưa có
+            inc_res = await db.execute(
+                select(Incident).where(Incident.mission_id == str(mission_id)).limit(1)
+            )
+            existing_inc = inc_res.scalars().first()
+            if not existing_inc:
+                sev_enum = IncidentSeverity.HIGH if str(severity).lower() == "high" else (
+                    IncidentSeverity.LOW if str(severity).lower() == "low" else IncidentSeverity.MEDIUM
+                )
+                db.add(Incident(
+                    mission_id=str(mission_id),
+                    drone_id=str(mission.drone_id) if mission.drone_id else None,
+                    reporter_id=mission.operator_id,
+                    severity=sev_enum,
+                    description=f"[FAILSAFE RTH] Sự cố tự động phát hiện tại ({incident_lat:.5f}, {incident_lng:.5f}) — Drone quay về {from_hub.name}.",
+                    status=IncidentStatus.OPEN,
+                    reported_at=now,
+                    requires_technical_inspection=True,
+                ))
+
             # 2. Gửi Notification cho tất cả Operators (theo dõi chú ý trên Live-tracking, không tạo rác trong tab Incidents)
             try:
                 operator_ids = await get_operator_ids(db)
@@ -265,8 +285,11 @@ async def simulate_mission_flight(mission_id: str) -> None:
                 print(f"[SIMULATOR] Mission {mission_id} not found, aborting.")
                 return
 
-            # Mission phải đang FLYING mới chạy simulator
-            if mission.status != MissionStatus.FLYING:
+            # Mission phải đang FLYING (hoặc tự động chuẩn hóa về FLYING) mới chạy simulator
+            if mission.status in (MissionStatus.IN_PROGRESS, MissionStatus.ACTIVE_MISSION):
+                mission.status = MissionStatus.FLYING
+                await db.commit()
+            elif mission.status != MissionStatus.FLYING:
                 print(f"[SIMULATOR] Mission {mission_id} không ở trạng thái FLYING ({mission.status}), aborting.")
                 return
 
@@ -393,10 +416,17 @@ async def simulate_mission_flight(mission_id: str) -> None:
 
         async with AsyncSessionLocal() as db:
             try:
-                # Kiểm tra mission còn FLYING không (có thể bị cancel)
+                # Kiểm tra mission còn FLYING không (có thể bị cancel hoặc kích hoạt failsafe incident)
                 mission = await db.get(Mission, mission_id)
-                if not mission or mission.status != MissionStatus.FLYING:
-                    print(f"[SIMULATOR] Mission {mission_id} không còn FLYING, dừng simulator.")
+                if not mission:
+                    return
+                if mission.status == MissionStatus.INCIDENT_RETURN and mission.arrived_at is None:
+                    print(f"[SIMULATOR] Mission {mission_id} đã kích hoạt INCIDENT_RETURN, bắt đầu bay quay về trạm.")
+                    return_waypoints = _interpolate(lat, lng, from_hub.latitude, from_hub.longitude, max(5, (total_points - idx)))
+                    await _fly_incident_return(mission_id, return_waypoints, from_hub, active_battery_id, active_drone_id, battery_capacity_wh, current_battery_pct)
+                    return
+                elif mission.status != MissionStatus.FLYING:
+                    print(f"[SIMULATOR] Mission {mission_id} không còn FLYING ({mission.status}), dừng simulator.")
                     return
 
                 # Fetch weather theo tọa độ điểm này
@@ -497,7 +527,11 @@ async def simulate_mission_flight(mission_id: str) -> None:
                 next_leg = next_leg_res.scalars().first()
 
                 # Drone đáp xuống hub → set AT_HUB để Technician thấy nút confirm
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
                 mission.handling_status = HandlingStatus.AT_HUB
+                mission.arrived_at = now
+                leg.status = MissionLegStatus.COMPLETED
+                leg.completed_at = now
                 if to_hub:
                     drone = await db.get(Drone, mission.drone_id) if mission.drone_id else None
                     if drone:

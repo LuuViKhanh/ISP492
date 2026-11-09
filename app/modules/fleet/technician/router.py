@@ -106,6 +106,8 @@ async def get_incoming_drones(
             .where(
                 Mission.status.in_([
                     MissionStatus.FLYING,
+                    MissionStatus.IN_PROGRESS,
+                    MissionStatus.ACTIVE_MISSION,
                     MissionStatus.INCIDENT_RETURN,
                     MissionStatus.ARRIVAL_COMPLETED,
                     MissionStatus.MISSION_COMPLETED,
@@ -170,7 +172,7 @@ async def get_incoming_drones(
                 mission_state = "Incident"
             elif m_status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED):
                 mission_state = "Completed"
-            elif m_status == MissionStatus.FLYING:
+            elif m_status in (MissionStatus.FLYING, MissionStatus.IN_PROGRESS, MissionStatus.ACTIVE_MISSION):
                 mission_state = "Flying"
             else:
                 mission_state = None
@@ -232,10 +234,16 @@ async def get_transit_history(
             .outerjoin(Battery, Mission.battery_id == Battery.id)
             .outerjoin(Order, Mission.order_id == Order.id)
             .where(
-                Mission.status.in_([
-                    MissionStatus.ARRIVAL_COMPLETED,
-                    MissionStatus.MISSION_COMPLETED,
-                ])
+                or_(
+                    Mission.status.in_([
+                        MissionStatus.ARRIVAL_COMPLETED,
+                        MissionStatus.MISSION_COMPLETED,
+                    ]),
+                    and_(
+                        Mission.status == MissionStatus.INCIDENT_RETURN,
+                        Mission.handling_status.is_(None),
+                    )
+                )
             )
         )
 
@@ -340,11 +348,21 @@ async def confirm_arrival(
 
     # Nếu mission đã xử lý hoàn tất trước đó (handling_status đã được xóa và drone đã được tiếp nhận)
     if (
-        mission.status in [MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED]
+        mission.status in [MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED, MissionStatus.INCIDENT_RETURN]
         and mission.handling_status is None
-        and mission.arrived_at is not None
+        and mission.arrival_confirmed_at is not None
     ):
         raise HTTPException(status_code=400, detail="Arrival already confirmed")
+
+    # BẮT BUỘC: Đảm bảo Drone đã thực sự hạ cánh xuống Hub trước khi cho phép Confirm
+    if (
+        mission.handling_status == HandlingStatus.INCOMING
+        or (mission.arrived_at is None and mission.handling_status not in [HandlingStatus.AT_HUB, HandlingStatus.CANNOT_CONTINUE])
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Drone vẫn đang trong hành trình bay hoặc đang quay về trạm (chưa hạ cánh). Vui lòng đợi Drone hạ cánh hoàn tất xuống Hub trước khi bấm Confirm!"
+        )
 
     now = get_vn_naive_datetime()
     tech_hub_id = int(user.hub_id) if (user.hub_id and str(user.hub_id).isdigit()) else None
@@ -388,7 +406,9 @@ async def confirm_arrival(
     # ── 1. Cập nhật Mission (rời danh sách Transit đang hoạt động sang History) ──
     if not mission.arrived_at:
         mission.arrived_at = now       # ghi nhận thời điểm drone đáp hub
-    if mission.status != MissionStatus.MISSION_COMPLETED:
+    if is_incident_flight:
+        mission.status = MissionStatus.INCIDENT_RETURN
+    elif mission.status != MissionStatus.MISSION_COMPLETED:
         mission.status = MissionStatus.ARRIVAL_COMPLETED
     mission.end_time = mission.end_time or now
     mission.handling_status = None     # xóa handling_status để không còn nằm trong /incoming (Transit)
@@ -412,7 +432,8 @@ async def confirm_arrival(
         if receiving_hub_id:
             drone.current_hub_id = receiving_hub_id
 
-        drone.status = DroneStatus.MAINTENANCE if (has_open_incident or has_issue_flag) else DroneStatus.AVAILABLE
+        drone.status = DroneStatus.MAINTENANCE if is_incident_flight else DroneStatus.AVAILABLE
+        drone.battery_level_pct = None  # Đã tháo pin ra khỏi drone để kiểm tra/sạc
 
         # Đảm bảo có MaintenanceAlert ở trạng thái Pending khi drone chuyển sang Maintenance
         if drone.status == DroneStatus.MAINTENANCE:
@@ -483,9 +504,13 @@ async def confirm_arrival(
                     hub_name = hub.name if hub else None
 
                 if is_incident_flight:
-                    # Kiện hàng quay lại Hub gốc do sự cố chuyến bay
+                    # Kiện hàng quay lại Hub do sự cố chuyến bay
                     order_obj.status = OrderStatus.AT_HUB
                     order_obj.replan_required_at = now
+                    order_obj.origin_received_at = order_obj.origin_received_at or now
+                    order_obj.origin_received_by = str(user.id)
+                    if receiving_hub_id:
+                        order_obj.origin_hub_id = receiving_hub_id
                     order_obj.updated_at = now
 
                     # Thông báo cho Customer: đơn hàng tạm hoãn do sự cố kỹ thuật và đang được sắp xếp lại
@@ -1459,6 +1484,11 @@ async def confirm_relay_arrival(
     from app.modules.fleet.models import DroneStatus, batteries_status
 
     mission = await _resolve_mission(db, mission_id)
+    if mission.handling_status == HandlingStatus.INCOMING:
+        raise HTTPException(
+            status_code=400,
+            detail="Drone vẫn đang bay trên chặng trung chuyển (Incoming), chưa hạ cánh xuống Relay Hub. Vui lòng đợi Drone đáp xuống trạm trước khi bấm Confirm!"
+        )
     if mission.status not in [
         MissionStatus.IN_PROGRESS,
         MissionStatus.FLYING,

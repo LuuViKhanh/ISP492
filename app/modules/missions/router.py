@@ -67,9 +67,12 @@ async def get_mission_status(
         select(Mission.status, func.count().label("count")).group_by(Mission.status)
     )
     rows = result.all()
-    return MissionStatusResponse(
-        status_breakdown={row.status.value: row.count for row in rows}
-    )
+    breakdown: dict[str, int] = {}
+    for row in rows:
+        val = row.status.value if hasattr(row.status, "value") else str(row.status or "")
+        key = MissionStatus.FLYING.value if val in ("In Progress", "Active mission") else val
+        breakdown[key] = breakdown.get(key, 0) + row.count
+    return MissionStatusResponse(status_breakdown=breakdown)
 
 
 @router.get("/dashboard/active-flights", response_model=ActiveFlightsResponse)
@@ -83,7 +86,13 @@ async def get_active_flights(
     Dành cho Operator hoặc Admin.
     """
     result = await db.execute(
-        select(Mission).where(Mission.status == MissionStatus.FLYING)
+        select(Mission).where(
+            Mission.status.in_([
+                MissionStatus.FLYING,
+                MissionStatus.IN_PROGRESS,
+                MissionStatus.ACTIVE_MISSION,
+            ])
+        )
     )
     missions = result.scalars().all()
     return ActiveFlightsResponse(

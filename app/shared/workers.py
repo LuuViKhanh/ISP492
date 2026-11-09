@@ -83,7 +83,13 @@ async def run_telemetry_signal_loss_watcher(db: AsyncSession):
     
     # Tìm các chuyến bay đang bay
     flying_missions_result = await db.execute(
-        select(Mission).where(Mission.status == MissionStatus.FLYING)
+        select(Mission).where(
+            Mission.status.in_([
+                MissionStatus.FLYING,
+                MissionStatus.IN_PROGRESS,
+                MissionStatus.ACTIVE_MISSION,
+            ])
+        )
     )
     flying_missions = flying_missions_result.scalars().all()
     

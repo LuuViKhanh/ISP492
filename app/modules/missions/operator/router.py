@@ -155,7 +155,11 @@ async def get_live_tracking(
     flying_result = await db.execute(
         select(Mission).where(
             or_(
-                Mission.status == MissionStatus.FLYING,
+                Mission.status.in_([
+                    MissionStatus.FLYING,
+                    MissionStatus.IN_PROGRESS,
+                    MissionStatus.ACTIVE_MISSION,
+                ]),
                 and_(
                     Mission.status == MissionStatus.INCIDENT_RETURN,
                     Mission.arrived_at.is_(None),
@@ -2509,6 +2513,9 @@ async def build_missions_response_list(
     responses: list[MissionResponse] = []
     for m in missions:
         m_dict = {c.name: getattr(m, c.name) for c in m.__table__.columns}
+        # Chuẩn hóa trạng thái đang bay về MissionStatus.FLYING để FE hiển thị thống nhất
+        if m.status in (MissionStatus.IN_PROGRESS, MissionStatus.ACTIVE_MISSION):
+            m_dict["status"] = MissionStatus.FLYING
         payload = float(m.payload_weight or 0.0)
         drone_obj = drone_by_id.get(m.drone_id) if m.drone_id else None
 
@@ -3108,6 +3115,23 @@ async def create_mission(
         raise HTTPException(
             status_code=400,
             detail="Đơn hàng này đã có nhiệm vụ bay đang được lên lịch hoặc đang thực hiện"
+        )
+
+    # Chặn nếu có Mission sự cố trước đó nhưng Technician chưa confirm thu hồi kiện hàng tại Hub
+    unconfirmed_incident_res = await db.execute(
+        select(Mission).where(
+            Mission.order_id == order.id,
+            Mission.status == MissionStatus.INCIDENT_RETURN,
+            or_(
+                Mission.arrival_confirmed_at.is_(None),
+                Mission.handling_status.is_not(None),
+            )
+        )
+    )
+    if unconfirmed_incident_res.scalars().first():
+        raise HTTPException(
+            status_code=400,
+            detail="Chuyến bay trước của đơn hàng gặp sự cố (Incident) nhưng Technician chưa xác nhận thu hồi kiện hàng tại Hub. Vui lòng đợi Technician bấm Confirm Arrival xác nhận thu hồi hàng trước khi lập Mission thay thế."
         )
 
     drone = await db.get(Drone, request.droneId)
@@ -3796,7 +3820,10 @@ async def emergency_land(
 
     # ── 2. Chuyển mission → INCIDENT_RETURN ─────────────────────────────────
     mission.status = MissionStatus.INCIDENT_RETURN
+    mission.handling_status = HandlingStatus.CANNOT_CONTINUE
+    mission.arrived_at = now
     mission.end_time = now
+    mission.arrival_confirmed_at = None
 
     # ── 3. Tạo Incident HIGH severity ───────────────────────────────────────
     incident = Incident(
@@ -4207,7 +4234,10 @@ async def execute_mission_failsafe(
     # 1. Xử lý hạ cánh khẩn cấp (EMERGENCY_LAND)
     if body.action == "EMERGENCY_LAND":
         mission.status = MissionStatus.INCIDENT_RETURN
+        mission.handling_status = HandlingStatus.CANNOT_CONTINUE
+        mission.arrived_at = now
         mission.end_time = now
+        mission.arrival_confirmed_at = None
 
         incident = Incident(
             mission_id=mission.id,
