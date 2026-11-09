@@ -656,3 +656,333 @@ async def finance_report(
             "profit_margin_pct": round(net / total_revenue * 100, 1) if total_revenue > 0 else None,
         },
     }
+
+
+# ══════════════════════════════════════════════════════════════════
+# HUB-LEVEL SUPPLY MANAGEMENT
+# Quản lý spare part tại từng Hub cụ thể
+# ══════════════════════════════════════════════════════════════════
+
+class AdjustBody(BaseModel):
+    part_category_id: int
+    quantity_delta: int          # dương = thêm, âm = bớt
+    reason: SupplyTxnReason = SupplyTxnReason.ADJUST
+    note: Optional[str] = None
+
+
+class DiscardBody(BaseModel):
+    part_category_id: int
+    quantity: int                # số lượng hủy bỏ (phải > 0)
+    note: Optional[str] = None  # lý do hủy (vỡ, hỏng, hết hạn...)
+
+
+class ThresholdBody(BaseModel):
+    part_category_id: int
+    min_stock_threshold: int
+
+
+class BulkReceiveItem(BaseModel):
+    part_category_id: int
+    quantity: int
+    unit_cost_override: Optional[float] = None
+    note: Optional[str] = None
+
+
+class BulkReceiveBody(BaseModel):
+    hub_id: int
+    items: List[BulkReceiveItem]
+
+
+@router.get("/hubs/{hub_id}", summary="Chi tiết vật tư tại một Hub")
+async def get_hub_supplies_detail(
+    hub_id: int,
+    low_stock_only: bool = Query(False),
+    category_type: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_async_db),
+    user: CurrentUser = Depends(allow_admin),
+):
+    """
+    Xem toàn bộ spare part tại Hub cụ thể, kèm thông tin tồn kho,
+    ngưỡng cảnh báo và giá từng loại.
+    """
+    hub = await db.get(Hub, hub_id)
+    if not hub:
+        raise HTTPException(status_code=404, detail="Hub không tồn tại.")
+
+    q = (
+        select(HubSupply, PartCategory)
+        .join(PartCategory, HubSupply.part_category_id == PartCategory.id)
+        .where(HubSupply.hub_id == hub_id)
+        .order_by(PartCategory.category_type, PartCategory.name)
+    )
+    if low_stock_only:
+        q = q.where(HubSupply.quantity <= HubSupply.min_stock_threshold)
+    if category_type:
+        q = q.where(PartCategory.category_type == category_type)
+
+    rows = (await db.execute(q)).all()
+
+    # Tổng giá trị tồn kho tại Hub
+    total_value = sum(
+        (cat.unit_cost or 0) * inv.quantity for inv, cat in rows
+    )
+
+    return {
+        "hub_id": hub.id,
+        "hub_name": hub.name,
+        "hub_address": hub.address,
+        "total_sku": len(rows),
+        "low_stock_count": sum(1 for inv, _ in rows if inv.quantity <= inv.min_stock_threshold),
+        "estimated_stock_value": round(total_value, 0),
+        "supplies": [
+            {
+                "id": inv.id,
+                "part_category_id": cat.id,
+                "part_name": cat.name,
+                "category_type": cat.category_type.value if hasattr(cat.category_type, "value") else str(cat.category_type),
+                "compatible_drone_models": cat.compatible_drone_models,
+                "quantity": inv.quantity,
+                "min_stock_threshold": inv.min_stock_threshold,
+                "is_low_stock": inv.quantity <= inv.min_stock_threshold,
+                "unit_cost": cat.unit_cost,
+                "stock_value": round((cat.unit_cost or 0) * inv.quantity, 0),
+                "updated_at": inv.updated_at.isoformat() if inv.updated_at else None,
+            }
+            for inv, cat in rows
+        ],
+    }
+
+
+@router.post("/hubs/{hub_id}/adjust", summary="Điều chỉnh số lượng vật tư tại Hub (kiểm kê thực tế)")
+async def adjust_hub_supply(
+    hub_id: int,
+    body: AdjustBody,
+    db: AsyncSession = Depends(get_async_db),
+    user: CurrentUser = Depends(allow_admin),
+):
+    """
+    Điều chỉnh số lượng thực tế sau khi kiểm kê.
+    - `quantity_delta` > 0: tìm thấy thêm / nhập bổ sung
+    - `quantity_delta` < 0: thực tế ít hơn hồ sơ / mất mát
+    """
+    hub = await db.get(Hub, hub_id)
+    if not hub:
+        raise HTTPException(status_code=404, detail="Hub không tồn tại.")
+    cat = await db.get(PartCategory, body.part_category_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="Danh mục linh kiện không tồn tại.")
+
+    now = datetime.now(timezone.utc)
+    inv = (await db.execute(
+        select(HubSupply).where(and_(
+            HubSupply.hub_id == hub_id,
+            HubSupply.part_category_id == body.part_category_id,
+        ))
+    )).scalar_one_or_none()
+
+    if not inv:
+        if body.quantity_delta < 0:
+            raise HTTPException(status_code=400, detail="Hub chưa có mục linh kiện này, không thể trừ.")
+        inv = HubSupply(
+            hub_id=hub_id, part_category_id=body.part_category_id,
+            quantity=body.quantity_delta, min_stock_threshold=2, updated_at=now,
+        )
+        db.add(inv)
+    else:
+        new_qty = inv.quantity + body.quantity_delta
+        if new_qty < 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Không đủ số lượng. Hiện có {inv.quantity}, điều chỉnh -{abs(body.quantity_delta)} = âm.",
+            )
+        inv.quantity = new_qty
+        inv.updated_at = now
+
+    db.add(SupplyTransaction(
+        hub_id=hub_id, part_category_id=body.part_category_id,
+        quantity_delta=body.quantity_delta, reason=body.reason,
+        performed_by=user.id,
+        note=f"[Admin] Điều chỉnh kiểm kê {'+' if body.quantity_delta > 0 else ''}{body.quantity_delta}x {cat.name}. "
+             + (body.note or ""),
+        created_at=now,
+    ))
+    await db.commit()
+    return {
+        "message": f"Đã điều chỉnh {'+' if body.quantity_delta > 0 else ''}{body.quantity_delta}x {cat.name} tại hub #{hub_id}.",
+        "new_quantity": inv.quantity,
+        "hub_id": hub_id,
+    }
+
+
+@router.post("/hubs/{hub_id}/discard", summary="Hủy bỏ linh kiện hỏng / hết hạn tại Hub")
+async def discard_hub_supply(
+    hub_id: int,
+    body: DiscardBody,
+    db: AsyncSession = Depends(get_async_db),
+    user: CurrentUser = Depends(allow_admin),
+):
+    """
+    Ghi nhận linh kiện hỏng, vỡ hoặc hết hạn sử dụng → trừ khỏi tồn kho,
+    ghi log lý do.
+    """
+    if body.quantity < 1:
+        raise HTTPException(status_code=400, detail="Số lượng hủy tối thiểu là 1.")
+
+    hub = await db.get(Hub, hub_id)
+    if not hub:
+        raise HTTPException(status_code=404, detail="Hub không tồn tại.")
+    cat = await db.get(PartCategory, body.part_category_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="Danh mục linh kiện không tồn tại.")
+
+    inv = (await db.execute(
+        select(HubSupply).where(and_(
+            HubSupply.hub_id == hub_id,
+            HubSupply.part_category_id == body.part_category_id,
+        ))
+    )).scalar_one_or_none()
+
+    if not inv or inv.quantity < body.quantity:
+        avail = inv.quantity if inv else 0
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tồn kho chỉ còn {avail} đơn vị, không đủ để hủy {body.quantity}.",
+        )
+
+    now = datetime.now(timezone.utc)
+    inv.quantity -= body.quantity
+    inv.updated_at = now
+
+    db.add(SupplyTransaction(
+        hub_id=hub_id, part_category_id=body.part_category_id,
+        quantity_delta=-body.quantity, reason=SupplyTxnReason.DISCARD,
+        performed_by=user.id,
+        note=f"[Admin] Hủy {body.quantity}x {cat.name} tại hub #{hub_id}. "
+             + (body.note or "Linh kiện hỏng / hết hạn."),
+        created_at=now,
+    ))
+    await db.commit()
+    return {
+        "message": f"Đã hủy {body.quantity}x {cat.name} tại hub #{hub_id}.",
+        "remaining_quantity": inv.quantity,
+    }
+
+
+@router.patch("/hubs/{hub_id}/threshold", summary="Cập nhật ngưỡng cảnh báo tồn kho tại Hub")
+async def set_hub_threshold(
+    hub_id: int,
+    body: ThresholdBody,
+    db: AsyncSession = Depends(get_async_db),
+    user: CurrentUser = Depends(allow_admin),
+):
+    """
+    Cập nhật min_stock_threshold cho một loại linh kiện tại Hub.
+    Khi quantity <= threshold → hiện cảnh báo low_stock.
+    """
+    if body.min_stock_threshold < 0:
+        raise HTTPException(status_code=400, detail="Ngưỡng tối thiểu phải >= 0.")
+
+    inv = (await db.execute(
+        select(HubSupply).where(and_(
+            HubSupply.hub_id == hub_id,
+            HubSupply.part_category_id == body.part_category_id,
+        ))
+    )).scalar_one_or_none()
+
+    if not inv:
+        # Tạo mới entry với qty=0 nếu chưa tồn tại
+        inv = HubSupply(
+            hub_id=hub_id, part_category_id=body.part_category_id,
+            quantity=0, min_stock_threshold=body.min_stock_threshold,
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(inv)
+    else:
+        inv.min_stock_threshold = body.min_stock_threshold
+        inv.updated_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    return {
+        "message": f"Đã cập nhật ngưỡng cảnh báo = {body.min_stock_threshold}.",
+        "hub_id": hub_id,
+        "part_category_id": body.part_category_id,
+        "min_stock_threshold": body.min_stock_threshold,
+        "current_quantity": inv.quantity,
+        "is_low_stock": inv.quantity <= body.min_stock_threshold,
+    }
+
+
+@router.post("/hubs/{hub_id}/bulk-receive", summary="Nhập nhiều loại vật tư cùng lúc vào Hub")
+async def bulk_receive(
+    hub_id: int,
+    body: BulkReceiveBody,
+    db: AsyncSession = Depends(get_async_db),
+    user: CurrentUser = Depends(allow_admin),
+):
+    """
+    Nhập nhiều loại linh kiện từ nhà cung cấp trong một request.
+    Hữu ích khi nhận shipment gồm nhiều mặt hàng cùng lúc.
+    """
+    if not body.items:
+        raise HTTPException(status_code=400, detail="Danh sách mặt hàng không được rỗng.")
+
+    hub = await db.get(Hub, hub_id)
+    if not hub:
+        raise HTTPException(status_code=404, detail="Hub không tồn tại.")
+
+    now = datetime.now(timezone.utc)
+    results = []
+    total_cost = 0.0
+
+    for item in body.items:
+        if item.quantity < 1:
+            raise HTTPException(status_code=400, detail=f"Số lượng cho part #{item.part_category_id} phải >= 1.")
+        cat = await db.get(PartCategory, item.part_category_id)
+        if not cat:
+            raise HTTPException(status_code=404, detail=f"Danh mục #{item.part_category_id} không tồn tại.")
+
+        inv = (await db.execute(
+            select(HubSupply).where(and_(
+                HubSupply.hub_id == hub_id,
+                HubSupply.part_category_id == item.part_category_id,
+            ))
+        )).scalar_one_or_none()
+
+        if inv:
+            inv.quantity += item.quantity
+            inv.updated_at = now
+        else:
+            inv = HubSupply(
+                hub_id=hub_id, part_category_id=item.part_category_id,
+                quantity=item.quantity, min_stock_threshold=2, updated_at=now,
+            )
+            db.add(inv)
+
+        unit_cost = item.unit_cost_override or cat.unit_cost or 0
+        line_cost = unit_cost * item.quantity
+        total_cost += line_cost
+
+        db.add(SupplyTransaction(
+            hub_id=hub_id, part_category_id=item.part_category_id,
+            quantity_delta=item.quantity, reason=SupplyTxnReason.RECEIVE,
+            performed_by=user.id,
+            note=f"[Bulk] Nhập {item.quantity}x {cat.name}. Đơn giá: {unit_cost:,.0f} VNĐ. "
+                 + (item.note or ""),
+            created_at=now,
+        ))
+        results.append({
+            "part_category_id": cat.id,
+            "part_name": cat.name,
+            "quantity_added": item.quantity,
+            "new_quantity": inv.quantity,
+            "line_cost": round(line_cost, 0),
+        })
+
+    await db.commit()
+    return {
+        "message": f"Nhập thành công {len(results)} loại linh kiện vào hub #{hub_id}.",
+        "hub_id": hub_id,
+        "hub_name": hub.name,
+        "items": results,
+        "total_cost": round(total_cost, 0),
+    }
