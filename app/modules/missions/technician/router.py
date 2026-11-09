@@ -78,10 +78,13 @@ def get_technician_missions():
 
 async def get_mission_by_order_id(db: AsyncSession, orderId: str):
     clean_id = (orderId or "").strip()
-    # orderId could be a mission ID or an order ID. We check both, prioritizing latest mission.
+    # orderId could be a mission ID or an order ID. We check both, prioritizing latest mission (loại trừ mission đã CANCELLED).
     result = await db.execute(
         select(Mission)
-        .where((Mission.order_id == clean_id) | (Mission.id == clean_id))
+        .where(
+            ((Mission.order_id == clean_id) | (Mission.id == clean_id)),
+            Mission.status != MissionStatus.CANCELLED,
+        )
         .order_by(Mission.id.desc())
     )
     mission = result.scalars().first()
@@ -90,8 +93,11 @@ async def get_mission_by_order_id(db: AsyncSession, orderId: str):
         result = await db.execute(
             select(Mission)
             .where(
-                (func.upper(func.trim(Mission.order_id)) == clean_id.upper())
-                | (func.upper(func.trim(Mission.id)) == clean_id.upper())
+                (
+                    (func.upper(func.trim(Mission.order_id)) == clean_id.upper())
+                    | (func.upper(func.trim(Mission.id)) == clean_id.upper())
+                ),
+                Mission.status != MissionStatus.CANCELLED,
             )
             .order_by(Mission.id.desc())
         )
@@ -551,6 +557,11 @@ async def prepare_battery_for_delivery(
     if hub_id:
         battery.current_hub_id = hub_id
 
+    if mission.drone_id:
+        drone = await db.get(Drone, mission.drone_id)
+        if drone and battery.charge_level_pct is not None:
+            drone.battery_level_pct = battery.charge_level_pct
+
     # Đồng bộ battery_id cho chặng đầu tiên (sequence_no = 1) của MissionLeg
     from app.modules.missions.models import MissionLeg
     leg1_res = await db.execute(
@@ -627,10 +638,7 @@ async def get_confirmations(
         ).where(
             Mission.arrived_at.is_not(None),
             Order.destination_received_at.is_(None),  # ← Khách chưa tới nhận
-            Mission.status.in_([
-                MissionStatus.ARRIVAL_COMPLETED,
-                MissionStatus.INCIDENT_RETURN,
-            ])
+            Mission.status == MissionStatus.ARRIVAL_COMPLETED
         )
         if user.hub_id and str(user.hub_id).isdigit():
             from sqlalchemy import or_
@@ -675,6 +683,12 @@ async def confirm_pickup(
     
     mission = await get_mission_by_order_id(db, orderId)
     
+    if mission.status == MissionStatus.INCIDENT_RETURN:
+        raise HTTPException(
+            status_code=400,
+            detail="Chuyến bay gặp sự cố (Incident), kiện hàng chưa được giao tới Hub đích nên không thể xác nhận khách nhận hàng."
+        )
+
     if mission.arrived_at is None:
         raise HTTPException(status_code=400, detail="Mission has not arrived yet")
         
@@ -914,16 +928,13 @@ async def get_sla_report(
     except:
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
     
-    # Lấy orders trong khoảng thời gian
+    # Lấy orders trong khoảng thời gian (loại trừ các đơn CANCELLED)
     orders_res = await db.execute(
         select(OrderModel).where(
             and_(
                 OrderModel.created_at >= start,
                 OrderModel.created_at <= end,
-                OrderModel.status.in_([
-                    OrderStatus.DELIVERED_TO_HUB,
-                    OrderStatus.CANCELLED
-                ])
+                OrderModel.status == OrderStatus.DELIVERED_TO_HUB,
             )
         )
     )
@@ -952,7 +963,7 @@ async def get_sla_report(
         "metrics": {
             "total_orders": total,
             "completed_orders": completed,
-            "cancelled_orders": len([o for o in orders if o.status == OrderStatus.CANCELLED]),
+            "cancelled_orders": 0,
             "on_time_orders": on_time,
             "sla_compliance_percent": round(sla_compliance, 2),
             "avg_delivery_hours": round(avg_duration, 2),

@@ -117,7 +117,12 @@ def calculate_delivery_cost(
 
 async def _latest_mission_for_order(db: AsyncSession, order_id: str) -> Optional[Mission]:
     res = await db.execute(
-        select(Mission).where(Mission.order_id == order_id).order_by(Mission.id.desc())
+        select(Mission)
+        .where(
+            Mission.order_id == order_id,
+            Mission.status != MissionStatus.CANCELLED,
+        )
+        .order_by(Mission.id.desc())
     )
     return res.scalars().first()
 
@@ -434,7 +439,7 @@ async def delete_order(
     - Nếu đã có Mission hoặc đã thanh toán → không cho xóa.
     """
     order = await db.get(Order, order_id)
-    if not order:
+    if not order or order.status == OrderStatus.CANCELLED:
         raise HTTPException(status_code=404, detail="Order not found")
 
     if str(order.customer_id) != str(current_user.id):
@@ -489,13 +494,20 @@ async def track_delivery(
     điểm đầu/cuối tuyến, đường đã bay (polyline) và số checkpoint đã qua.
     """
     order = await db.get(Order, order_id)
-    if not order:
+    if not order or order.status == OrderStatus.CANCELLED:
         raise HTTPException(status_code=404, detail="Order not found")
     if order.customer_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not your order")
 
     mission = await _latest_mission_for_order(db, order_id)
     code, label = compute_delivery_status(order, mission)
+
+    current_mission_status = None
+    if mission:
+        if mission.status in (MissionStatus.FLYING, MissionStatus.IN_PROGRESS, MissionStatus.ACTIVE_MISSION):
+            current_mission_status = MissionStatus.FLYING.value
+        else:
+            current_mission_status = mission.status.value if hasattr(mission.status, "value") else str(mission.status)
 
     resp = TrackingResponse(
         order_id=order.id,
@@ -504,7 +516,7 @@ async def track_delivery(
         eta=order.estimated_window_end,
         estimated_window_start=order.estimated_window_start,
         mission_id=mission.id if mission else None,
-        mission_status=mission.status.value if mission else None,
+        mission_status=current_mission_status,
         drone_id=mission.drone_id if mission else None,
     )
 
@@ -658,7 +670,7 @@ async def get_mission_report(
     dự đoán vs thực tế (năng lượng/thời lượng), thông tin drone và trạng thái cuối.
     """
     order = await db.get(Order, order_id)
-    if not order:
+    if not order or order.status == OrderStatus.CANCELLED:
         raise HTTPException(status_code=404, detail="Order not found")
     if order.customer_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not your order")

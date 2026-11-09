@@ -19,13 +19,14 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.database.db import AsyncSessionLocal
 from app.modules.missions.models import (
     Mission, MissionStatus, MissionLeg, MissionLegStatus,
     TelemetryLog, HandlingStatus, Incident, IncidentStatus, IncidentSeverity,
 )
+from app.modules.ai_predictions.models import AIPrediction
 from app.modules.system.models import Hub
 from app.modules.fleet.models import Drone, Battery
 
@@ -120,6 +121,26 @@ async def _trigger_incident(
             mission.status = MissionStatus.INCIDENT_RETURN
             mission.handling_status = HandlingStatus.INCOMING
 
+            # Tạo bản ghi Incident nếu chưa có
+            inc_res = await db.execute(
+                select(Incident).where(Incident.mission_id == str(mission_id)).limit(1)
+            )
+            existing_inc = inc_res.scalars().first()
+            if not existing_inc:
+                sev_enum = IncidentSeverity.HIGH if str(severity).lower() == "high" else (
+                    IncidentSeverity.LOW if str(severity).lower() == "low" else IncidentSeverity.MEDIUM
+                )
+                db.add(Incident(
+                    mission_id=str(mission_id),
+                    drone_id=str(mission.drone_id) if mission.drone_id else None,
+                    reporter_id=mission.operator_id,
+                    severity=sev_enum,
+                    description=f"[FAILSAFE RTH] Sự cố tự động phát hiện tại ({incident_lat:.5f}, {incident_lng:.5f}) — Drone quay về {from_hub.name}.",
+                    status=IncidentStatus.OPEN,
+                    reported_at=now,
+                    requires_technical_inspection=True,
+                ))
+
             # 2. Gửi Notification cho tất cả Operators (theo dõi chú ý trên Live-tracking, không tạo rác trong tab Incidents)
             try:
                 operator_ids = await get_operator_ids(db)
@@ -186,6 +207,7 @@ async def _fly_incident_return(
                     latitude=lat, longitude=lng,
                     altitude=altitude, speed=speed,
                     battery_voltage=battery_volt,
+                    battery_pct=float(new_charge_pct),
                     energy_consumed_wh=energy_wh,
                     wind_speed=round(3.0 + random.uniform(-0.5, 0.5), 2),
                     weather_temperature=weather.temperature if weather else None,
@@ -263,8 +285,11 @@ async def simulate_mission_flight(mission_id: str) -> None:
                 print(f"[SIMULATOR] Mission {mission_id} not found, aborting.")
                 return
 
-            # Mission phải đang FLYING mới chạy simulator
-            if mission.status != MissionStatus.FLYING:
+            # Mission phải đang FLYING (hoặc tự động chuẩn hóa về FLYING) mới chạy simulator
+            if mission.status in (MissionStatus.IN_PROGRESS, MissionStatus.ACTIVE_MISSION):
+                mission.status = MissionStatus.FLYING
+                await db.commit()
+            elif mission.status != MissionStatus.FLYING:
                 print(f"[SIMULATOR] Mission {mission_id} không ở trạng thái FLYING ({mission.status}), aborting.")
                 return
 
@@ -311,7 +336,7 @@ async def simulate_mission_flight(mission_id: str) -> None:
             active_battery_id = leg.battery_id or mission.battery_id
             active_drone_id = mission.drone_id
             battery_capacity_wh = 150.0
-            current_battery_pct = 100.0
+            initial_battery_pct = 100.0
 
             if active_battery_id:
                 bat_init = await db.get(Battery, active_battery_id)
@@ -319,17 +344,49 @@ async def simulate_mission_flight(mission_id: str) -> None:
                     if bat_init.capacity_wh and bat_init.capacity_wh > 0:
                         battery_capacity_wh = float(bat_init.capacity_wh)
                     if bat_init.charge_level_pct is not None:
-                        current_battery_pct = float(bat_init.charge_level_pct)
+                        initial_battery_pct = float(bat_init.charge_level_pct)
             elif active_drone_id:
                 dr_init = await db.get(Drone, active_drone_id)
                 if dr_init and dr_init.battery_level_pct is not None:
-                    current_battery_pct = float(dr_init.battery_level_pct)
+                    initial_battery_pct = float(dr_init.battery_level_pct)
+
+            current_battery_pct = initial_battery_pct
+
+            # Lấy planned_leg_energy_wh từ AIPrediction hoặc predict_flight_energy
+            planned_leg_energy_wh = None
+            ai_pred_res = await db.execute(
+                select(AIPrediction)
+                .where(AIPrediction.mission_id == str(mission_id))
+                .order_by(AIPrediction.id.desc())
+                .limit(1)
+            )
+            ai_pred = ai_pred_res.scalars().first()
+            if ai_pred and ai_pred.estimated_energy_wh:
+                total_legs_cnt = await db.scalar(
+                    select(func.count(MissionLeg.id)).where(MissionLeg.mission_id == mission_id)
+                ) or 1
+                planned_leg_energy_wh = float(ai_pred.estimated_energy_wh) / float(total_legs_cnt)
+
+            if not planned_leg_energy_wh or planned_leg_energy_wh <= 0:
+                from app.modules.ai_predictions.service import predict_flight_energy
+                payload_val = 0.5
+                if mission.drone_id:
+                    dr = await db.get(Drone, mission.drone_id)
+                    if dr and dr.max_payload_kg:
+                        payload_val = float(dr.max_payload_kg) * 0.5
+                pred_res = predict_flight_energy(
+                    distance_km=dist_m / 1000.0,
+                    payload_weight=payload_val,
+                    speed=CRUISE_SPEED,
+                    altitude=CRUISE_ALTITUDE
+                )
+                planned_leg_energy_wh = float(pred_res.get("energy_wh", 50.0))
 
             print(
                 f"[SIMULATOR] Mission {mission_id} | Leg {leg.sequence_no}: "
                 f"{from_hub.name} → {to_hub.name} | "
                 f"{dist_m/1000:.2f} km | {len(waypoints)} điểm | interval={INTERVAL_SEC}s | "
-                f"Battery start: {current_battery_pct:.1f}% (cap: {battery_capacity_wh}Wh)"
+                f"Battery start: {initial_battery_pct:.1f}% (cap: {battery_capacity_wh}Wh, planned_leg_energy: {planned_leg_energy_wh:.1f}Wh)"
             )
 
         except Exception as e:
@@ -349,21 +406,27 @@ async def simulate_mission_flight(mission_id: str) -> None:
         altitude     = round(CRUISE_ALTITUDE + math.sin(idx * 0.3) * 3, 2)
         speed        = round(CRUISE_SPEED + math.cos(idx * 0.2) * 1.5, 2)
         battery_volt = round(max(18.0, battery_volt - 0.04), 2)
-        energy_wh    = round(energy_wh + 0.8, 3)
         wind_speed   = round(2.0 + math.sin(idx * 0.5) * 1.5 + random.uniform(-0.2, 0.2), 2)
 
-        # Khấu trừ mức pin theo năng lượng tiêu hao mỗi bước
-        step_wh = 0.8
-        pct_consumed = (step_wh / battery_capacity_wh) * 100.0
-        current_battery_pct = max(1.0, current_battery_pct - pct_consumed)
+        # Khấu trừ mức pin theo năng lượng tiêu hao kế hoạch
+        consumed_pct = ((idx + 1) / total_points) * ((planned_leg_energy_wh / battery_capacity_wh) * 100.0)
+        current_battery_pct = max(1.0, initial_battery_pct - consumed_pct)
         new_charge_pct = int(round(current_battery_pct))
+        energy_wh = round(((idx + 1) / total_points) * planned_leg_energy_wh, 3)
 
         async with AsyncSessionLocal() as db:
             try:
-                # Kiểm tra mission còn FLYING không (có thể bị cancel)
+                # Kiểm tra mission còn FLYING không (có thể bị cancel hoặc kích hoạt failsafe incident)
                 mission = await db.get(Mission, mission_id)
-                if not mission or mission.status != MissionStatus.FLYING:
-                    print(f"[SIMULATOR] Mission {mission_id} không còn FLYING, dừng simulator.")
+                if not mission:
+                    return
+                if mission.status == MissionStatus.INCIDENT_RETURN and mission.arrived_at is None:
+                    print(f"[SIMULATOR] Mission {mission_id} đã kích hoạt INCIDENT_RETURN, bắt đầu bay quay về trạm.")
+                    return_waypoints = _interpolate(lat, lng, from_hub.latitude, from_hub.longitude, max(5, (total_points - idx)))
+                    await _fly_incident_return(mission_id, return_waypoints, from_hub, active_battery_id, active_drone_id, battery_capacity_wh, current_battery_pct)
+                    return
+                elif mission.status != MissionStatus.FLYING:
+                    print(f"[SIMULATOR] Mission {mission_id} không còn FLYING ({mission.status}), dừng simulator.")
                     return
 
                 # Fetch weather theo tọa độ điểm này
@@ -379,6 +442,7 @@ async def simulate_mission_flight(mission_id: str) -> None:
                     altitude=altitude,
                     speed=speed,
                     battery_voltage=battery_volt,
+                    battery_pct=float(new_charge_pct),
                     energy_consumed_wh=energy_wh,
                     wind_speed=wind_speed,
                     weather_temperature=weather.temperature if weather else None,
@@ -463,7 +527,11 @@ async def simulate_mission_flight(mission_id: str) -> None:
                 next_leg = next_leg_res.scalars().first()
 
                 # Drone đáp xuống hub → set AT_HUB để Technician thấy nút confirm
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
                 mission.handling_status = HandlingStatus.AT_HUB
+                mission.arrived_at = now
+                leg.status = MissionLegStatus.COMPLETED
+                leg.completed_at = now
                 if to_hub:
                     drone = await db.get(Drone, mission.drone_id) if mission.drone_id else None
                     if drone:

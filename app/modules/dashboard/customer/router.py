@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
-from app.modules.missions.models import Order, Mission
+from app.modules.missions.models import Order, Mission, OrderStatus, MissionStatus
 from app.modules.orders.customer.router import compute_delivery_status
 from app.modules.dashboard.schemas import CustomerDashboardResponse
 from app.modules.dashboard.service import COMPLETED_STATUSES
@@ -26,15 +26,21 @@ async def customer_dashboard(
     chuyến đã hoàn tất) và vài chỉ số giao hàng.
     """
     orders = (await db.execute(
-        select(Order).where(Order.customer_id == user.id)
+        select(Order).where(
+            Order.customer_id == user.id,
+            Order.status != OrderStatus.CANCELLED,
+        )
     )).scalars().all()
     order_ids = [o.id for o in orders]
 
-    # Mission mới nhất cho mỗi order
+    # Mission mới nhất cho mỗi order (loại trừ mission đã CANCELLED)
     mission_by_order: dict[str, Mission] = {}
     if order_ids:
         missions = (await db.execute(
-            select(Mission).where(Mission.order_id.in_(order_ids))
+            select(Mission).where(
+                Mission.order_id.in_(order_ids),
+                Mission.status != MissionStatus.CANCELLED,
+            )
         )).scalars().all()
         for m in missions:
             cur = mission_by_order.get(m.order_id)
@@ -45,11 +51,11 @@ async def customer_dashboard(
     breakdown: dict[str, int] = {}
     for o in orders:
         code, _ = compute_delivery_status(o, mission_by_order.get(o.id))
+        if code == "CANCELLED":
+            continue
         breakdown[code] = breakdown.get(code, 0) + 1
         if code == "DELIVERED":
             completed += 1
-        elif code == "CANCELLED":
-            cancelled += 1
         else:
             active += 1
 

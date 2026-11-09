@@ -169,7 +169,8 @@ app.add_middleware(
     # Chấp nhận mọi domain (localhost bất kỳ port nào, hoặc domain production)
     # Cơ chế: FastAPI sẽ đọc header Origin của request và trả về đúng Origin đó 
     # thay vì trả về "*" (giúp vượt qua lỗi block của browser khi allow_credentials=True).
-    allow_origin_regex=r"^https?://.*$",
+    allow_origin_regex=r".*",
+    expose_headers=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
