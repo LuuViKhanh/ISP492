@@ -228,3 +228,30 @@ from app.modules.inventory.models import (
     HubInventory,
     InventoryTransaction,
 )
+
+
+# ==================== BATTERY MODEL CATALOG ====================
+
+class BatteryModelCatalog(Base):
+    """
+    Catalog các model pin drone: tên, dung lượng, drone tương thích, giá nhập kho.
+
+    Tương tự PartCategory cho spare parts — dùng để:
+    - Validate khi Admin thêm pin mới vào kho
+    - Tính chi phí nhập kho trong báo cáo tài chính
+    - Hiển thị thông tin tương thích cho Operator/Technician
+    """
+    __tablename__ = "battery_model_catalog"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # Tên model chính thức của nhà sản xuất (unique)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    # Danh sách drone model tương thích: ["DJI Mavic 3", "DJI Matrice 300"]
+    compatible_drone_models: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Dung lượng (Wh)
+    capacity_wh: Mapped[float] = mapped_column(Float, nullable=False)
+    # Giá nhập kho (VNĐ / viên)
+    unit_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
