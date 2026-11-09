@@ -53,10 +53,12 @@ class WorkOrderCreate(BaseModel):
     battery_id: Optional[str] = None
     issue_description: str
     alert_id: Optional[int] = None
+    parts_replaced: Optional[list[dict]] = None  # [{part_category_id: int, quantity: int}, ...]
 
 class WorkOrderUpdate(BaseModel):
     issue_description: Optional[str] = None
     action_taken: Optional[str] = None
+    parts_replaced: Optional[list[dict]] = None  # [{part_category_id: int, quantity: int}, ...]
 
 class InspectionUpdate(BaseModel):
     action_taken: str
@@ -87,3 +89,4 @@ class WorkOrderResponse(BaseModel):
     drone_code: Optional[str] = None
     model: Optional[str] = None
     assigned_technician_name: Optional[str] = None
+    parts_replaced_json: Optional[list] = None  # [{part_category_id, quantity}, ...]
