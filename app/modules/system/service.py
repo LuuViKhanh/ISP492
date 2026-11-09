@@ -42,27 +42,20 @@ async def log_activity(
       - Admin: USER_CREATE, HUB_UPDATE, ...
     """
     try:
-        await db.execute(text("""
-            INSERT INTO activity_logs
-                (user_id, user_email, role, action, resource_type, resource_id,
-                 description, status, details_json, created_at)
-            VALUES
-                (:user_id, :user_email, :role, :action, :resource_type, :resource_id,
-                 :description, :status, CAST(:details_json AS jsonb), now())
-        """), {
-            "user_id":      str(user_id) if user_id else None,
-            "user_email":   user_email,
-            "role":         role,
-            "action":       action,
-            "resource_type": resource_type,
-            "resource_id":  str(resource_id) if resource_id else None,
-            "description":  description,
-            "status":       status,
-            "details_json": json.dumps(details) if details else None,
-        })
+        from app.modules.system.models import ActivityLog
+        db.add(ActivityLog(
+            user_id=str(user_id) if user_id else None,
+            user_email=user_email,
+            role=role,
+            action=action,
+            resource_type=resource_type,
+            resource_id=str(resource_id) if resource_id else None,
+            description=description,
+            status=status,
+            details_json=details,
+        ))
         await db.commit()
     except Exception:
-        # Log không được làm crash request
         pass
 
 
@@ -85,16 +78,14 @@ async def log_system_event(
       - Server events: startup, shutdown
     """
     try:
-        await db.execute(text("""
-            INSERT INTO system_logs (source, level, event, message, details_json, created_at)
-            VALUES (:source, :level, :event, :message, CAST(:details_json AS jsonb), now())
-        """), {
-            "source":       source,
-            "level":        level,
-            "event":        event,
-            "message":      message,
-            "details_json": json.dumps(details) if details else None,
-        })
+        from app.modules.system.models import SystemLog
+        db.add(SystemLog(
+            source=source,
+            level=level,
+            event=event,
+            message=message,
+            details_json=details,
+        ))
         await db.commit()
     except Exception:
         pass
