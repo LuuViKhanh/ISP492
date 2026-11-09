@@ -9,6 +9,17 @@ from app.modules.auth.models import User, ROLE_NAME_TO_ID
 from app.shared.roles import UserRole
 from app.modules.fleet.models import MaintenanceAlert
 
+
+async def _slog(db: AsyncSession, source: str, event: str, msg: str,
+                level: str = "INFO", details: dict | None = None) -> None:
+    """Ghi system log — wrapper ngắn gọn dùng trong workers."""
+    try:
+        from app.modules.system.service import log_system_event
+        await log_system_event(db, source=source, event=event,
+                               message=msg, level=level, details=details)
+    except Exception:
+        pass
+
 async def get_operator_ids(db: AsyncSession) -> list[str]:
     operator_role_id = ROLE_NAME_TO_ID.get(UserRole.OPERATOR, "595bec91-7f4e-47ec-bfec-6f0087b84620")
     result = await db.execute(

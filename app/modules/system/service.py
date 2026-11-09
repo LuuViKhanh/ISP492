@@ -229,3 +229,44 @@ async def get_audit_logs(
         action=action,
         resource_type=resource_table,
     )
+
+
+# ── Quick-log helpers (dùng trong router mà không cần await riêng) ───────────
+
+def _build_activity_log(
+    action: str,
+    user_id: str | None = None,
+    user_email: str | None = None,
+    role: str | None = None,
+    resource_type: str | None = None,
+    resource_id: str | None = None,
+    description: str | None = None,
+    status: str = "success",
+    details: dict | None = None,
+):
+    """
+    Tạo Notification-style activity log entry — dùng khi cần fire-and-forget
+    mà không muốn thêm await vào giữa business logic.
+
+    Pattern sử dụng:
+        try:
+            entry = _build_activity_log(...)
+            db.add(entry)
+        except Exception:
+            pass
+    """
+    import json
+    from datetime import timezone as _tz
+    from app.modules.system.models import AuditLog  # fallback đến bảng cũ để dùng ngay
+    return {
+        "user_id": str(user_id) if user_id else None,
+        "user_email": user_email,
+        "role": role,
+        "action": action,
+        "resource_type": resource_type,
+        "resource_id": str(resource_id) if resource_id else None,
+        "description": description,
+        "status": status,
+        "details_json": details,
+        "created_at": datetime.now(_tz.utc),
+    }

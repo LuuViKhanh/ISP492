@@ -112,7 +112,7 @@ async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(
     success = await service.reset_password(db, body.token, body.new_password)
     if not success:
         raise HTTPException(status_code=400, detail="Invalid or expired token")
-    await log_action(db, None, "PASSWORD_RESET", "users")
+    await log_activity(db, action="PASSWORD_RESET", description="Đặt lại mật khẩu thành công")
     return {"message": "Password reset successfully"}
 
 
