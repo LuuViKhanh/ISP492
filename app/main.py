@@ -18,6 +18,9 @@ from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+import traceback
 
 from app.core.config import settings
 from app.database.db import async_engine, Base
@@ -164,6 +167,22 @@ def custom_openapi():
 
 app.openapi = custom_openapi
 
+# Bật ProxyHeadersMiddleware để giữ nguyên HTTPS và Host từ Cloudflare Tunnel / Reverse Proxy
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+
+# Bắt lỗi toàn cục để log chi tiết lỗi ra console thay vì trả 500 rỗng
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal Server Error",
+            "error_message": str(exc),
+            "path": str(request.url)
+        }
+    )
+
 app.add_middleware(
     CORSMiddleware,
     # Chấp nhận mọi domain (localhost bất kỳ port nào, hoặc domain production)
@@ -230,5 +249,7 @@ if __name__ == "__main__":
         "app.main:app",
         host="127.0.0.1",
         port=8000,
-        reload=False
+        reload=False,
+        proxy_headers=True,
+        forwarded_allow_ips="*"
     )
