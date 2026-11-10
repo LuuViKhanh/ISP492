@@ -84,6 +84,8 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_async_db)):
     return TokenResponse(
         access_token=service.create_access_token(user.id, user.role.value),
         refresh_token=service.create_refresh_token(user.id),
+        role=user.role.value.lower(),
+        must_change_password=False,
     )
 
 
@@ -146,6 +148,8 @@ async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_async
     return TokenResponse(
         access_token=service.create_access_token(user.id, user.role.value),
         refresh_token=service.create_refresh_token(user.id),
+        role=user.role.value.lower(),
+        must_change_password=False,
     )
 
 
