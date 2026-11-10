@@ -1435,7 +1435,14 @@ async def delete_work_order(
     wo = await db.get(WorkOrder, work_order_id)
     if not wo:
         raise HTTPException(status_code=404, detail="Work order not found")
-    await db.delete(wo)
+    
+    # Nếu work order đang được dùng bởi battery/drone, không thể xóa
+    if wo.battery_id:
+        battery = await db.get(Battery, wo.battery_id)
+        if battery and battery.work_order_id == wo.id:
+            raise HTTPException(status_code=400, detail="Không thể xóa work order đang được dùng. Hãy hoàn thành trước.")
+    
+    db.delete(wo)
     await db.commit()
 
 
