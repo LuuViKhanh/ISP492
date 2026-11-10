@@ -207,7 +207,7 @@ async def get_transit_history(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    from sqlalchemy import cast, String, or_
+    from sqlalchemy import cast, String, or_, and_
     from app.modules.missions.models import MissionLeg
     import traceback
     try:
