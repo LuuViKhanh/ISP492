@@ -73,18 +73,18 @@ async def get_operator_quick_questions(
     questions = [
         QuickQuestionItem(
             id="active_flights",
-            title="🚁 Chuyến bay đang hoạt động",
-            prompt="Hiện tại có bao nhiêu Drone đang thực hiện chuyến bay?"
+            title="🚁 Active Flight Missions",
+            prompt="How many drones are currently executing flight missions?"
         ),
         QuickQuestionItem(
             id="kpi_report",
-            title="📊 Báo cáo KPI vận hành",
-            prompt="Tóm tắt hiệu suất vận hành và tỷ lệ hoàn thành chuyến bay hôm nay"
+            title="📊 Operations KPI Report",
+            prompt="Summarize operational performance and today's mission completion rate"
         ),
         QuickQuestionItem(
             id="recent_incidents",
-            title="⚠️ Báo cáo sự cố gần đây",
-            prompt="Có sự cố bay nào gần đây cần chú ý không?"
+            title="⚠️ Recent Incident Report",
+            prompt="Are there any recent flight incidents that require attention?"
         )
     ]
     return QuickQuestionsResponse(questions=questions)

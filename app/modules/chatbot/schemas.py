@@ -8,8 +8,8 @@ class ChatHistoryItem(BaseModel):
     - role: "user" (người dùng) hoặc "model" (trợ lý ảo AI)
     - content: nội dung tin nhắn dạng văn bản
     """
-    role: str = Field(..., description="Vai trò: 'user' hoặc 'model'")
-    content: str = Field(..., max_length=4000, description="Nội dung tin nhắn")
+    role: str = Field(..., description="Role: 'user' or 'model'")
+    content: str = Field(..., max_length=4000, description="Message text content")
 
     @field_validator("role")
     @classmethod
@@ -28,22 +28,22 @@ class ChatMessageRequest(BaseModel):
         ...,
         min_length=1,
         max_length=2000,
-        description="Nội dung câu hỏi của khách hàng"
+        description="User question or message content"
     )
     conversation_id: Optional[str] = Field(
         default=None,
         max_length=100,
-        description="ID phiên hội thoại (nếu tiếp tục cuộc trò chuyện trước đó)"
+        description="Conversation session ID (when continuing a previous conversation)"
     )
     history: List[ChatHistoryItem] = Field(
         default_factory=list,
-        description="Lịch sử các lượt chat trước đó (hệ thống tự động giới hạn tối đa 10 tin nhắn gần nhất)"
+        description="Previous conversation turns (automatically capped at the 10 most recent messages)"
     )
 
     class Config:
         json_schema_extra = {
             "example": {
-                "message": "Đơn gần nhất của tôi đã thanh toán chưa?",
+                "message": "Has my latest order been paid yet?",
                 "conversation_id": "chat_abc123",
                 "history": []
             }
@@ -55,15 +55,15 @@ class ChatActionItem(BaseModel):
     Hành động điều hướng gợi ý trên giao diện Frontend (Action Button).
     Các type chuẩn: CREATE_DELIVERY | OPEN_ORDER | OPEN_PAYMENT | OPEN_PRICING | OPEN_HELP | OPEN_NOTIFICATIONS
     """
-    type: str = Field(..., description="Loại action chuẩn")
-    label: str = Field(..., description="Nhãn hiển thị trên nút bấm")
-    href: Optional[str] = Field(default=None, description="Đường dẫn điều hướng trên FE")
-    payload: Optional[Dict[str, Any]] = Field(default=None, description="Dữ liệu đính kèm (ví dụ prefill tạo đơn)")
+    type: str = Field(..., description="Standard action type")
+    label: str = Field(..., description="Button display label")
+    href: Optional[str] = Field(default=None, description="Frontend navigation path")
+    payload: Optional[Dict[str, Any]] = Field(default=None, description="Attached payload data (e.g., prefill for creating a delivery)")
 
 
 class ChatMeta(BaseModel):
     """Metadata cho mỗi request chat."""
-    request_id: str = Field(..., description="Mã định danh request duy nhất")
+    request_id: str = Field(..., description="Unique request identifier")
 
 
 class ChatMessageResponse(BaseModel):
@@ -72,27 +72,27 @@ class ChatMessageResponse(BaseModel):
     """
     conversation_id: Optional[str] = Field(
         default=None,
-        description="ID phiên hội thoại"
+        description="Conversation session ID"
     )
     reply: str = Field(
         ...,
-        description="Câu trả lời tự nhiên của Gemini AI bằng tiếng Việt"
+        description="Natural-language response from Gemini AI in English"
     )
     tools_called: List[str] = Field(
         default_factory=list,
-        description="Danh sách tên các Tool/Function mà AI đã tự động kích hoạt"
+        description="List of tool/function names invoked by the AI"
     )
     data: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Structured data có trường 'type' chuẩn để FE hiển thị Card/Widget mà không cần Regex"
+        description="Structured payload with a standard 'type' field so the FE can render cards/widgets without regex parsing"
     )
     actions: List[ChatActionItem] = Field(
         default_factory=list,
-        description="Danh sách các nút hành động điều hướng trên FE"
+        description="List of navigation action buttons for the FE"
     )
     meta: Optional[ChatMeta] = Field(
         default=None,
-        description="Metadata của phản hồi"
+        description="Response metadata"
     )
 
 

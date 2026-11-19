@@ -111,56 +111,56 @@ CREATE INDEX IF NOT EXISTS idx_parts_req_created ON parts_requests(created_at DE
 """
 
 SEED_CATEGORIES = """
--- Seed danh mục linh kiện mặc định
+-- Seed default spare part categories (English names)
 INSERT INTO part_categories (name, category_type, compatible_drone_models, unit_cost, description, is_active, created_at)
 VALUES
-  ('Cánh quạt DJI Mavic 3 (1 bộ 4 cánh)',
-   'Propeller', '["DJI Mavic 3"]', 350000,
-   'Bộ 4 cánh thay thế chính hãng cho DJI Mavic 3', TRUE, NOW()),
-
-  ('Cánh quạt DJI Matrice 300 (1 bộ 4 cánh)',
+  ('Propeller Set - DJI Matrice 300 (4 blades)',
    'Propeller', '["DJI Matrice 300"]', 750000,
-   'Bộ 4 cánh thay thế cho DJI Matrice 300 RTK', TRUE, NOW()),
+   'OEM replacement propeller set for DJI Matrice 300 RTK.', TRUE, NOW()),
 
-  ('Cánh quạt DJI FlyCart 30 (1 bộ 4 cánh)',
+  ('Propeller Set - Aurelia X6 Pro (6 blades)',
+   'Propeller', '["Aurelia X6 Pro"]', 650000,
+   'OEM replacement propeller set for Aurelia X6 Pro hexacopter.', TRUE, NOW()),
+
+  ('Propeller Set - DJI FlyCart 30 (4 blades)',
    'Propeller', '["DJI FlyCart 30"]', 1200000,
-   'Bộ 4 cánh thay thế cho DJI FlyCart 30', TRUE, NOW()),
+   'OEM replacement propeller set for DJI FlyCart 30 heavy-lift drone.', TRUE, NOW()),
 
-  ('Động cơ DJI Mavic 3 (1 motor)',
-   'Motor', '["DJI Mavic 3"]', 1800000,
-   'Động cơ brushless thay thế cho Mavic 3', TRUE, NOW()),
-
-  ('Động cơ DJI Matrice 300 (1 motor)',
+  ('Motor - DJI Matrice 300 (single unit)',
    'Motor', '["DJI Matrice 300"]', 3500000,
-   'Động cơ thay thế cho Matrice 300 RTK', TRUE, NOW()),
+   'Brushless replacement motor for DJI Matrice 300 RTK.', TRUE, NOW()),
 
-  ('Bo mạch ESC DJI Mavic 3',
-   'ESC', '["DJI Mavic 3"]', 2500000,
-   'Electronic Speed Controller dự phòng cho Mavic 3', TRUE, NOW()),
+  ('Motor - Aurelia X6 Pro (single unit)',
+   'Motor', '["Aurelia X6 Pro"]', 2800000,
+   'Brushless replacement motor for Aurelia X6 Pro.', TRUE, NOW()),
 
-  ('Bo mạch ESC DJI Matrice 300',
+  ('ESC Board - DJI Matrice 300',
    'ESC', '["DJI Matrice 300"]', 5500000,
-   'ESC dự phòng cho Matrice 300', TRUE, NOW()),
+   'Electronic Speed Controller replacement board for DJI Matrice 300 RTK.', TRUE, NOW()),
 
-  ('Bo mạch điều khiển bay (Flight Controller) DJI Mavic 3',
-   'FlightController', '["DJI Mavic 3"]', 6500000,
-   'Flight controller mainboard dự phòng', TRUE, NOW()),
+  ('ESC Board - Aurelia X6 Pro',
+   'ESC', '["Aurelia X6 Pro"]', 4200000,
+   'Electronic Speed Controller replacement board for Aurelia X6 Pro.', TRUE, NOW()),
 
-  ('Cáp tín hiệu ESC-Motor (1m)',
+  ('Flight Controller Board - DJI Matrice 300',
+   'FlightController', '["DJI Matrice 300"]', 6500000,
+   'Main flight controller replacement for DJI Matrice 300 RTK. Includes IMU and compass.', TRUE, NOW()),
+
+  ('Signal Cable ESC-Motor (1m)',
    'Cable', NULL, 85000,
-   'Cáp tín hiệu ESC sang động cơ, dùng chung các model', TRUE, NOW()),
+   'Signal cable connecting ESC to motor. Universal fit for most drone models.', TRUE, NOW()),
 
-  ('Cáp nguồn pin (1m)',
+  ('Power Cable Battery (1m)',
    'Cable', NULL, 120000,
-   'Cáp nguồn nối battery tới ESC/FC', TRUE, NOW()),
+   'Power cable connecting battery to ESC/FC power distribution board.', TRUE, NOW()),
 
-  ('Cảm biến GPS dự phòng',
+  ('GPS/GNSS Sensor Module',
    'Sensor', '["DJI Matrice 300", "DJI FlyCart 30"]', 4200000,
-   'Module GPS/GNSS dự phòng cho drone lớn', TRUE, NOW()),
+   'Replacement GPS/GNSS module for DJI Matrice 300 and DJI FlyCart 30. Includes compass.', TRUE, NOW()),
 
-  ('Khung cánh (Arm) DJI Matrice 300',
+  ('Arm Frame - DJI Matrice 300',
    'Frame', '["DJI Matrice 300"]', 2800000,
-   'Arm thay thế khi bị cong/gãy do va chạm', TRUE, NOW())
+   'Replacement arm (propeller boom) for DJI Matrice 300 RTK. Replace after collision damage.', TRUE, NOW())
 
 ON CONFLICT (name) DO NOTHING;
 """

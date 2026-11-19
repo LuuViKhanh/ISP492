@@ -108,17 +108,17 @@ def get_technician_gemini_tools() -> list:
     decls = [
                 types.FunctionDeclaration(
                     name="get_fleet_status",
-                    description="Xem tổng quan tình trạng đội Drone (sẵn sàng, đang bay, đang bảo trì).",
+                    description="View an overview of the drone fleet status (available, in flight, and under maintenance).",
                     parameters=types.Schema(type=types.Type.OBJECT, properties={})
                 ),
                 types.FunctionDeclaration(
                     name="get_battery_status",
-                    description="Kiểm tra pin hệ thống và danh sách các pin yếu cần sạc gấp (<30%).",
+                    description="Check system batteries and list low-charge batteries requiring urgent charging (<30%).",
                     parameters=types.Schema(type=types.Type.OBJECT, properties={})
                 ),
                 types.FunctionDeclaration(
                     name="get_pending_work_orders",
-                    description="Xem danh sách các lệnh sửa chữa và bảo dưỡng (Work Orders) chưa hoàn thành.",
+                    description="View the list of unfinished repair and maintenance work orders.",
                     parameters=types.Schema(type=types.Type.OBJECT, properties={})
                 ),
     ]

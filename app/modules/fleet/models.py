@@ -119,6 +119,7 @@ class Drone(Base):
     id: Mapped[str] = mapped_column(String(50), primary_key=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     model: Mapped[str] = mapped_column(String(100), nullable=False)
+    serial_number: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     payload_capacity_kg: Mapped[float] = mapped_column(Float, nullable=False)
     max_speed: Mapped[float] = mapped_column(Float, nullable=False)
     status: Mapped[DroneStatus] = mapped_column("operational_status", SAEnum(DroneStatus, name="drone_status", create_type=False, values_callable=lambda x: [e.value for e in x]))
@@ -177,7 +178,7 @@ class WorkOrder(Base):
     record_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     inspection_items_json: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
     status_logs_json: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
-    parts_replaced_json: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)  # [{part_category_id, quantity}, ...]
+    # parts_replaced_json: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)  # Column does not exist in DB work_orders
 
 
 class MaintenanceAlert(Base):
@@ -190,6 +191,7 @@ class MaintenanceAlert(Base):
     mission_id: Mapped[str | None] = mapped_column(String, nullable=True)
     incident_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     title: Mapped[str | None] = mapped_column(String, nullable=True)
+    description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     status: Mapped[str | None] = mapped_column(String, nullable=True)
     work_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     handled_by: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -220,12 +222,41 @@ class MaintenanceSchedule(Base):
 
 
 # ==================== PARTS MANAGEMENT (Quản lý vật tư - Parts) ====================
-from app.modules.inventory.models import (
+from app.modules.supplies.models import (
     PartCategoryType,
     PartsRequestStatus,
-    TxnReason,
+    SupplyTxnReason as TxnReason,
     PartCategory,
     PartsRequest,
-    HubInventory,
-    InventoryTransaction,
+    HubSupply,
+    SupplyTransaction,
+    HubInventory,        # backward-compat alias
+    InventoryTransaction, # backward-compat alias
 )
+
+
+# ==================== BATTERY MODEL CATALOG ====================
+
+class BatteryModelCatalog(Base):
+    """
+    Catalog các model pin drone: tên, dung lượng, drone tương thích, giá nhập kho.
+
+    Tương tự PartCategory cho spare parts — dùng để:
+    - Validate khi Admin thêm pin mới vào kho
+    - Tính chi phí nhập kho trong báo cáo tài chính
+    - Hiển thị thông tin tương thích cho Operator/Technician
+    """
+    __tablename__ = "battery_model_catalog"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # Tên model chính thức của nhà sản xuất (unique)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    # Danh sách drone model tương thích: ["DJI Mavic 3", "DJI Matrice 300"]
+    compatible_drone_models: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Dung lượng (Wh)
+    capacity_wh: Mapped[float] = mapped_column(Float, nullable=False)
+    # Giá nhập kho (VNĐ / viên)
+    unit_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

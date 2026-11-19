@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 async def run_maintenance_alerts_logic(db: AsyncSession):
     query = text("""
         INSERT INTO maintenance_alerts (drone_id, source, maintenance_schedule_id, title, status)
-        SELECT drone_id, 'System', id, 'Lịch bảo trì định kỳ: ' || maintenance_type, 'Pending'
+        SELECT drone_id, 'System', id, 'Scheduled maintenance due: ' || maintenance_type, 'Pending'
         FROM maintenance_schedules
         WHERE next_inspection_at <= NOW()
           AND status = 'Active'
@@ -23,13 +23,13 @@ async def run_maintenance_alerts_logic(db: AsyncSession):
 async def run_battery_overdue_alerts_logic(db: AsyncSession):
     query_battery = text("""
         INSERT INTO maintenance_alerts (drone_id, source, title, status)
-        SELECT id, 'System', 'Cảnh báo Pin thấp (' || battery_level_pct || '%)', 'Pending'
+        SELECT id, 'System', 'Low battery alert (' || battery_level_pct || '%)', 'Pending'
         FROM drones
         WHERE battery_level_pct <= 20
           AND NOT EXISTS (
               SELECT 1 FROM maintenance_alerts 
               WHERE maintenance_alerts.drone_id = drones.id 
-                AND maintenance_alerts.title LIKE 'Cảnh báo Pin thấp%'
+                AND maintenance_alerts.title LIKE 'Low battery alert%'
                 AND maintenance_alerts.status = 'Pending'
           )
         RETURNING id;
@@ -39,14 +39,14 @@ async def run_battery_overdue_alerts_logic(db: AsyncSession):
     
     query_overdue = text("""
         INSERT INTO maintenance_alerts (drone_id, source, title, status)
-        SELECT drone_id, 'System', 'Cảnh báo Quá hạn bảo trì: ' || maintenance_type, 'Pending'
+        SELECT drone_id, 'System', 'Overdue maintenance alert: ' || maintenance_type, 'Pending'
         FROM maintenance_schedules
         WHERE next_inspection_at <= NOW() - INTERVAL '7 days'
           AND status = 'Active'
           AND NOT EXISTS (
               SELECT 1 FROM maintenance_alerts 
               WHERE maintenance_alerts.maintenance_schedule_id = maintenance_schedules.id 
-                AND maintenance_alerts.title LIKE 'Cảnh báo Quá hạn%'
+                AND maintenance_alerts.title LIKE 'Overdue maintenance alert%'
                 AND maintenance_alerts.status = 'Pending'
           )
         RETURNING id;

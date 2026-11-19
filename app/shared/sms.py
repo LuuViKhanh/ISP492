@@ -6,7 +6,7 @@ Gửi SMS thông báo qua ESMS.vn (nhà cung cấp SMS Việt Nam).
 Đăng ký tại: https://esms.vn
 Sau khi đăng ký lấy: API_KEY, SECRET_KEY, Brandname (tên hiển thị)
 
-Docs API: https://esms.vn/api-sms
+API Docs: https://esms.vn/api-sms
 """
 
 import httpx
@@ -18,7 +18,7 @@ async def send_sms(phone: str, message: str) -> bool:
     """
     Gửi SMS đến số điện thoại.
     Trả về True nếu thành công, False nếu lỗi (không throw).
-    
+
     phone: số điện thoại VN, ví dụ "0901234567" hoặc "+84901234567"
     """
     if not settings.ESMS_API_KEY or not settings.ESMS_SECRET_KEY:
@@ -37,8 +37,8 @@ async def send_sms(phone: str, message: str) -> bool:
         "SecretKey":  settings.ESMS_SECRET_KEY,
         "Phone":      phone_normalized,
         "Content":    message,
-        "SmsType":    2,   # 2 = số ngẫu nhiên (không cần đăng ký Brandname)
-        "IsUnicode":  0,   # 0 = không dấu (an toàn hơn với SMS type 2)
+        "SmsType":    2,  # 2 = số ngẫu nhiên (không cần đăng ký Brandname)
+        "IsUnicode":  0,  # 0 = không dấu (an toàn hơn với SMS type 2)
         "Brandname":  "",  # ESMS yêu cầu field này ngay cả SmsType=2, set empty để dùng số random
     }
     print(f"[SMS] DEBUG payload: {payload}")  # DEBUG
@@ -75,11 +75,11 @@ async def send_order_flying_sms(
     tracking_url = f"{frontend_url}/orders/{order_code}/tracking" if frontend_url else ""
 
     message = (
-        f"DroneOptAI: Don hang {order_code} dang duoc giao bang drone. "
+        f"DroneOptAI: Order {order_code} is out for drone delivery. "
     )
     if tracking_url:
-        message += f"Theo doi tai: {tracking_url}"
+        message += f"Track at: {tracking_url}"
     else:
-        message += "Vui long mo app de theo doi."
+        message += "Please open the app to track your order."
 
     return await send_sms(phone, message)

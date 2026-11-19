@@ -71,13 +71,20 @@ async def admin_dashboard(
         .where(Order.payment_status == PaymentStatus.REFUNDED)
     )).scalar() or 0
 
+    from app.modules.system.service import compute_total_procurement_expenses
+    total_expenses = await compute_total_procurement_expenses(db)
+    gross_total = round(float(total_rev), 2)
+    net_total = round(gross_total - total_expenses, 2)
+
     revenue = AdminRevenue(
-        total=round(float(total_rev), 2),
+        total=net_total,
         today=round(float(today_rev), 2),
         this_month=round(float(month_rev), 2),
         paid_orders=int(paid_orders),
         pending_payments=round(float(pending_payments_result), 2),
         refunds=round(float(refunds_result), 2),
+        gross_revenue=gross_total,
+        total_expenses=total_expenses,
     )
 
     # ----- Users -----
@@ -99,10 +106,11 @@ async def admin_dashboard(
     )
 
     # ----- Missions -----
-    mission_by_status = await group_counts(db, Mission.status)
+    raw_mission_by_status = await group_counts(db, Mission.status)
+    mission_by_status = {k: v for k, v in raw_mission_by_status.items() if k != MissionStatus.CANCELLED.value}
     total_missions = sum(mission_by_status.values())
     m_completed = mission_by_status.get(MissionStatus.ARRIVAL_COMPLETED.value, 0) + mission_by_status.get(MissionStatus.MISSION_COMPLETED.value, 0)
-    m_cancelled = mission_by_status.get(MissionStatus.CANCELLED.value, 0)
+    m_cancelled = 0
     m_rejected = mission_by_status.get(MissionStatus.REJECTED.value, 0)
     m_failed = mission_by_status.get(MissionStatus.FAILED.value, 0)
     m_terminal = m_completed + m_cancelled + m_rejected + m_failed
@@ -148,7 +156,7 @@ async def admin_dashboard(
         select(func.count()).select_from(Incident).where(Incident.status == IncidentStatus.OPEN)
     )).scalar() or 0
     try:
-        total_audit = (await db.execute(text("SELECT COUNT(*) FROM public.audit_logs"))).scalar() or 0
+        total_audit = (await db.execute(text("SELECT COUNT(*) FROM public.activity_logs"))).scalar() or 0
     except Exception:
         total_audit = 0
     alerts = AdminAlerts(

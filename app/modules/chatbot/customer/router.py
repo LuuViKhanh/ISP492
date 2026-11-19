@@ -29,14 +29,14 @@ router = APIRouter(
 @router.post(
     "/chat",
     response_model=ChatMessageResponse,
-    summary="Đàm thoại với Trợ lý ảo Khách hàng (Customer AI v1.1)",
+    summary="Chat with the Customer AI Assistant (Customer AI v1.1)",
     description=(
-        "**[Customer Chatbot v1.1]** Hỗ trợ khách hàng toàn trình (18 canonical tools):\n"
-        "1. Quy định kiện hàng (`get_package_rules`), tư vấn chọn size (`recommend_package_size`).\n"
-        "2. Bảng giá & phụ phí (`get_pricing_rules`, `get_delivery_modes`), báo giá thực tế (`estimate_shipping_fee`).\n"
-        "3. Tìm kiếm trạm Hub (`list_hubs`, `resolve_hubs_by_area`) và chính sách (`get_help_policy`).\n"
-        "4. Tra cứu đơn hàng cá nhân (`get_my_orders`, `get_latest_order`, `get_order_detail`, `get_customer_delivery_status`).\n"
-        "5. Thanh toán, bàn giao hàng, ETA, kiểm tra hủy đơn, thông báo & hồ sơ (bắt buộc Bearer JWT + xác thực quyền sở hữu)."
+        "**[Customer Chatbot v1.1]** End-to-end customer support (18 canonical tools):\n"
+        "1. Package rules (`get_package_rules`) and size recommendation (`recommend_package_size`).\n"
+        "2. Pricing rules & surcharges (`get_pricing_rules`, `get_delivery_modes`) and shipping fee quotation (`estimate_shipping_fee`).\n"
+        "3. Hub lookup (`list_hubs`, `resolve_hubs_by_area`) and help policies (`get_help_policy`).\n"
+        "4. Personal order tracking (`get_my_orders`, `get_latest_order`, `get_order_detail`, `get_customer_delivery_status`).\n"
+        "5. Payment status, handover status, ETA, cancellation eligibility, notifications & profile (requires Bearer JWT + ownership check)."
     ),
 )
 async def customer_chat(
@@ -75,49 +75,49 @@ async def customer_chat(
 @router.get(
     "/quick-questions",
     response_model=QuickQuestionsResponse,
-    summary="Câu hỏi gợi ý nhanh cho Khách hàng (8 chuẩn theo FE Spec)",
+    summary="Quick suggested questions for Customers (8 standard items per FE Spec)",
 )
 async def get_quick_questions():
     questions = [
         QuickQuestionItem(
             id="track_latest",
             title="Track my latest delivery",
-            prompt="Kiểm tra trạng thái đơn gần nhất của tôi",
+            prompt="Check the status of my latest delivery order",
         ),
         QuickQuestionItem(
             id="estimate_fee",
             title="Estimate delivery fee",
-            prompt="Tôi muốn tính thử phí giao hàng",
+            prompt="I want to estimate a delivery shipping fee",
         ),
         QuickQuestionItem(
             id="package_size",
             title="Choose package size",
-            prompt="Tôi nên chọn size kiện hàng nào?",
+            prompt="Which package size should I choose?",
         ),
         QuickQuestionItem(
             id="delivery_modes",
             title="Scheduled or Express?",
-            prompt="Express và Scheduled khác nhau thế nào?",
+            prompt="What is the difference between Express and Scheduled delivery?",
         ),
         QuickQuestionItem(
             id="find_hub",
             title="Find a delivery hub",
-            prompt="DroneOptAI có những hub nào?",
+            prompt="Which delivery hubs does DroneOptAI operate?",
         ),
         QuickQuestionItem(
             id="handover",
             title="Package handover",
-            prompt="Handover deadline là gì?",
+            prompt="What is the handover deadline?",
         ),
         QuickQuestionItem(
             id="payment_help",
             title="Payment help",
-            prompt="Tôi cần thanh toán đơn hàng như thế nào?",
+            prompt="How do I pay for my delivery order?",
         ),
         QuickQuestionItem(
             id="recent_orders",
             title="My recent deliveries",
-            prompt="Cho tôi xem các đơn gần đây",
+            prompt="Show my recent delivery orders",
         ),
     ]
     return QuickQuestionsResponse(questions=questions)

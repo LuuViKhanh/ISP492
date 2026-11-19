@@ -73,18 +73,18 @@ async def get_technician_quick_questions(
     questions = [
         QuickQuestionItem(
             id="fleet_health",
-            title="🛠️ Sức khỏe đội Drone",
-            prompt="Hiện tại có bao nhiêu Drone đang cần bảo trì hoặc hỏng hóc?"
+            title="🛠️ Drone Fleet Health",
+            prompt="How many drones currently require maintenance or repair?"
         ),
         QuickQuestionItem(
             id="low_battery",
-            title="🔋 Pin cần sạc gấp",
-            prompt="Kiểm tra các pin đang có dung lượng dưới 30% cần sạc ngay"
+            title="🔋 Batteries Needing Charge",
+            prompt="Check batteries below 30% charge that need immediate charging"
         ),
         QuickQuestionItem(
             id="pending_orders",
-            title="📋 Lệnh sửa chữa tồn đọng",
-            prompt="Có bao nhiêu Work Order sửa chữa đang chờ xử lý?"
+            title="📋 Pending Work Orders",
+            prompt="How many repair work orders are currently pending?"
         )
     ]
     return QuickQuestionsResponse(questions=questions)

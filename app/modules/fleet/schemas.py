@@ -90,3 +90,4 @@ class WorkOrderResponse(BaseModel):
     model: Optional[str] = None
     assigned_technician_name: Optional[str] = None
     parts_replaced_json: Optional[list] = None  # [{part_category_id, quantity}, ...]
+    resulting_drone_status: Optional[str] = None  # Status technician chose after completion

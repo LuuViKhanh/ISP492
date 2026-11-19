@@ -9,16 +9,16 @@ import math
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database.db import get_async_db
-from app.modules.system.models import Hub
-from app.modules.ai_predictions.service import predict_flight_energy, haversine_distance
+from app.modules.ai_predictions.service import haversine_distance
+from app.modules.missions.bundle_service import get_all_hubs_cached, predict_flight_energy_cached
 
 router = APIRouter(prefix="/ai", tags=["AI Predictions"])
 
 class RouteEnergyRequest(BaseModel):
-    destination_lat: float = Field(..., description="Vĩ độ điểm đến")
-    destination_lng: float = Field(..., description="Kinh độ điểm đến")
-    payload_weight: float = Field(..., description="Trọng lượng hàng hóa (kg)")
-    customer_expected_time: Optional[datetime] = Field(None, description="Thời gian khách hàng mong muốn nhận hàng")
+    destination_lat: float = Field(..., description="Destination latitude")
+    destination_lng: float = Field(..., description="Destination longitude")
+    payload_weight: float = Field(..., description="Cargo payload weight (kg)")
+    customer_expected_time: Optional[datetime] = Field(None, description="Customer expected delivery time")
 
 class RouteSuggestion(BaseModel):
     route_id: str
@@ -46,12 +46,9 @@ async def predict_energy(request: RouteEnergyRequest, db: AsyncSession = Depends
         4. Chuyền khoảng cách và payload vào core service `predict_flight_energy` (dùng chung với Operator).
         5. Trả về danh sách gợi ý lộ trình kèm giá trị SHAP để giải thích lý do tốn pin (do gió, do tải trọng...).
     """
-    result = await db.execute(select(Hub).where(Hub.status == "ACTIVE"))
-    hubs = result.scalars().all()
-    
-    if not hubs:
-        result = await db.execute(select(Hub))
-        hubs = result.scalars().all()
+    # [PERF NOTE] Dùng get_all_hubs_cached + predict_flight_energy_cached để tránh query lại Hub và gọi model ML lặp lại.
+    all_hubs = await get_all_hubs_cached(db)
+    hubs = [h for h in all_hubs if str(h.status or "").upper() == "ACTIVE"] or all_hubs
         
     if not hubs:
         raise HTTPException(status_code=400, detail="No Hubs found in the database.")
@@ -67,7 +64,7 @@ async def predict_energy(request: RouteEnergyRequest, db: AsyncSession = Depends
         time_shift_minutes = random.randint(-60, 60)
         optimal_departure = base_time - timedelta(minutes=time_shift_minutes) - timedelta(minutes=distance * 2) 
         
-        prediction_result = predict_flight_energy(distance, request.payload_weight)
+        prediction_result = predict_flight_energy_cached(distance, request.payload_weight)
         energy_wh = prediction_result["energy_wh"]
         shap_vals = prediction_result["shap_values"]
         
@@ -83,9 +80,9 @@ async def predict_energy(request: RouteEnergyRequest, db: AsyncSession = Depends
         route_id = f"RT-{uuid.uuid4().hex[:8].upper()}"
         
         if wind_angle_shap < 0:
-            what_if_msg = f"Dựa trên DJI Model: Bay lúc {optimal_departure.strftime('%H:%M')} tiết kiệm được {abs(wind_angle_shap)} Wh do gió xuôi."
+            what_if_msg = f"Based on DJI Model: Departing at {optimal_departure.strftime('%H:%M')} saves {abs(wind_angle_shap)} Wh due to favorable tailwind."
         else:
-            what_if_msg = f"Dựa trên DJI Model: Khởi hành lúc {optimal_departure.strftime('%H:%M')} gặp gió ngang/ngược làm tăng tiêu hao {abs(wind_angle_shap)} Wh."
+            what_if_msg = f"Based on DJI Model: Departing at {optimal_departure.strftime('%H:%M')} encounters crosswind/headwind, increasing consumption by {abs(wind_angle_shap)} Wh."
             
         routes.append(RouteSuggestion(
             route_id=route_id,
@@ -126,31 +123,31 @@ async def get_prediction_explanation(prediction_id: str):
             feature_name="distance",
             feature_value=12.5,
             shap_contribution_wh=45.2,
-            description="Khoảng cách bay xa làm tăng tiêu hao pin."
+            description="Long flight distance increases battery consumption."
         ),
         ShapFeatureDetail(
             feature_name="payload",
             feature_value=2.5,
             shap_contribution_wh=15.8,
-            description="Tải trọng hàng hóa lớn."
+            description="Heavy cargo payload."
         ),
         ShapFeatureDetail(
             feature_name="wind_speed",
             feature_value=8.5,
             shap_contribution_wh=-12.4,
-            description="Gió xuôi chiều giúp tiết kiệm pin."
+            description="Tailwind assists flight and reduces battery usage."
         ),
         ShapFeatureDetail(
             feature_name="temperature_c",
             feature_value=32.0,
             shap_contribution_wh=3.1,
-            description="Nhiệt độ môi trường cao làm giảm hiệu suất pin."
+            description="High ambient temperature reduces battery efficiency."
         ),
         ShapFeatureDetail(
             feature_name="relative_wind_angle",
             feature_value=25.0,
             shap_contribution_wh=-8.5,
-            description="Góc đón gió tối ưu."
+            description="Optimal relative wind angle."
         )
     ]
     
@@ -161,5 +158,5 @@ async def get_prediction_explanation(prediction_id: str):
         base_value_wh=round(base_value, 2),
         final_prediction_wh=round(final_prediction, 2),
         features=features,
-        summary_message="Chuyến bay có mức tiêu hao cao hơn trung bình chủ yếu do khoảng cách xa (đóng góp +45.2Wh), nhưng đã được bù đắp một phần nhờ bay xuôi chiều gió (-12.4Wh)."
+        summary_message="This flight has above-average energy consumption primarily due to long distance (+45.2 Wh), partially offset by flying with a favorable tailwind (-12.4 Wh)."
     )

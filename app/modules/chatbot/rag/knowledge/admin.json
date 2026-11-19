@@ -1,49 +1,49 @@
 [
   {
-    "title": "Tổng quan doanh thu hệ thống",
-    "content": "Doanh thu được tính từ Mission.delivery_fee của các chuyến bay đã hoàn thành (status=COMPLETED hoặc MISSION_COMPLETED). Dashboard Admin hiển thị: tổng doanh thu, doanh thu hôm nay, doanh thu tháng này, số đơn đã thanh toán. Không có module thanh toán riêng — phí được tính khi tạo đơn và ghi nhận khi giao thành công.",
+    "title": "System Revenue Overview",
+    "content": "Revenue is calculated from Mission.delivery_fee of completed flight missions (status=COMPLETED or MISSION_COMPLETED). The Admin Dashboard displays total revenue, today's revenue, this month's revenue, and paid order count. There is no separate billing module — fees are computed upon order creation and recognized upon successful delivery.",
     "category": "revenue",
     "role": "admin"
   },
   {
-    "title": "Quản lý người dùng và phân quyền",
-    "content": "Admin có quyền: (1) Xem danh sách tất cả users; (2) Tạo tài khoản mới cho nhân viên với role cụ thể; (3) Cập nhật thông tin, thăng/giáng role; (4) Khóa/mở khóa tài khoản (is_active); (5) Xóa tài khoản. Các role: Admin, Operator, Technician, Customer. Role được ánh xạ qua UUID trong bảng roles.",
+    "title": "User Management and Role-Based Access Control",
+    "content": "Admins have permission to: (1) View all users; (2) Create new staff accounts with specific roles; (3) Update user details and promote/demote roles; (4) Lock/unlock accounts (is_active); (5) Delete accounts. Available roles: Admin, Operator, Technician, Customer. Roles are mapped via UUID in the roles table.",
     "category": "user_management",
     "role": "admin"
   },
   {
-    "title": "Audit Logs - Nhật ký hoạt động",
-    "content": "Mọi hành động quan trọng (đăng nhập, tạo đơn, thay đổi trạng thái) đều được ghi vào bảng audit_logs. Admin xem audit logs tại /system/audit-logs với filter theo: user_id, action type, resource_table, thời gian. Hỗ trợ phân trang. Dùng để điều tra sự cố và kiểm toán bảo mật.",
+    "title": "Audit Logs - Activity History",
+    "content": "All critical actions (login, order creation, status updates) are recorded in the audit_logs table. Admins inspect audit logs at /system/audit-logs with filters for user_id, action type, resource_table, and time range, with pagination support. Used for incident investigation and security auditing.",
     "category": "audit",
     "role": "admin"
   },
   {
-    "title": "Thống kê hệ thống (System KPIs)",
-    "content": "Dashboard Admin cung cấp thống kê toàn hệ thống: số users theo role, tổng missions và tỉ lệ thành công, tình trạng fleet (drone theo trạng thái, utilization trung bình), pin (tổng pin, charge trung bình), AI predictions (số mission có dự báo, năng lượng trung bình, phân bố rủi ro LOW/MEDIUM/HIGH).",
+    "title": "System Statistics (System KPIs)",
+    "content": "The Admin Dashboard provides system-wide statistics: user counts by role, total missions and success rate, fleet status (drones by status, average utilization), batteries (total batteries, average charge), and AI predictions (missions with predictions, average energy consumption, and LOW/MEDIUM/HIGH risk distribution).",
     "category": "system_stats",
     "role": "admin"
   },
   {
-    "title": "Quản lý cấu hình hệ thống",
-    "content": "Admin có thể cấu hình: thông tin Hub (tên, địa chỉ, tọa độ, trạng thái Active/Inactive), thông số vận hành. Cấu hình quan trọng trong .env: GEMINI_API_KEY (chatbot AI), DATABASE_URL (cloud PostgreSQL Supabase), FRONTEND_URL (URL frontend), BREVO_API_KEY (email notifications).",
+    "title": "System Configuration Management",
+    "content": "Admins can configure Hub information (name, address, coordinates, Active/Inactive status) and operational parameters. Important environment variables in .env: GEMINI_API_KEY (AI chatbot), DATABASE_URL (cloud PostgreSQL Supabase), FRONTEND_URL (frontend URL), and BREVO_API_KEY (email notifications).",
     "category": "system_config",
     "role": "admin"
   },
   {
-    "title": "Cảnh báo hệ thống và giám sát",
-    "content": "Admin theo dõi: số Maintenance Alert đang PENDING (cần Technician xử lý), số Incident đang OPEN (cần Operator xử lý), tổng số audit log entries. Cronjob nền chạy: mỗi 3 giây (giám sát mất tín hiệu drone, hủy chuyến quá hạn), mỗi 1 giờ (cảnh báo bảo trì, sạc pin, nhắc nhận hàng).",
+    "title": "System Alerts and Monitoring",
+    "content": "Admins monitor: PENDING Maintenance Alerts (requiring Technician action), OPEN Incidents (requiring Operator action), and total audit log entries. Background cron jobs run every 3 seconds (monitoring drone signal loss and overdue mission cancellation) and every 1 hour (maintenance alerts, battery charging, and pickup reminders).",
     "category": "system_monitoring",
     "role": "admin"
   },
   {
-    "title": "Backup và Data Governance",
-    "content": "Hệ thống lưu trữ dữ liệu trên cloud PostgreSQL (Supabase). Backup tự động được Supabase quản lý. Admin có thể xuất audit logs để lưu trữ. Dữ liệu telemetry bay được lưu vô thời hạn cho mục đích phân tích. Chính sách: dữ liệu khách hàng được bảo mật và không chia sẻ với bên thứ ba.",
+    "title": "Backup and Data Governance",
+    "content": "The system stores data on cloud PostgreSQL (Supabase), with automated backups managed by Supabase. Admins can export audit logs for archival. Flight telemetry data is retained indefinitely for analytics. Policy: customer data is kept confidential and never shared with third parties.",
     "category": "data_governance",
     "role": "admin"
   },
   {
-    "title": "Kiến trúc kỹ thuật hệ thống",
-    "content": "DroneOptAI Backend: FastAPI (Python), PostgreSQL + pgvector (Supabase), SQLAlchemy async ORM. AI/ML: CatBoost model dự báo năng lượng, SHAP explainability, Google Gemini API cho chatbot. Infrastructure: Deploy trên Render.com, database Supabase (pgvector enabled). Cronjob: 2 vòng lặp async — realtime (3s) và hourly (3600s) với isolated DB pool.",
+    "title": "System Technical Architecture",
+    "content": "DroneOptAI Backend: FastAPI (Python), PostgreSQL + pgvector (Supabase), SQLAlchemy async ORM. AI/ML: CatBoost energy prediction model, SHAP explainability, Google Gemini API for chatbots. Infrastructure: Deployed on Render.com with Supabase database (pgvector enabled). Cron jobs: 2 async loops — realtime (3s) and hourly (3600s) using an isolated DB pool.",
     "category": "technical_architecture",
     "role": "admin"
   }

@@ -420,6 +420,8 @@ showAlert({
 
 **Endpoint:** `PATCH /api/v1/operator/simulator/config`
 
+### 10.1 Cơ bản
+
 ```bash
 curl -X PATCH "http://localhost:8000/api/v1/operator/simulator/config" \
   -H "Authorization: Bearer <operator_token>" \
@@ -442,9 +444,133 @@ curl -X PATCH "http://localhost:8000/api/v1/operator/simulator/config" \
   "incident_min_step": 2,
   "incident_severity": "High",
   "interval_sec": 2,
-  "steps_per_leg": 30
+  "steps_per_leg": 30,
+  "speed_multiplier": 1.0
 }
 ```
+
+### 10.2 Tối ưu Simulator cho Non-Realtime Testing
+
+Để chạy các chuyến bay nhanh hơn mà không cần realtime (không đợi 30+ phút bay thực tế), dùng `speed_multiplier`:
+
+**Lấy config hiện tại:**
+```bash
+curl -X GET "http://localhost:8000/api/v1/operator/simulator/config" \
+  -H "Authorization: Bearer <operator_token>"
+```
+
+**Response:**
+```json
+{
+  "incident_enabled": true,
+  "incident_probability": 0.08,
+  "incident_min_step": 3,
+  "incident_severity": "Medium",
+  "interval_sec": 3,
+  "steps_per_leg": 20,
+  "speed_multiplier": 1.0,
+  "next_flight_incident": false,
+  "next_flight_incident_step": null,
+  "next_flight_incident_severity": null,
+  "next_flight_incident_type": "FAILSAFE_RTH",
+  "next_flight_incident_armed_at": null
+}
+```
+
+#### Thiết lập Speed Multiplier
+
+| Multiplier | Thời gian bay (30km) | Sử dụng |
+|---|---|---|
+| **1.0** (default) | ~30 phút | Realtime testing, demo |
+| **2.0** | ~15 phút | Development, testing features |
+| **5.0** | ~6 phút | Fast CI/CD tests, regression tests |
+| **10.0** | ~3 phút | Ultra-fast smoke tests |
+
+**Cài đặt 2.0x speed (bay nhanh gấp đôi):**
+```bash
+curl -X PATCH "http://localhost:8000/api/v1/operator/simulator/config" \
+  -H "Authorization: Bearer <operator_token>" \
+  -H "Content-Type: application/json" \
+  -d {
+    "speed_multiplier": 2.0
+  }
+```
+
+**Cài đặt 5.0x speed (bay nhanh gấp 5 lần):**
+```bash
+curl -X PATCH "http://localhost:8000/api/v1/operator/simulator/config" \
+  -H "Authorization: Bearer <operator_token>" \
+  -H "Content-Type: application/json" \
+  -d {
+    "speed_multiplier": 5.0
+  }
+```
+
+#### Cách nó hoạt động
+
+- **interval_sec**: Khoảng thời gian giữa 2 điểm telemetry (default: 3s)
+- **speed_multiplier**: Thừa số tăng tốc độ (1.0 = realtime, 2.0 = gấp đôi, v.v.)
+- **Effective interval**: `interval_sec / speed_multiplier`
+
+**Ví dụ:**
+```
+interval_sec = 3s
+speed_multiplier = 1.0
+→ effective_interval = 3s / 1.0 = 3s (realtime)
+
+interval_sec = 3s
+speed_multiplier = 2.0
+→ effective_interval = 3s / 2.0 = 1.5s (2x tốc độ)
+
+interval_sec = 3s
+speed_multiplier = 5.0
+→ effective_interval = 3s / 5.0 = 0.6s (5x tốc độ)
+```
+
+#### Deceleration ở Hub
+
+Khi drone gần tới hub (90% đến 100% của waypoints):
+- **Tốc độ:** Giảm từ CRUISE_SPEED (12 m/s) → 2 m/s
+- **Độ cao:** Giảm từ CRUISE_ALTITUDE (50m) → 5m
+- **Deceleration tỷ lệ với speed_multiplier:** Hạ cánh mượt tại bất kỳ tốc độ nào
+
+**Log output khi bay:**
+```
+[SIMULATOR] Mission MSN-20261018-0001 | Leg 1: 
+  Hub Quận 1 → Hub Quận 7 | 
+  15.24 km | 200 điểm | interval=3s (speed_multiplier=2.0) | 
+  Battery start: 95.5% (cap: 3500Wh, planned_leg_energy: 180.5Wh)
+```
+
+#### Kết hợp với Incident Testing
+
+```bash
+# Bay nhanh 5x, có 20% xác suất incident ở mỗi điểm
+curl -X PATCH "http://localhost:8000/api/v1/operator/simulator/config" \
+  -H "Authorization: Bearer <operator_token>" \
+  -H "Content-Type: application/json" \
+  -d {
+    "speed_multiplier": 5.0,
+    "incident_enabled": true,
+    "incident_probability": 0.2,           # 20% xác suất
+    "incident_severity": "High"            # Severity cao
+  }
+```
+
+#### Giới hạn
+
+- **Minimum:** `0.1` (slow-mo, 10x chậm hơn)
+- **Maximum:** `100.0` (siêu nhanh, 100x tốc độ realtime)
+- **Mặc định:** `1.0` (realtime)
+
+Nếu vượt giới hạn, API trả lỗi:
+```json
+{
+  "detail": "speed_multiplier must be between 0.1 and 100.0"
+}
+```
+
+---
 
 **Test Scenario:**
 - Để `incident_probability = 1.0` → buộc incident xảy ra

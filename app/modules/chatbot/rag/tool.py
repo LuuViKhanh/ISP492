@@ -32,17 +32,17 @@ def get_rag_function_declaration() -> Any:
     return genai_types.FunctionDeclaration(
         name="search_knowledge_base",
         description=(
-            "Tìm kiếm thông tin trong cơ sở kiến thức nội bộ của hệ thống DroneOptAI. "
-            "Dùng khi cần tra cứu: chính sách công ty, quy trình nghiệp vụ, hướng dẫn vận hành, "
-            "quy định bảo trì, câu hỏi thường gặp (FAQ), hoặc bất kỳ thông tin nào "
-            "không có trong các tool nghiệp vụ chuyên biệt khác."
+            "Search the DroneOptAI internal knowledge base. "
+            "Use this tool when you need to look up company policies, business workflows, "
+            "operational guidelines, maintenance rules, FAQs, or any information "
+            "not covered by other specialized business tools."
         ),
         parameters=genai_types.Schema(
             type=genai_types.Type.OBJECT,
             properties={
                 "query": genai_types.Schema(
                     type=genai_types.Type.STRING,
-                    description="Câu hỏi hoặc từ khóa cần tra cứu trong knowledge base.",
+                    description="Question or keywords to search in the knowledge base.",
                 ),
             },
             required=["query"],
@@ -74,7 +74,7 @@ async def tool_search_knowledge_base(
         return {
             "success": False,
             "code": "EMPTY_QUERY",
-            "message": "Câu hỏi trống.",
+            "message": "Query cannot be empty.",
             "chunks": [],
         }
 
@@ -83,7 +83,7 @@ async def tool_search_knowledge_base(
         return {
             "success": False,
             "code": "NO_API_KEY",
-            "message": "GEMINI_API_KEY chưa được cấu hình.",
+            "message": "GEMINI_API_KEY is not configured.",
             "chunks": [],
         }
 
@@ -104,7 +104,7 @@ async def tool_search_knowledge_base(
             return {
                 "success": True,
                 "code": "NO_RESULTS",
-                "message": "Không tìm thấy thông tin liên quan trong knowledge base.",
+                "message": "No relevant information found in the knowledge base.",
                 "query": query,
                 "chunks": [],
             }
@@ -127,8 +127,8 @@ async def tool_search_knowledge_base(
             "result_count": len(formatted),
             "knowledge_chunks": formatted,
             "instruction": (
-                "Dựa vào các đoạn thông tin trên để trả lời câu hỏi của người dùng. "
-                "Chỉ sử dụng thông tin từ knowledge base, không tự suy đoán thêm."
+                "Use the retrieved knowledge snippets above to answer the user's question in English. "
+                "Only rely on information from the knowledge base and do not fabricate or speculate beyond it."
             ),
         }
 
@@ -137,7 +137,7 @@ async def tool_search_knowledge_base(
         return {
             "success": False,
             "code": "RAG_ERROR",
-            "message": f"Lỗi khi tra cứu knowledge base: {str(e)[:100]}",
+            "message": f"Error searching knowledge base: {str(e)[:100]}",
             "chunks": [],
         }
 

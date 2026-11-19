@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, List, Union
 from datetime import datetime
 from app.modules.missions.models import OrderStatus, DeliveryMode
@@ -192,6 +192,18 @@ class TrackingLegSchema(BaseModel):
     from_hub: Optional[TrackingHubSchema] = None
     to_hub: Optional[TrackingHubSchema] = None
     battery_id: Optional[str] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_leg_status(cls, v):
+        if not v:
+            return v
+        s = v.value if hasattr(v, "value") else str(v)
+        if s.strip().upper() in ("IN_PROGRESS", "IN PROGRESS", "IN-PROGRESS"):
+            return "FLYING"
+        return s
 
 
 class TrackingCurrentLegSchema(BaseModel):
@@ -201,6 +213,18 @@ class TrackingCurrentLegSchema(BaseModel):
     from_hub: Optional[TrackingHubSchema] = None
     to_hub: Optional[TrackingHubSchema] = None
     assigned_battery_id: Optional[str] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_current_leg_status(cls, v):
+        if not v:
+            return v
+        s = v.value if hasattr(v, "value") else str(v)
+        if s.strip().upper() in ("IN_PROGRESS", "IN PROGRESS", "IN-PROGRESS"):
+            return "FLYING"
+        return s
 
 
 class TrailPointSchema(BaseModel):
@@ -211,12 +235,30 @@ class TrailPointSchema(BaseModel):
     timestamp: Optional[datetime] = None
 
 
+class TrackingTimelineStepSchema(BaseModel):
+    step_key: str
+    label: str
+    completed: bool = False
+    timestamp: Optional[datetime] = None
+    description: Optional[str] = None
+
+
 class TrackingResponse(BaseModel):
     order_id: str
     delivery_status: str
     delivery_status_label: str
     eta: Optional[datetime] = None                 # = order.estimated_window_end
     estimated_window_start: Optional[datetime] = None
+    order_created_at: Optional[datetime] = None
+    paid_at: Optional[datetime] = None
+    package_received_at: Optional[datetime] = None
+    departed_at: Optional[datetime] = None
+    arrived_at: Optional[datetime] = None
+    arrival_confirmed_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    elapsed_seconds: Optional[int] = None
+    remaining_seconds: Optional[int] = None
+    timeline: List[TrackingTimelineStepSchema] = []
     mission_id: Optional[str] = None
     mission_status: Optional[str] = None
     drone_id: Optional[Union[str, int]] = None

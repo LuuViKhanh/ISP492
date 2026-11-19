@@ -136,7 +136,7 @@ async def create_category(
         select(PartCategory).where(PartCategory.name == body.name)
     )).scalar_one_or_none()
     if existing:
-        raise HTTPException(status_code=409, detail=f"Danh mục '{body.name}' đã tồn tại.")
+        raise HTTPException(status_code=409, detail=f"Category '{body.name}' already exists.")
 
     cat = PartCategory(
         name=body.name,
@@ -162,7 +162,7 @@ async def update_category(
 ):
     cat = await db.get(PartCategory, category_id)
     if not cat:
-        raise HTTPException(status_code=404, detail="Danh mục không tồn tại.")
+        raise HTTPException(status_code=404, detail="Category not found.")
     if body.name is not None:
         cat.name = body.name
     if body.unit_cost is not None:
@@ -230,15 +230,15 @@ async def receive_stock(
     Tạo/cập nhật HubInventory + ghi InventoryTransaction.
     """
     if body.quantity < 1:
-        raise HTTPException(status_code=400, detail="Số lượng nhập tối thiểu là 1.")
+        raise HTTPException(status_code=400, detail="Minimum receive quantity is 1.")
 
     cat = await db.get(PartCategory, body.part_category_id)
     if not cat:
-        raise HTTPException(status_code=404, detail="Danh mục linh kiện không tồn tại.")
+        raise HTTPException(status_code=404, detail="Part category not found.")
 
     hub = await db.get(Hub, body.hub_id)
     if not hub:
-        raise HTTPException(status_code=404, detail="Hub không tồn tại.")
+        raise HTTPException(status_code=404, detail="Hub not found.")
 
     now = datetime.now(timezone.utc)
 
@@ -272,15 +272,15 @@ async def receive_stock(
         quantity_delta=body.quantity,
         reason=TxnReason.RECEIVE,
         performed_by=user.id,
-        note=f"Nhập kho {body.quantity}x {cat.name} tại hub #{body.hub_id}. "
-             f"Đơn giá: {unit_cost:,.0f} VNĐ. Tổng: {total_cost:,.0f} VNĐ. "
+        note=f"Received {body.quantity}x {cat.name} at Hub #{body.hub_id}. "
+             f"Unit cost: {unit_cost:,.0f} VND. Total: {total_cost:,.0f} VND. "
              + (body.note or ""),
         created_at=now,
     ))
 
     await db.commit()
     return {
-        "message": f"Nhập kho thành công {body.quantity}x {cat.name} tại hub #{body.hub_id}.",
+        "message": f"Successfully received {body.quantity}x {cat.name} at Hub #{body.hub_id}.",
         "new_quantity": inv.quantity,
         "total_cost": total_cost,
     }
@@ -297,9 +297,9 @@ async def transfer_stock(
     Sinh 2 transaction: -qty ở nguồn, +qty ở đích.
     """
     if body.quantity < 1:
-        raise HTTPException(status_code=400, detail="Số lượng chuyển tối thiểu là 1.")
+        raise HTTPException(status_code=400, detail="Minimum transfer quantity is 1.")
     if body.from_hub_id == body.to_hub_id:
-        raise HTTPException(status_code=400, detail="Hub nguồn và đích phải khác nhau.")
+        raise HTTPException(status_code=400, detail="Source and destination hubs must be different.")
 
     now = datetime.now(timezone.utc)
 
@@ -315,7 +315,7 @@ async def transfer_stock(
         avail = src_inv.quantity if src_inv else 0
         raise HTTPException(
             status_code=400,
-            detail=f"Hub nguồn #{body.from_hub_id} chỉ có {avail} đơn vị, không đủ để chuyển {body.quantity}."
+            detail=f"Source Hub #{body.from_hub_id} only has {avail} unit(s), insufficient to transfer {body.quantity}."
         )
 
     cat = await db.get(PartCategory, body.part_category_id)
@@ -352,20 +352,20 @@ async def transfer_stock(
         hub_id=body.from_hub_id, part_category_id=body.part_category_id,
         quantity_delta=-body.quantity, reason=TxnReason.TRANSFER_OUT,
         performed_by=user.id, reference_id=ref,
-        note=f"Chuyển {body.quantity}x {cat_name} → hub #{body.to_hub_id}. {note_base}",
+        note=f"Transferred {body.quantity}x {cat_name} → Hub #{body.to_hub_id}. {note_base}",
         created_at=now,
     ))
     db.add(InventoryTransaction(
         hub_id=body.to_hub_id, part_category_id=body.part_category_id,
         quantity_delta=body.quantity, reason=TxnReason.TRANSFER_IN,
         performed_by=user.id, reference_id=ref,
-        note=f"Nhận {body.quantity}x {cat_name} từ hub #{body.from_hub_id}. {note_base}",
+        note=f"Received {body.quantity}x {cat_name} from Hub #{body.from_hub_id}. {note_base}",
         created_at=now,
     ))
 
     await db.commit()
     return {
-        "message": f"Điều phối thành công {body.quantity}x {cat_name} từ hub #{body.from_hub_id} → hub #{body.to_hub_id}.",
+        "message": f"Successfully transferred {body.quantity}x {cat_name} from Hub #{body.from_hub_id} → Hub #{body.to_hub_id}.",
         "from_hub_new_qty": src_inv.quantity,
         "to_hub_new_qty": dst_inv.quantity,
     }
@@ -471,11 +471,11 @@ async def approve_request(
     """
     req = await db.get(PartsRequest, request_id)
     if not req:
-        raise HTTPException(status_code=404, detail="Đề xuất không tồn tại.")
+        raise HTTPException(status_code=404, detail="Parts request not found.")
     if req.status not in (PartsRequestStatus.PENDING, PartsRequestStatus.WAITING_STOCK):
         raise HTTPException(
             status_code=400,
-            detail=f"Đề xuất đang ở trạng thái '{req.status.value}', không thể duyệt."
+            detail=f"Parts request is currently '{req.status.value}' and cannot be approved."
         )
 
     now = datetime.now(timezone.utc)
@@ -507,13 +507,13 @@ async def approve_request(
             reason=TxnReason.REPAIR_USE,
             performed_by=user.id,
             reference_id=str(req.id),
-            note=f"Admin duyệt đề xuất #{req.id}: {req.quantity_needed}x {cat.name if cat else '?'} cho drone {req.drone_id or 'N/A'}",
+            note=f"Admin approved request #{req.id}: {req.quantity_needed}x {cat.name if cat else '?'} for drone {req.drone_id or 'N/A'}",
             created_at=now,
         ))
 
         await db.commit()
         return {
-            "message": "Đã duyệt. Linh kiện đã được trừ khỏi kho.",
+            "message": "Approved. Parts have been deducted from hub stock.",
             "request_id": request_id,
             "status": PartsRequestStatus.APPROVED.value,
             "remaining_stock": inv.quantity,
@@ -523,7 +523,7 @@ async def approve_request(
         await db.commit()
         avail = inv.quantity if inv else 0
         return {
-            "message": f"Chuyển sang WAITING_STOCK. Hub #{req.hub_id} chỉ còn {avail} đơn vị (cần {req.quantity_needed}). Hãy điều phối từ hub khác.",
+            "message": f"Moved to WAITING_STOCK. Hub #{req.hub_id} only has {avail} unit(s) (requires {req.quantity_needed}). Please transfer stock from another hub.",
             "request_id": request_id,
             "status": PartsRequestStatus.WAITING_STOCK.value,
             "hub_stock_available": avail,
@@ -540,18 +540,18 @@ async def reject_request(
 ):
     req = await db.get(PartsRequest, request_id)
     if not req:
-        raise HTTPException(status_code=404, detail="Đề xuất không tồn tại.")
+        raise HTTPException(status_code=404, detail="Parts request not found.")
     if req.status in (PartsRequestStatus.FULFILLED, PartsRequestStatus.REJECTED):
-        raise HTTPException(status_code=400, detail="Đề xuất đã kết thúc.")
+        raise HTTPException(status_code=400, detail="Parts request has already been finalized.")
 
     now = datetime.now(timezone.utc)
     req.status = PartsRequestStatus.REJECTED
     req.reviewed_by = user.id
     req.reviewed_at = now
-    req.admin_note = body.admin_note or "Từ chối bởi Admin."
+    req.admin_note = body.admin_note or "Rejected by Admin."
 
     await db.commit()
-    return {"message": "Đã từ chối đề xuất.", "request_id": request_id}
+    return {"message": "Parts request rejected.", "request_id": request_id}
 
 
 # ── Finance Report ─────────────────────────────────────────────────
@@ -586,11 +586,11 @@ async def finance_report(
         _, last_day = monthrange(target_year, month)
         period_start = datetime(target_year, month, 1, tzinfo=timezone.utc)
         period_end   = datetime(target_year, month, last_day, 23, 59, 59, tzinfo=timezone.utc)
-        period_label = f"Tháng {month:02d}/{target_year}"
+        period_label = f"Month {month:02d}/{target_year}"
     else:
         period_start = datetime(target_year, 1, 1, tzinfo=timezone.utc)
         period_end   = datetime(target_year, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
-        period_label = f"Năm {target_year}"
+        period_label = f"Year {target_year}"
 
     # ── Thu: doanh thu giao hàng ──────────────────────────────────
     period_start_naive = period_start.replace(tzinfo=None)

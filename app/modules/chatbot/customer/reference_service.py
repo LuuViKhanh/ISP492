@@ -1,5 +1,5 @@
 """
-Customer Reference, Help & Status Services (Single Source of Truth cho FE & Chatbot).
+Customer Reference, Help & Status Services (Single Source of Truth for FE & Chatbot).
 ------------------------------------------------------------------------------------
 GHI CHÚ CHO LẬP TRÌNH VIÊN (DEVELOPER NOTES):
 - Đọc dữ liệu chuẩn (Canonical Business Rules) từ `knowledge/customer_help.json`.
@@ -64,7 +64,7 @@ class CustomerReferenceService:
                 "type": "package_recommendation",
                 "success": False,
                 "code": "INVALID_PACKAGE_WEIGHT",
-                "message": "Khối lượng kiện hàng phải lớn hơn 0 kg.",
+                "message": "Package weight must be greater than 0 kg.",
             }
 
         if weight_kg > 10.0:
@@ -75,8 +75,8 @@ class CustomerReferenceService:
                 "weight_kg": weight_kg,
                 "max_allowed_kg": 10.0,
                 "message": (
-                    f"Kiện hàng {weight_kg} kg vượt quá giới hạn tối đa của mạng lưới DroneOptAI "
-                    "(Size XL tối đa ≤ 10 kg, kích thước 50 × 40 × 30 cm)."
+                    f"Package weight ({weight_kg} kg) exceeds the maximum DroneOptAI network limit "
+                    "(Size XL max <= 10 kg, dimensions 50 x 40 x 30 cm)."
                 ),
             }
 
@@ -101,7 +101,7 @@ class CustomerReferenceService:
                 "weight_kg": weight_kg,
                 "dimensions_cm": {"length": length_cm, "width": width_cm, "height": height_cm},
                 "message": (
-                    "Kích thước kiện hàng vượt quá giới hạn tối đa của Size XL (50 × 40 × 30 cm)."
+                    "Package dimensions exceed the maximum Size XL limit (50 x 40 x 30 cm)."
                 ),
             }
 
@@ -226,11 +226,11 @@ class CustomerHelpService:
                 "topic": target_undef,
                 "policy_value": None,
                 "message": (
-                    f"Chính sách '{target_undef}' hiện chưa có dữ liệu chính thức được công bố trong hệ thống DroneOptAI. "
-                    "Trợ lý AI không được tự suy diễn hoặc bịa thông tin này."
+                    f"Policy '{target_undef}' does not currently have officially published data in the DroneOptAI system. "
+                    "The AI Assistant must not infer or fabricate this information."
                 ),
                 "known_related_rule": (
-                    "Bảo hiểm kiện hàng là tùy chọn +10% Core Fee, nhưng chi tiết phạm vi bồi thường chưa được công bố."
+                    "Package insurance is optional (+10% Core Fee), but detailed coverage scope has not been officially published."
                     if target_undef == "insurance_coverage"
                     else None
                 ),
@@ -271,7 +271,7 @@ class CustomerHelpService:
             "topic": topic,
             "available_topics": list(help_topics.keys()),
             "message": (
-                f"Chủ đề '{topic}' chưa có dữ liệu chính thức để xác nhận trên hệ thống."
+                f"Topic '{topic}' does not have official confirmed data in the system yet."
             ),
         }
 
@@ -296,7 +296,7 @@ class CustomerStatusService:
             return {
                 "customer_status": "cancelled",
                 "status_label": "Cancelled",
-                "status_label_vi": "Đã hủy",
+                "status_label_vi": "Cancelled",
                 "handoff_state": "cancelled",
             }
 
@@ -305,7 +305,7 @@ class CustomerStatusService:
             return {
                 "customer_status": "delivery_issue",
                 "status_label": "Delivery issue / Needs support",
-                "status_label_vi": "Sự cố giao hàng / Cần hỗ trợ",
+                "status_label_vi": "Delivery issue / Needs support",
                 "handoff_state": "issue",
             }
 
@@ -316,7 +316,7 @@ class CustomerStatusService:
             return {
                 "customer_status": "completed",
                 "status_label": "Completed",
-                "status_label_vi": "Đã hoàn tất giao nhận",
+                "status_label_vi": "Completed",
                 "handoff_state": "collected",
             }
 
@@ -330,7 +330,7 @@ class CustomerStatusService:
             return {
                 "customer_status": "ready_for_collection",
                 "status_label": "Ready for collection",
-                "status_label_vi": "Đã tới trạm đích - Sẵn sàng nhận hàng",
+                "status_label_vi": "Ready for collection",
                 "handoff_state": "received_at_destination",
             }
 
@@ -343,7 +343,7 @@ class CustomerStatusService:
             return {
                 "customer_status": "in_delivery",
                 "status_label": "In delivery",
-                "status_label_vi": "Đang vận chuyển bằng Drone",
+                "status_label_vi": "In delivery",
                 "handoff_state": "in_transit",
             }
 
@@ -356,7 +356,7 @@ class CustomerStatusService:
             return {
                 "customer_status": "scheduled",
                 "status_label": "Scheduled",
-                "status_label_vi": "Đã lên lịch bay",
+                "status_label_vi": "Scheduled",
                 "handoff_state": (
                     "received_at_origin" if order.origin_received_at else "awaiting_origin_receive"
                 ),
@@ -367,7 +367,7 @@ class CustomerStatusService:
             return {
                 "customer_status": "package_received_at_origin",
                 "status_label": "Package received at origin hub / Preparing delivery",
-                "status_label_vi": "Đã nhận hàng tại trạm gửi / Đang chuẩn bị giao",
+                "status_label_vi": "Package received at origin hub / Preparing delivery",
                 "handoff_state": "received_at_origin",
             }
 
@@ -376,7 +376,7 @@ class CustomerStatusService:
             return {
                 "customer_status": "awaiting_package_dropoff",
                 "status_label": "Awaiting package drop-off",
-                "status_label_vi": "Đã thanh toán - Chờ gửi hàng tại Origin Hub",
+                "status_label_vi": "Awaiting package drop-off",
                 "handoff_state": "awaiting_origin_receive",
             }
 
@@ -384,7 +384,7 @@ class CustomerStatusService:
         return {
             "customer_status": "awaiting_payment",
             "status_label": "Awaiting payment",
-            "status_label_vi": "Đang chờ thanh toán",
+            "status_label_vi": "Awaiting payment",
             "handoff_state": "awaiting_payment",
         }
 

@@ -2,7 +2,7 @@
 Core Engine điều phối Chatbot AI tích hợp Google Gemini API (Contract v1.1).
 ----------------------------------------------------------------------------
 GHI CHÚ DÀNH CHO LẬP TRÌNH VIÊN (DEVELOPER EXPLANATION):
-======================================================
+============================================================================
 File này đóng vai trò là "Bộ não trung tâm" (Shared AI Engine) dùng chung cho tất cả các Role:
 - Customer Chatbot (Khách hàng - 18 canonical tools)
 - Operator Chatbot (Nhân viên điều phối bay)
@@ -107,8 +107,8 @@ async def execute_agent_chat(
         return ChatMessageResponse(
             conversation_id=conv_id,
             reply=(
-                "⚠️ **Thư viện AI (`google-genai`) chưa được cài đặt trên máy chủ backend.**\n\n"
-                "👉 Lập trình viên vui lòng tắt server backend (Ctrl+C) và chạy lệnh:\n"
+                "⚠️ **AI library (`google-genai`) is not installed on the backend server.**\n\n"
+                "👉 Developers: please stop the backend server (Ctrl+C) and run:\n"
                 "```bash\n"
                 "pip install google-genai==2.29.0\n"
                 "```"
@@ -125,7 +125,7 @@ async def execute_agent_chat(
         return ChatMessageResponse(
             conversation_id=conv_id,
             reply=(
-                "⚠️ **Chưa cấu hình API Key:** Hệ thống chưa nhận được `GEMINI_API_KEY` trong file `.env`."
+                "⚠️ **Missing API Key:** `GEMINI_API_KEY` is not configured in the `.env` file."
             ),
             tools_called=[],
             data={"type": "generic_answer", "code": "AI_UNAVAILABLE"},
@@ -220,7 +220,7 @@ async def execute_agent_chat(
             if not response.function_calls:
                 final_reply = (
                     response.text
-                    or "Xin lỗi, tôi chưa hiểu rõ yêu cầu. Bạn có thể nói rõ hơn không?"
+                    or "Sorry, I did not quite understand your request. Could you please clarify?"
                 )
                 break
 
@@ -257,7 +257,7 @@ async def execute_agent_chat(
                     tool_result = {
                         "type": "generic_answer",
                         "code": "TOOL_UNAVAILABLE",
-                        "error": f"Tool '{call_name}' không tồn tại trong hệ thống.",
+                        "error": f"Tool '{call_name}' does not exist in the system.",
                     }
 
                 function_response_parts.append(
@@ -285,14 +285,14 @@ async def execute_agent_chat(
                     contents=contents + [
                         types.Content(
                             role="user",
-                            parts=[types.Part.from_text(text="Dựa trên các dữ liệu đã tra cứu ở trên, hãy trả lời câu hỏi của khách hàng một cách chi tiết, đầy đủ và thân thiện.")],
+                            parts=[types.Part.from_text(text="Based on the retrieved data above, please answer the user's question clearly, thoroughly, and helpfully in English.")],
                         )
                     ],
                     config=summary_config,
                 )
-                final_reply = summary_res.text or "Dạ, em đã tra cứu thông tin theo yêu cầu của anh/chị ạ."
+                final_reply = summary_res.text or "I have retrieved the requested information for you."
             except Exception:
-                final_reply = "Dạ, em đã tra cứu thông tin theo yêu cầu của anh/chị ạ."
+                final_reply = "I have retrieved the requested information for you."
 
         # Đảm bảo `data` luôn có trường `type` chuẩn để FE render không cần regex
         if merged_data is None:
@@ -300,7 +300,7 @@ async def execute_agent_chat(
         elif "type" not in merged_data:
             merged_data["type"] = "generic_answer"
 
-        # Dedup actions theo (type, href)
+        # Deduplicate actions by (type, href)
         unique_actions: List[ChatActionItem] = []
         seen_act = set()
         for a in collected_actions:
@@ -332,8 +332,8 @@ async def execute_agent_chat(
         return ChatMessageResponse(
             conversation_id=conv_id,
             reply=(
-                f"⚠️ **Đã xảy ra lỗi khi kết nối với dịch vụ AI:** `{error_msg}`\n\n"
-                "Vui lòng thử lại sau giây lát."
+                f"⚠️ **An error occurred while connecting to the AI service:** `{error_msg}`\n\n"
+                "Please try again in a moment."
             ),
             tools_called=tools_called,
             data={"type": "generic_answer", "code": "AI_UNAVAILABLE"},

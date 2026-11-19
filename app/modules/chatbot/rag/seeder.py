@@ -43,7 +43,7 @@ async def seed_knowledge_base(db, api_key: str = None, clear_first: bool = False
 
     _api_key = api_key or os.getenv("GEMINI_API_KEY") or ""
     if not _api_key:
-        raise ValueError("GEMINI_API_KEY chưa được cấu hình")
+        raise ValueError("GEMINI_API_KEY is not configured")
 
     if clear_first:
         await db.execute(text("TRUNCATE TABLE knowledge_chunks RESTART IDENTITY"))

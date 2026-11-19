@@ -87,16 +87,7 @@ async def run_with_retry(
 ) -> None:
     """
     FDE-194: Chạy một worker function với cơ chế tự động thử lại.
-
-    Quy trình mỗi lần thử:
-      1. Mở session MỚI từ CronSessionLocal (FDE-193: session độc lập).
-      2. Gọi worker_fn(session).
-      3. Nếu thành công → return.
-      4. Nếu lỗi tạm thời (connection/timeout) → rollback → đợi backoff → retry.
-      5. Nếu lỗi logic (không phải transient) → rollback → raise ngay, không retry.
-      6. Sau khi hết max_retries → log [CRON FAILED] và bỏ qua (không crash toàn server).
-
-    Backoff schedule (base=2s): 2s → 4s → 8s
+    Tự động ghi kết quả vào system_logs sau mỗi lần chạy (thành công hoặc lỗi).
     """
     last_exc: Exception | None = None
 
@@ -104,6 +95,20 @@ async def run_with_retry(
         try:
             async with CronSessionLocal() as session:
                 await worker_fn(session)
+
+            # Ghi system log — thành công (chỉ ghi INFO để tránh spam)
+            try:
+                async with CronSessionLocal() as slog_session:
+                    from app.modules.system.service import log_system_event
+                    await log_system_event(
+                        slog_session,
+                        source=worker_name,
+                        event="WORKER_RUN",
+                        message=f"Worker '{worker_name}' chạy thành công.",
+                        level="INFO",
+                    )
+            except Exception:
+                pass
             return  # thành công
 
         except Exception as exc:
@@ -117,14 +122,41 @@ async def run_with_retry(
                 )
                 await asyncio.sleep(wait)
             else:
-                # Lỗi logic → không retry, log và thoát
                 logger.error(
                     "[CRON LOGIC ERROR] %s | attempt %d | lỗi không thể retry: %s",
                     worker_name, attempt, exc, exc_info=True,
                 )
+                # Ghi system log — lỗi logic
+                try:
+                    async with CronSessionLocal() as slog_session:
+                        from app.modules.system.service import log_system_event
+                        await log_system_event(
+                            slog_session,
+                            source=worker_name,
+                            event="WORKER_ERROR",
+                            message=f"Worker '{worker_name}' lỗi logic: {exc}",
+                            level="ERROR",
+                            details={"error": str(exc), "attempt": attempt},
+                        )
+                except Exception:
+                    pass
                 return
 
     logger.error(
         "[CRON FAILED] %s | đã thử %d lần, bỏ qua. Lỗi cuối: %s",
         worker_name, max_retries, last_exc, exc_info=True,
     )
+    # Ghi system log — hết retry
+    try:
+        async with CronSessionLocal() as slog_session:
+            from app.modules.system.service import log_system_event
+            await log_system_event(
+                slog_session,
+                source=worker_name,
+                event="WORKER_FAILED",
+                message=f"Worker '{worker_name}' thất bại sau {max_retries} lần thử. Lỗi: {last_exc}",
+                level="CRITICAL",
+                details={"error": str(last_exc), "max_retries": max_retries},
+            )
+    except Exception:
+        pass

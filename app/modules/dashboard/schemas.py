@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Dict
+from typing import Dict, Optional
 
 
 # ======================================================================
@@ -84,6 +84,8 @@ class AdminRevenue(BaseModel):
     paid_orders: int
     pending_payments: float   # Không có module payment -> 0
     refunds: float            # Không có module payment -> 0
+    gross_revenue: Optional[float] = None
+    total_expenses: Optional[float] = None
 
 
 class AdminUsers(BaseModel):

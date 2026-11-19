@@ -50,18 +50,18 @@ async def seed_rag(
     """
     api_key = os.getenv("GEMINI_API_KEY") or ""
     if not api_key:
-        raise HTTPException(status_code=400, detail="GEMINI_API_KEY chưa được cấu hình trong .env")
+        raise HTTPException(status_code=400, detail="GEMINI_API_KEY is not configured in .env")
 
     try:
         result = await seed_knowledge_base(db, api_key=api_key, clear_first=clear_first)
         total = sum(result.values())
         return {
             "status": "success",
-            "message": f"Đã seed {total} chunks vào knowledge base.",
+            "message": f"Seeded {total} chunks into the knowledge base.",
             "detail_by_role": result,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi khi seed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to seed knowledge base: {str(e)}")
 
 
 @router.delete("/clear")
@@ -73,4 +73,4 @@ async def clear_rag(
     from sqlalchemy import text
     await db.execute(text("TRUNCATE TABLE knowledge_chunks RESTART IDENTITY"))
     await db.commit()
-    return {"status": "ok", "message": "Đã xóa toàn bộ knowledge base."}
+    return {"status": "ok", "message": "Cleared the entire knowledge base."}

@@ -18,6 +18,10 @@ from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.gzip import GZipMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+import traceback
 
 from app.core.config import settings
 from app.database.db import async_engine, Base
@@ -25,7 +29,8 @@ import app.modules.auth.models  # noqa: F401
 import app.modules.fleet.models  # noqa: F401
 import app.modules.missions.models  # noqa: F401
 import app.modules.system.models  # noqa: F401
-import app.modules.inventory.models  # noqa: F401
+import app.modules.inventory.models  # noqa: F401 — backward-compat, keeps old tables mapped
+import app.modules.supplies.models   # noqa: F401
 
 # Import routers từ các module
 from app.modules.auth.router import router as auth_router
@@ -82,15 +87,58 @@ async def run_realtime_cronjobs():
         await run_with_retry(run_telemetry_signal_loss_watcher, "telemetry_signal_loss", max_retries=2, base_backoff=1.0)
         await asyncio.sleep(3)
 
+async def _warmup_caches_background():
+    """
+    [PERF NOTE] Nạp ấm (warm-up) các cache RAM và connection pool DB ngay khi server vừa khởi động
+    ở chế độ nền (non-blocking) để request đầu tiên của Operator không bị chậm (cold start):
+    1. Bắt tay SSL trước với Supabase pool + cache Hubs (30s) & Battery Compatibility (60s).
+    2. Load sẵn model ML predict_flight_energy vào RAM.
+    3. Fetch song song thời tiết Open-Meteo cho tọa độ các Hub để bước Route Analyze đầu tiên chạy nhanh.
+    """
+    try:
+        from app.database.db import AsyncSessionLocal
+        from app.modules.missions.bundle_service import (
+            get_all_hubs_cached,
+            get_compatible_battery_models_map,
+            predict_flight_energy_cached,
+        )
+        from app.shared.weather import fetch_weather
+
+        hubs = []
+        async with AsyncSessionLocal() as db:
+            hubs = await get_all_hubs_cached(db)
+            await get_compatible_battery_models_map(db)
+
+        await asyncio.to_thread(predict_flight_energy_cached, 10.0, 1.0)
+
+        unique_coords = {
+            (round(float(h.latitude), 2), round(float(h.longitude), 2))
+            for h in hubs
+            if h.latitude is not None and h.longitude is not None
+        }
+        if unique_coords:
+            await asyncio.gather(
+                *(fetch_weather(lat, lng) for lat, lng in unique_coords),
+                return_exceptions=True,
+            )
+    except Exception as exc:
+        print(f"⚠️ [STARTUP WARMUP WARNING] Không thể warm-up cache nền: {exc}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with async_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with async_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as e:
+        print(f"⚠️ [STARTUP DB WARNING] Không thể chạy create_all lúc khởi động (bỏ qua để giữ Server online): {e}")
         
-    # Bắt đầu cronjob ngầm
+    # [PERF NOTE] Hệ thống dùng in-memory cache (Hubs, Compat, Route, Weather) cho FastAPI 1 worker;
+    # không bật nhiều workers (--workers > 1) trừ khi chuyển cache sang Redis.
     task_hourly = asyncio.create_task(run_hourly_cronjobs())
     task_quarter = asyncio.create_task(run_quarter_cronjobs())
     task_realtime = asyncio.create_task(run_realtime_cronjobs())
+    task_warmup = asyncio.create_task(_warmup_caches_background())
     
     yield
     
@@ -98,6 +146,7 @@ async def lifespan(app: FastAPI):
     task_hourly.cancel()
     task_quarter.cancel()
     task_realtime.cancel()
+    task_warmup.cancel()
 
 
 app = FastAPI(
@@ -163,12 +212,33 @@ def custom_openapi():
 
 app.openapi = custom_openapi
 
+# Bật ProxyHeadersMiddleware để giữ nguyên HTTPS và Host từ Cloudflare Tunnel / Reverse Proxy
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+
+# [PERF NOTE] Nén JSON payload >= 1KB (GZip) để giảm dung lượng chiều upload từ laptop server qua Cloudflare Tunnel.
+# Đặt trước CORSMiddleware để CORS headers luôn được áp dụng đầy đủ.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+# Bắt lỗi toàn cục để log chi tiết lỗi ra console thay vì trả 500 rỗng
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal Server Error",
+            "error_message": str(exc),
+            "path": str(request.url)
+        }
+    )
+
 app.add_middleware(
     CORSMiddleware,
     # Chấp nhận mọi domain (localhost bất kỳ port nào, hoặc domain production)
     # Cơ chế: FastAPI sẽ đọc header Origin của request và trả về đúng Origin đó 
     # thay vì trả về "*" (giúp vượt qua lỗi block của browser khi allow_credentials=True).
-    allow_origin_regex=r"^https?://.*$",
+    allow_origin_regex=r".*",
+    expose_headers=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -190,7 +260,7 @@ app.include_router(db_router)
 # Tự động include các router của các roles
 import importlib
 loaded_chatbot_roles = []
-for mod in ["auth", "users", "missions", "fleet", "ai_predictions", "orders", "chatbot", "dashboard", "inventory"]:
+for mod in ["auth", "users", "missions", "fleet", "ai_predictions", "orders", "chatbot", "dashboard", "supplies"]:
     for role in ["admin", "operator", "technician", "customer"]:
         target_mod = f"app.modules.{mod}.{role}.router"
         try:
@@ -226,7 +296,9 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "app.main:app",
-        host="127.0.0.1",
+        host="0.0.0.0",
         port=8000,
-        reload=False
+        reload=False,
+        proxy_headers=True,
+        forwarded_allow_ips="*"
     )

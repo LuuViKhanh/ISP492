@@ -1,5 +1,5 @@
 """
-Router API cho Admin Chatbot.
+API Router for Admin Chatbot.
 Prefix: `/admin/chatbot`
 """
 
@@ -31,8 +31,8 @@ allow_admin = RoleChecker([UserRole.ADMIN])
 @router.post(
     "/chat",
     response_model=ChatMessageResponse,
-    summary="Đàm thoại với Trợ lý Quản trị cấp cao (Admin Executive Copilot)",
-    description="Dành riêng cho Admin để xem tổng quan điều hành kinh doanh, quy mô người dùng và tài nguyên toàn hệ thống."
+    summary="Chat with the Admin Executive Copilot",
+    description="Dedicated to Admins for reviewing business performance overviews, user distribution, and system-wide resources."
 )
 async def admin_chat(
     body: ChatMessageRequest,
@@ -65,7 +65,7 @@ async def admin_chat(
 @router.get(
     "/quick-questions",
     response_model=QuickQuestionsResponse,
-    summary="Câu hỏi gợi ý nhanh cho Admin"
+    summary="Quick suggested questions for Admin"
 )
 async def get_admin_quick_questions(
     user: CurrentUser = Depends(allow_admin)
@@ -73,13 +73,13 @@ async def get_admin_quick_questions(
     questions = [
         QuickQuestionItem(
             id="executive_summary",
-            title="📈 Báo cáo kinh doanh tổng thể",
-            prompt="Báo cáo tình hình hoạt động kinh doanh, tổng doanh thu và số lượng đơn hàng"
+            title="📈 Executive Business Summary",
+            prompt="Summarize overall business performance, total revenue, and total order count"
         ),
         QuickQuestionItem(
             id="user_breakdown",
-            title="👥 Cơ cấu người dùng",
-            prompt="Thống kê số lượng tài khoản theo từng vai trò trong hệ thống"
+            title="👥 User Role Breakdown",
+            prompt="Show the breakdown of user accounts across each role in the system"
         )
     ]
     return QuickQuestionsResponse(questions=questions)

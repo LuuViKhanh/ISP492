@@ -84,8 +84,8 @@ async def _find_customer_order(
                 "success": False,
                 "code": "ORDER_ACCESS_DENIED",
                 "message": (
-                    "Vui lòng đăng nhập tài khoản khách hàng (gửi kèm Bearer Token) "
-                    "để tra cứu thông tin đơn hàng cá nhân."
+                    "Please sign in to your customer account (with a valid Bearer Token) "
+                    "to look up personal order information."
                 ),
             },
         }
@@ -98,7 +98,7 @@ async def _find_customer_order(
         res = await db.execute(stmt)
         order = res.scalar_one_or_none()
 
-        if not order:
+        if not order or order.status == OrderStatus.CANCELLED:
             return {
                 "ok": False,
                 "error_payload": {
@@ -106,7 +106,7 @@ async def _find_customer_order(
                     "success": False,
                     "code": "ORDER_NOT_FOUND",
                     "order_id": clean_id,
-                    "message": f"Không tìm thấy đơn hàng với mã '{clean_id}'.",
+                    "message": f"Order '{clean_id}' was not found.",
                 },
             }
 
@@ -119,14 +119,17 @@ async def _find_customer_order(
                     "code": "ORDER_ACCESS_DENIED",
                     "order_id": clean_id,
                     "message": (
-                        f"Bạn không có quyền truy cập đơn hàng '{clean_id}' hoặc đơn hàng không thuộc tài khoản của bạn."
+                        f"You do not have permission to access order '{clean_id}', or the order does not belong to your account."
                     ),
                 },
             }
     else:
         stmt = (
             select(Order)
-            .where(Order.customer_id == uid_str)
+            .where(
+                Order.customer_id == uid_str,
+                Order.status != OrderStatus.CANCELLED,
+            )
             .order_by(Order.created_at.desc())
             .limit(1)
         )
@@ -139,7 +142,7 @@ async def _find_customer_order(
                     "type": "order_status",
                     "success": False,
                     "code": "ORDER_NOT_FOUND",
-                    "message": "Tài khoản của bạn hiện chưa có đơn hàng nào trên hệ thống.",
+                    "message": "Your account does not currently have any orders in the system.",
                     "_actions": [
                         {
                             "type": "CREATE_DELIVERY",
@@ -156,7 +159,10 @@ async def _find_customer_order(
 
     mission_stmt = (
         select(Mission)
-        .where(Mission.order_id == order.id)
+        .where(
+            Mission.order_id == order.id,
+            Mission.status != MissionStatus.CANCELLED,
+        )
         .order_by(Mission.scheduled_time.desc().nullslast())
     )
     mission_res = await db.execute(mission_stmt)
@@ -272,8 +278,8 @@ async def tool_estimate_shipping_fee(
             "payload_kg": weight,
             "max_allowed_kg": 10.0,
             "message": (
-                f"Khối lượng kiện hàng ({weight} kg) không hợp lệ. "
-                "Hệ thống DroneOptAI chỉ nhận kiện hàng từ 0.1 kg đến tối đa 10.0 kg (Size XL)."
+                f"Invalid package weight ({weight} kg). "
+                "DroneOptAI only accepts packages from 0.1 kg up to a maximum of 10.0 kg (Size XL)."
             ),
         }
 
@@ -302,7 +308,7 @@ async def tool_estimate_shipping_fee(
             "type": "shipping_estimate",
             "success": False,
             "code": "HUB_NOT_FOUND",
-            "message": "Không tìm thấy trạm Hub khớp với tên bạn cung cấp.",
+            "message": "No Hub matching the provided name was found.",
             "available_hubs": hub_names,
         }
 
@@ -311,7 +317,7 @@ async def tool_estimate_shipping_fee(
             "type": "shipping_estimate",
             "success": False,
             "code": "SAME_ORIGIN_DESTINATION_HUB",
-            "message": "Trạm Hub gửi và trạm Hub nhận không được trùng nhau.",
+            "message": "Origin Hub and Destination Hub cannot be the same.",
         }
 
     dist_km = haversine_distance(
@@ -353,7 +359,7 @@ async def tool_estimate_shipping_fee(
         "core_fee": round(core_fee),
         "service_fee": round(service_fee),
         "total_fee": round(total_fee),
-        "total_fee_formatted": f"{int(round(total_fee)):,} VNĐ",
+        "total_fee_formatted": f"{int(round(total_fee)):,} VND",
         "fee_breakdown": {
             "base_fee": round(fee_details["base_fee"]),
             "distance_fee": round(fee_details["distance_fee"]),
@@ -506,13 +512,16 @@ async def tool_get_my_orders(
             "type": "order_list",
             "success": False,
             "code": "ORDER_ACCESS_DENIED",
-            "message": "Vui lòng đăng nhập tài khoản để xem danh sách đơn hàng của bạn.",
+            "message": "Please sign in to your account to view your order list.",
         }
 
     safe_limit = min(max(int(limit or 5), 1), 15)
     stmt = (
         select(Order)
-        .where(Order.customer_id == str(current_user_id))
+        .where(
+            Order.customer_id == str(current_user_id),
+            Order.status != OrderStatus.CANCELLED,
+        )
         .order_by(Order.created_at.desc())
         .limit(safe_limit)
     )
@@ -524,7 +533,14 @@ async def tool_get_my_orders(
 
     order_items = []
     for o in orders:
-        m_stmt = select(Mission).where(Mission.order_id == o.id).order_by(Mission.scheduled_time.desc().nullslast())
+        m_stmt = (
+            select(Mission)
+            .where(
+                Mission.order_id == o.id,
+                Mission.status != MissionStatus.CANCELLED,
+            )
+            .order_by(Mission.scheduled_time.desc().nullslast())
+        )
         m_res = await db.execute(m_stmt)
         mission = m_res.scalars().first()
         status_info = CustomerStatusService.compute_customer_delivery_status(o, mission)
@@ -539,7 +555,7 @@ async def tool_get_my_orders(
                 "delivery_mode": o.delivery_mode.value if o.delivery_mode else "SCHEDULED",
                 "payload_kg": o.payload_kg,
                 "delivery_fee": round(o.delivery_fee) if o.delivery_fee else 0,
-                "delivery_fee_formatted": f"{int(round(o.delivery_fee)):,} VNĐ" if o.delivery_fee else "0 VNĐ",
+                "delivery_fee_formatted": f"{int(round(o.delivery_fee)):,} VND" if o.delivery_fee else "0 VND",
                 "origin_hub": _hub_dict(hub_map.get(o.origin_hub_id)),
                 "destination_hub": _hub_dict(hub_map.get(o.destination_hub_id)),
                 "created_at": o.created_at.isoformat() if o.created_at else None,
@@ -670,7 +686,7 @@ async def _build_full_order_status_payload(
         "payload_kg": order.payload_kg,
         "delivery_mode": order.delivery_mode.value if order.delivery_mode else "SCHEDULED",
         "delivery_fee": round(order.delivery_fee) if order.delivery_fee else 0,
-        "delivery_fee_formatted": f"{int(round(order.delivery_fee)):,} VNĐ" if order.delivery_fee else "0 VNĐ",
+        "delivery_fee_formatted": f"{int(round(order.delivery_fee)):,} VND" if order.delivery_fee else "0 VND",
         "origin_hub": _hub_dict(origin_hub),
         "destination_hub": _hub_dict(dest_hub),
         "handover_deadline": times_info["handover_deadline"],
@@ -723,7 +739,7 @@ async def tool_get_payment_status(
         "order_id": order.id,
         "payment_status": pay_status,
         "amount": round(order.delivery_fee) if order.delivery_fee else 0,
-        "amount_formatted": f"{int(round(order.delivery_fee)):,} VNĐ" if order.delivery_fee else "0 VNĐ",
+        "amount_formatted": f"{int(round(order.delivery_fee)):,} VND" if order.delivery_fee else "0 VND",
         "paid_at": order.paid_at.isoformat() if order.paid_at else None,
         "payment_order_code": order.payment_order_code,
         "has_checkout_url": bool(order.payment_checkout_url),
@@ -806,9 +822,9 @@ async def tool_get_delivery_eta(
         "estimated_departure": times_info["estimated_departure"],
         "estimated_arrival": times_info["estimated_arrival"],
         "note": (
-            "Thời gian dự kiến lấy trực tiếp từ dữ liệu đơn hàng/chuyến bay."
+            "Estimated times are retrieved directly from order/flight mission data."
             if has_eta
-            else "Đơn hàng này hiện chưa có thời gian dự kiến đến (ETA) được xác nhận trên hệ thống."
+            else "This order does not currently have a confirmed Estimated Time of Arrival (ETA) in the system."
         ),
         "_actions": [
             {
@@ -837,13 +853,13 @@ async def tool_check_cancellation_eligibility(
 
     if order.status == OrderStatus.CANCELLED:
         eligible = False
-        reason = "Đơn hàng này đã ở trạng thái Đã hủy (CANCELLED) trước đó."
+        reason = "This order is already in CANCELLED status."
     elif order.status != OrderStatus.PENDING:
         eligible = False
-        reason = f"Đơn hàng đang ở trạng thái '{order.status.value}', không thể hủy."
+        reason = f"The order is currently in '{order.status.value}' status and cannot be cancelled."
     elif order.origin_received_at is not None:
         eligible = False
-        reason = "Kiện hàng đã được bàn giao tại Origin Hub nên không thể tự hủy trực tiếp."
+        reason = "The package has already been handed over at the Origin Hub and cannot be cancelled directly."
     elif mission and mission.status in (
         MissionStatus.IN_PROGRESS,
         MissionStatus.FLYING,
@@ -852,13 +868,13 @@ async def tool_check_cancellation_eligibility(
         MissionStatus.MISSION_COMPLETED,
     ):
         eligible = False
-        reason = f"Chuyến bay ({mission.id}) đã khởi hành hoặc hoàn tất nên không thể hủy."
+        reason = f"The flight mission ({mission.id}) has already departed or completed and cannot be cancelled."
     else:
         eligible = True
-        reason = "Đơn hàng đang ở trạng thái PENDING và chưa bàn giao kiện hàng tại Origin Hub nên có thể yêu cầu hủy."
+        reason = "The order is currently PENDING and has not been handed over at the Origin Hub, so cancellation can be requested."
 
     refund_policy_note = (
-        "Lưu ý: Chính sách hoàn tiền chi tiết đối với đơn đã thanh toán (PAID) hiện chưa được công bố chính thức trên hệ thống (POLICY_NOT_DEFINED)."
+        "Note: Detailed refund policy for paid orders (PAID) is not currently published as an official policy in the system (POLICY_NOT_DEFINED)."
         if order.payment_status == PaymentStatus.PAID
         else None
     )
@@ -895,7 +911,7 @@ async def tool_get_my_notifications(
             "type": "notification_list",
             "success": False,
             "code": "ORDER_ACCESS_DENIED",
-            "message": "Vui lòng đăng nhập để xem thông báo của bạn.",
+            "message": "Please sign in to view your notifications.",
         }
 
     safe_limit = min(max(int(limit or 5), 1), 20)
@@ -955,7 +971,7 @@ async def tool_get_profile(
             "type": "profile_info",
             "success": False,
             "code": "ORDER_ACCESS_DENIED",
-            "message": "Vui lòng đăng nhập để xem thông tin tài khoản.",
+            "message": "Please sign in to view your account profile.",
         }
 
     user = await get_user_by_id(db, str(current_user_id))
@@ -964,7 +980,7 @@ async def tool_get_profile(
             "type": "profile_info",
             "success": False,
             "code": "USER_NOT_FOUND",
-            "message": "Không tìm thấy thông tin người dùng.",
+            "message": "User profile not found.",
         }
 
     return {
@@ -991,172 +1007,172 @@ def get_customer_gemini_tools() -> list:
             function_declarations=[
                 types.FunctionDeclaration(
                     name="get_package_rules",
-                    description="Lấy quy định về 8 danh mục hàng hóa và 4 kích thước kiện hàng (S, M, L, XL: cân nặng tối đa kg, kích thước cm).",
+                    description="Get rules for the 8 package categories and 4 package sizes (S, M, L, XL: max weight in kg and dimensions in cm).",
                     parameters=types.Schema(type=types.Type.OBJECT, properties={}),
                 ),
                 types.FunctionDeclaration(
                     name="recommend_package_size",
-                    description="Tư vấn chọn size kiện hàng (S, M, L, XL) dựa trên khối lượng (kg) và kích thước (cm).",
+                    description="Recommend a package size (S, M, L, XL) based on weight (kg) and dimensions (cm).",
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
-                            "weight_kg": types.Schema(type=types.Type.NUMBER, description="Khối lượng kiện hàng (kg)."),
-                            "length_cm": types.Schema(type=types.Type.NUMBER, description="Chiều dài (cm, tùy chọn)."),
-                            "width_cm": types.Schema(type=types.Type.NUMBER, description="Chiều rộng (cm, tùy chọn)."),
-                            "height_cm": types.Schema(type=types.Type.NUMBER, description="Chiều cao (cm, tùy chọn)."),
+                            "weight_kg": types.Schema(type=types.Type.NUMBER, description="Package weight (kg)."),
+                            "length_cm": types.Schema(type=types.Type.NUMBER, description="Length (cm, optional)."),
+                            "width_cm": types.Schema(type=types.Type.NUMBER, description="Width (cm, optional)."),
+                            "height_cm": types.Schema(type=types.Type.NUMBER, description="Height (cm, optional)."),
                         },
                         required=["weight_kg"],
                     ),
                 ),
                 types.FunctionDeclaration(
                     name="get_pricing_rules",
-                    description="Lấy bảng giá cơ bản theo từng size (S, M, L, XL), công thức Core Fee và tỷ lệ % phụ phí (Fragile +15%, Insurance +10%, Express +25%, Scheduled 0%).",
+                    description="Get base pricing tiers by size (S, M, L, XL), the Core Fee formula, and surcharge rates (Fragile +15%, Insurance +10%, Express +25%, Scheduled 0%).",
                     parameters=types.Schema(type=types.Type.OBJECT, properties={}),
                 ),
                 types.FunctionDeclaration(
                     name="estimate_shipping_fee",
-                    description="Tính toán báo giá cước phí giao hàng và năng lượng tiêu thụ giữa 2 trạm Hub.",
+                    description="Calculate a shipping fee quotation and estimated flight energy consumption between two Hubs.",
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
-                            "origin_hub_name": types.Schema(type=types.Type.STRING, description="Tên hoặc khu vực trạm Hub gửi."),
-                            "destination_hub_name": types.Schema(type=types.Type.STRING, description="Tên hoặc khu vực trạm Hub nhận."),
-                            "payload_kg": types.Schema(type=types.Type.NUMBER, description="Khối lượng kiện hàng (kg, tối đa 10kg)."),
-                            "delivery_mode": types.Schema(type=types.Type.STRING, description="'SCHEDULED' hoặc 'EXPRESS'."),
-                            "package_type": types.Schema(type=types.Type.STRING, description="Loại hàng: 'standard', 'fragile', 'food', 'documents', 'electronics', 'medical', 'clothing', 'household', 'other'."),
-                            "has_insurance": types.Schema(type=types.Type.BOOLEAN, description="Có mua bảo hiểm kiện hàng (+10% Core Fee) không."),
+                            "origin_hub_name": types.Schema(type=types.Type.STRING, description="Origin Hub name or area."),
+                            "destination_hub_name": types.Schema(type=types.Type.STRING, description="Destination Hub name or area."),
+                            "payload_kg": types.Schema(type=types.Type.NUMBER, description="Package weight (kg, max 10kg)."),
+                            "delivery_mode": types.Schema(type=types.Type.STRING, description="'SCHEDULED' or 'EXPRESS'."),
+                            "package_type": types.Schema(type=types.Type.STRING, description="Package category: 'standard', 'fragile', 'food', 'documents', 'electronics', 'medical', 'clothing', 'household', or 'other'."),
+                            "has_insurance": types.Schema(type=types.Type.BOOLEAN, description="Whether to include package insurance (+10% Core Fee)."),
                         },
                         required=["origin_hub_name", "destination_hub_name"],
                     ),
                 ),
                 types.FunctionDeclaration(
                     name="get_delivery_modes",
-                    description="Giải thích và so sánh 2 hình thức giao hàng: Scheduled (0% phụ phí) và Express (+25% Core Fee).",
+                    description="Explain and compare delivery modes: Scheduled (0% surcharge) and Express (+25% Core Fee).",
                     parameters=types.Schema(type=types.Type.OBJECT, properties={}),
                 ),
                 types.FunctionDeclaration(
                     name="list_hubs",
-                    description="Lấy danh sách tất cả các trạm Hub giao nhận của DroneOptAI.",
+                    description="Get the list of all DroneOptAI delivery Hubs.",
                     parameters=types.Schema(type=types.Type.OBJECT, properties={}),
                 ),
                 types.FunctionDeclaration(
                     name="resolve_hubs_by_area",
-                    description="Tìm kiếm trạm Hub theo tên khu vực, quận/huyện hoặc địa chỉ.",
+                    description="Search for Hubs by area name, district, or street address.",
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
-                            "origin_area": types.Schema(type=types.Type.STRING, description="Khu vực gửi (tùy chọn)."),
-                            "destination_area": types.Schema(type=types.Type.STRING, description="Khu vực nhận (tùy chọn)."),
-                            "area_query": types.Schema(type=types.Type.STRING, description="Từ khóa khu vực cần tìm Hub (tùy chọn)."),
+                            "origin_area": types.Schema(type=types.Type.STRING, description="Origin area (optional)."),
+                            "destination_area": types.Schema(type=types.Type.STRING, description="Destination area (optional)."),
+                            "area_query": types.Schema(type=types.Type.STRING, description="Area keyword to search for matching Hubs (optional)."),
                         },
                     ),
                 ),
                 types.FunctionDeclaration(
                     name="get_help_policy",
                     description=(
-                        "Tra cứu hướng dẫn sử dụng hoặc chính sách của hệ thống theo chủ đề: "
+                        "Look up system user guides or service policies by topic: "
                         "'order_creation', 'hub_to_hub', 'package_rules', 'pricing', 'delivery_modes', "
                         "'handover_deadline', 'payment', 'fragile', 'insurance', 'cancellation', "
-                        "'notifications', 'collection', hoặc các chủ đề như 'prohibited_items', "
+                        "'notifications', 'collection', or undefined-policy topics such as 'prohibited_items', "
                         "'insurance_coverage', 'hub_operating_hours', 'recipient_verification', 'express_sla', 'support_contact'."
                     ),
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
-                            "topic": types.Schema(type=types.Type.STRING, description="Mã chủ đề cần tra cứu.")
+                            "topic": types.Schema(type=types.Type.STRING, description="Topic key to look up.")
                         },
                         required=["topic"],
                     ),
                 ),
                 types.FunctionDeclaration(
                     name="get_my_orders",
-                    description="Lấy danh sách các đơn hàng gần đây của khách hàng đang đăng nhập.",
+                    description="Get the list of recent orders belonging to the signed-in customer.",
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
-                            "limit": types.Schema(type=types.Type.INTEGER, description="Số đơn tối đa cần lấy (mặc định 5).")
+                            "limit": types.Schema(type=types.Type.INTEGER, description="Maximum number of orders to retrieve (default 5).")
                         },
                     ),
                 ),
                 types.FunctionDeclaration(
                     name="get_latest_order",
-                    description="Lấy chi tiết và trạng thái đơn hàng gần nhất của khách hàng đang đăng nhập.",
+                    description="Get details and status of the signed-in customer's latest order.",
                     parameters=types.Schema(type=types.Type.OBJECT, properties={}),
                 ),
                 types.FunctionDeclaration(
                     name="get_order_detail",
-                    description="Xem chi tiết một đơn hàng cụ thể theo mã đơn (order_id). Chỉ trả về nếu đơn thuộc về khách hàng đang đăng nhập.",
+                    description="View details of a specific order by order_id. Only returns data if the order belongs to the signed-in customer.",
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
-                            "order_id": types.Schema(type=types.Type.STRING, description="Mã đơn hàng (VD: ORD-0001).")
+                            "order_id": types.Schema(type=types.Type.STRING, description="Order ID (e.g., ORD-0001).")
                         },
                         required=["order_id"],
                     ),
                 ),
                 types.FunctionDeclaration(
                     name="get_customer_delivery_status",
-                    description="Kiểm tra trạng thái giao hàng tổng hợp của đơn hàng (nếu không truyền order_id sẽ lấy đơn gần nhất).",
+                    description="Check the consolidated customer-friendly delivery status of an order (defaults to the latest order if order_id is omitted).",
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
-                            "order_id": types.Schema(type=types.Type.STRING, description="Mã đơn hàng (tùy chọn).")
+                            "order_id": types.Schema(type=types.Type.STRING, description="Order ID (optional).")
                         },
                     ),
                 ),
                 types.FunctionDeclaration(
                     name="get_payment_status",
-                    description="Kiểm tra trạng thái thanh toán (UNPAID, PENDING, PAID, CANCELLED) của đơn hàng.",
+                    description="Check the payment status (UNPAID, PENDING, PAID, CANCELLED) of an order.",
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
-                            "order_id": types.Schema(type=types.Type.STRING, description="Mã đơn hàng (tùy chọn, mặc định lấy đơn gần nhất).")
+                            "order_id": types.Schema(type=types.Type.STRING, description="Order ID (optional, defaults to the latest order).")
                         },
                     ),
                 ),
                 types.FunctionDeclaration(
                     name="get_handover_status",
-                    description="Kiểm tra trạng thái bàn giao kiện hàng tại Origin Hub, hạn chót (handover_deadline) và trạng thái hàng đến Destination Hub.",
+                    description="Check package handover status at Origin Hub, handover_deadline, and arrival status at Destination Hub.",
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
-                            "order_id": types.Schema(type=types.Type.STRING, description="Mã đơn hàng (tùy chọn, mặc định lấy đơn gần nhất).")
+                            "order_id": types.Schema(type=types.Type.STRING, description="Order ID (optional, defaults to the latest order).")
                         },
                     ),
                 ),
                 types.FunctionDeclaration(
                     name="get_delivery_eta",
-                    description="Kiểm tra thời gian dự kiến khởi hành và đến nơi (ETA) của đơn hàng.",
+                    description="Check the estimated departure and arrival times (ETA) of an order.",
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
-                            "order_id": types.Schema(type=types.Type.STRING, description="Mã đơn hàng (tùy chọn, mặc định lấy đơn gần nhất).")
+                            "order_id": types.Schema(type=types.Type.STRING, description="Order ID (optional, defaults to the latest order).")
                         },
                     ),
                 ),
                 types.FunctionDeclaration(
                     name="check_cancellation_eligibility",
-                    description="Kiểm tra xem đơn hàng có đủ điều kiện hủy hay không.",
+                    description="Check whether an order is eligible for cancellation.",
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
-                            "order_id": types.Schema(type=types.Type.STRING, description="Mã đơn hàng (tùy chọn, mặc định lấy đơn gần nhất).")
+                            "order_id": types.Schema(type=types.Type.STRING, description="Order ID (optional, defaults to the latest order).")
                         },
                     ),
                 ),
                 types.FunctionDeclaration(
                     name="get_my_notifications",
-                    description="Xem danh sách các thông báo mới của tài khoản khách hàng.",
+                    description="View the list of recent notifications for the signed-in customer.",
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
-                            "limit": types.Schema(type=types.Type.INTEGER, description="Số lượng thông báo cần lấy (mặc định 5).")
+                            "limit": types.Schema(type=types.Type.INTEGER, description="Number of notifications to retrieve (default 5).")
                         },
                     ),
                 ),
                 types.FunctionDeclaration(
                     name="get_profile",
-                    description="Xem thông tin hồ sơ tài khoản khách hàng đang đăng nhập.",
+                    description="View the account profile details of the signed-in customer.",
                     parameters=types.Schema(type=types.Type.OBJECT, properties={}),
                 ),
             ]

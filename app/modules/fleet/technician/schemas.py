@@ -56,7 +56,7 @@ class BatteryResponse(BaseModel):
     available_status: Optional[str] = None       # In Use | Ready | Charging | Replaced
     # Vòng đời pin (tính on-the-fly, không lưu DB)
     lifecycle_status: Optional[str] = None       # Active | Expired
-    days_until_expiry: Optional[int] = None      # số ngày còn lại đến khi hết vòng đời (730 ngày)
+    days_until_expiry: Optional[int] = None  # số ngày còn lại đến khi hết vòng đời (730 ngày)
 
 
 class BatteryUseRequest(BaseModel):
@@ -146,6 +146,7 @@ class MaintenanceAlertResponse(BaseModel):
     drone_id: Optional[str] = None
     source: Optional[str] = None
     title: Optional[str] = None
+    description: Optional[str] = None
     status: Optional[str] = None
     work_order_id: Optional[int] = None
     handled_by: Optional[str] = None
@@ -185,9 +186,9 @@ class MaintenanceScheduleCreate(BaseModel):
 
 class PartCategoryCreate(BaseModel):
     """Tạo mới danh mục vật tư."""
-    name: str  # vd: "DJI Matrice 100 Propeller"
+    name: str  # e.g., "DJI Matrice 100 Propeller"
     category_type: PartCategoryType  # Loại vật tư (Propeller, Battery, Motor, etc.)
-    compatible_drone_models: Optional[List[str]] = None  # vd: ["DJI Matrice 100", "Aurellia X6"]
+    compatible_drone_models: Optional[List[str]] = None  # e.g., ["DJI Matrice 100", "Aurelia X6"]
     unit_cost: Optional[float] = None  # Giá per unit (VND)
     description: Optional[str] = None
     is_active: bool = True

@@ -13,7 +13,7 @@ def get_payos():
     try:
         from payos import PayOS
     except ImportError:
-        raise RuntimeError("payos package chưa được cài. Chạy: pip install payos==0.1.7")
+        raise RuntimeError("payos package is not installed. Run: pip install payos==0.1.7")
     return PayOS(
         client_id=settings.PAYOS_CLIENT_ID,
         api_key=settings.PAYOS_API_KEY,

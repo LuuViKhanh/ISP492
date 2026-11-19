@@ -1,20 +1,46 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from app.core.timezone import get_vn_naive_datetime, get_vn_datetime
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.modules.missions.models import Mission, MissionStatus, TelemetryLog
+from app.modules.missions.models import Mission, MissionStatus, HandlingStatus, TelemetryLog, Incident, IncidentStatus, IncidentSeverity
 from app.modules.system.models import Notification, NotificationType
 from app.modules.auth.models import User, ROLE_NAME_TO_ID
 from app.shared.roles import UserRole
 from app.modules.fleet.models import MaintenanceAlert
 
+
+async def _slog(db: AsyncSession, source: str, event: str, msg: str,
+                level: str = "INFO", details: dict | None = None) -> None:
+    """Ghi system log — wrapper ngắn gọn dùng trong workers."""
+    try:
+        from app.modules.system.service import log_system_event
+        await log_system_event(db, source=source, event=event,
+                               message=msg, level=level, details=details)
+    except Exception:
+        pass
+
 async def get_operator_ids(db: AsyncSession) -> list[str]:
-    operator_role_id = ROLE_NAME_TO_ID.get(UserRole.OPERATOR, "595bec91-7f4e-47ec-bfec-6f0087b84620")
+    operator_role_id = ROLE_NAME_TO_ID.get(UserRole.OPERATOR, "OPERATOR")
     result = await db.execute(
         select(User.id).where(and_(User.role_id == operator_role_id, User.is_active == True))
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
+
+
+async def get_admin_ids(db: AsyncSession) -> list[str]:
+    admin_role_id = ROLE_NAME_TO_ID.get(UserRole.ADMIN, "ADMIN")
+    result = await db.execute(
+        select(User.id).where(and_(User.role_id == admin_role_id, User.is_active == True))
+    )
+    return list(result.scalars().all())
+
+
+async def get_operator_and_admin_ids(db: AsyncSession) -> list[str]:
+    """Trả về danh sách hợp nhất (không trùng) các Operator & Admin đang active."""
+    op_ids = await get_operator_ids(db)
+    adm_ids = await get_admin_ids(db)
+    return list(dict.fromkeys(list(op_ids) + list(adm_ids)))
 
 async def get_technician_ids(db: AsyncSession) -> list[str]:
     technician_role_id = ROLE_NAME_TO_ID.get(UserRole.TECHNICIAN)
@@ -53,8 +79,8 @@ async def run_approval_deadline_watcher(db: AsyncSession):
         if mission.customer_id:
             db.add(Notification(
                 user_id=mission.customer_id,
-                title="Chuyến bay bị hủy",
-                message=f"Chuyến bay #{mission.id} của bạn đã bị hủy do quá hạn duyệt.",
+                title="Mission Cancelled",
+                message=f"Your mission #{mission.id} has been cancelled due to exceeding the approval deadline.",
                 notifications_type=NotificationType.MISSION_STATUS,
                 mission_id=str(mission.id),
                 created_at=now
@@ -64,8 +90,8 @@ async def run_approval_deadline_watcher(db: AsyncSession):
         for op_id in operator_ids:
             db.add(Notification(
                 user_id=op_id,
-                title="Hủy chuyến bay quá hạn",
-                message=f"Chuyến bay #{mission.id} đã tự động hủy do quá hạn duyệt.",
+                title="Overdue Mission Cancelled",
+                message=f"Mission #{mission.id} was automatically cancelled due to exceeding the approval deadline.",
                 notifications_type=NotificationType.MISSION_STATUS,
                 mission_id=str(mission.id),
                 created_at=now
@@ -76,21 +102,34 @@ async def run_approval_deadline_watcher(db: AsyncSession):
 
 async def run_telemetry_signal_loss_watcher(db: AsyncSession):
     """
-    Worker 2: Quét log, mất tín hiệu quá 3s tự tạo Incident và đẩy thông báo cho Operator
+    Worker 2: Quét log telemetry, phát hiện mất tín hiệu quá 10s, tạo Incident HIGH + MaintenanceAlert và gửi Notification cho Operator & Admin.
     """
     now = get_vn_naive_datetime()
-    threshold_time = now - timedelta(seconds=3)
+    now_tz = get_vn_datetime()
+    threshold_time = now - timedelta(seconds=10)
     
-    # Tìm các chuyến bay đang bay
+    # Tìm các chuyến bay thực sự đang trên không (bỏ qua drone đã đáp Hub AT_HUB / CANNOT_CONTINUE)
     flying_missions_result = await db.execute(
-        select(Mission).where(Mission.status == MissionStatus.FLYING)
+        select(Mission).where(
+            and_(
+                Mission.status.in_([
+                    MissionStatus.FLYING,
+                    MissionStatus.IN_PROGRESS,
+                    MissionStatus.ACTIVE_MISSION,
+                ]),
+                or_(
+                    Mission.handling_status.is_(None),
+                    Mission.handling_status == HandlingStatus.INCOMING,
+                ),
+            )
+        )
     )
     flying_missions = flying_missions_result.scalars().all()
     
     if not flying_missions:
         return
         
-    operator_ids = await get_operator_ids(db)
+    recipient_ids = await get_operator_and_admin_ids(db)
     
     for mission in flying_missions:
         # Lấy log gần nhất
@@ -102,7 +141,7 @@ async def run_telemetry_signal_loss_watcher(db: AsyncSession):
         )
         latest_log = log_result.scalar_one_or_none()
         
-        # Nếu có log mà log gần nhất quá 3s so với hiện tại
+        # Nếu có log mà log gần nhất quá 10s so với hiện tại
         if latest_log and latest_log.timestamp < threshold_time:
             # Kiểm tra xem đã có cảnh báo Incident mất tín hiệu cho mission này mà chưa xử lý không
             existing_alert_result = await db.execute(
@@ -110,35 +149,71 @@ async def run_telemetry_signal_loss_watcher(db: AsyncSession):
                     and_(
                         MaintenanceAlert.mission_id == str(mission.id),
                         MaintenanceAlert.source == "Incident",
-                        MaintenanceAlert.title == "Mất tín hiệu quá 3s",
-                        MaintenanceAlert.status == "Pending"
+                        MaintenanceAlert.title.in_([
+                            "Telemetry signal lost (>10s)",
+                            "Signal lost for over 3s",
+                            "Mất tín hiệu quá 3s",
+                        ]),
+                        MaintenanceAlert.status.in_(["Pending", "PENDING"]),
                     )
                 )
             )
             existing_alert = existing_alert_result.scalar_one_or_none()
             
             if not existing_alert:
+                existing_inc_res = await db.execute(
+                    select(Incident).where(
+                        and_(
+                            Incident.mission_id == str(mission.id),
+                            Incident.status.in_([IncidentStatus.OPEN, IncidentStatus.INVESTIGATING]),
+                        )
+                    ).limit(1)
+                )
+                inc = existing_inc_res.scalars().first()
+                if not inc:
+                    inc = Incident(
+                        mission_id=str(mission.id),
+                        drone_id=str(mission.drone_id) if mission.drone_id else None,
+                        reporter_id=mission.operator_id,
+                        severity=IncidentSeverity.HIGH,
+                        description=(
+                            f"🚨 [SIGNAL LOSS] Telemetry signal lost for Mission #{mission.id} "
+                            f"(Drone #{mission.drone_id}) since {latest_log.timestamp} at "
+                            f"({latest_log.latitude:.5f}, {latest_log.longitude:.5f})."
+                        ),
+                        status=IncidentStatus.OPEN,
+                        reported_at=now_tz,
+                        requires_technical_inspection=True,
+                    )
+                    db.add(inc)
+                    await db.flush()
+
                 alert = MaintenanceAlert(
                     drone_id=mission.drone_id,
                     source="Incident",
+                    incident_id=inc.id,
                     mission_id=str(mission.id),
-                    title="Mất tín hiệu quá 3s",
+                    title="Telemetry signal lost (>10s)",
                     status="Pending",
                     created_at=now
                 )
                 db.add(alert)
                 await db.flush() # Để lấy alert.id
                 
-                # Notify operators
-                for op_id in operator_ids:
+                # Thông báo khẩn tới toàn bộ Operator & Admin
+                for uid in recipient_ids:
                     db.add(Notification(
-                        user_id=op_id,
-                        title="⚠️ Cảnh báo mất tín hiệu Drone",
-                        message=f"Chuyến bay #{mission.id} (Drone #{mission.drone_id}) đã mất tín hiệu quá 3 giây! Lần cập nhật cuối: {latest_log.timestamp}",
+                        user_id=uid,
+                        title="⚠️ Drone Signal Loss Alert",
+                        message=(
+                            f"Mission #{mission.id} (Drone #{mission.drone_id}) has lost telemetry signal "
+                            f"for over 10 seconds! Last contact: {latest_log.timestamp}."
+                        ),
                         notifications_type=NotificationType.SYSTEM_ALERT,
                         mission_id=str(mission.id),
-                        reference_id=str(alert.id),
-                        created_at=now
+                        drone_id=str(mission.drone_id) if mission.drone_id else None,
+                        reference_id=str(inc.id),
+                        created_at=now_tz
                     ))
     
     await db.commit()
@@ -278,10 +353,10 @@ async def run_pickup_reminder_watcher(db: AsyncSession):
             if mission.customer_id:
                 db.add(Notification(
                     user_id=mission.customer_id,
-                    title="Kiện hàng đã bị hủy",
+                    title="Package Cancelled",
                     message=(
-                        f"Kiện hàng của chuyến bay #{mission.id} đã bị hủy do bạn không "
-                        f"tới nhận trong vòng 3 ngày kể từ khi hàng về Hub."
+                        f"The package for mission #{mission.id} has been cancelled because you did not "
+                        f"pick it up within 3 days of arrival at the Hub."
                     ),
                     notifications_type=NotificationType.MISSION_STATUS,
                     mission_id=str(mission.id),
@@ -292,10 +367,10 @@ async def run_pickup_reminder_watcher(db: AsyncSession):
             for op_id in operator_ids:
                 db.add(Notification(
                     user_id=op_id,
-                    title="Hủy kiện hàng quá hạn nhận",
+                    title="Unclaimed Package Cancelled",
                     message=(
-                        f"Chuyến bay #{mission.id} đã tự động hủy do khách không tới "
-                        f"nhận hàng sau 3 ngày."
+                        f"Mission #{mission.id} was automatically cancelled because the customer did not "
+                        f"pick up the package within 3 days."
                     ),
                     notifications_type=NotificationType.MISSION_STATUS,
                     mission_id=str(mission.id),
@@ -328,11 +403,11 @@ async def run_pickup_reminder_watcher(db: AsyncSession):
         if now - anchor >= PICKUP_REMINDER_INTERVAL:
             db.add(Notification(
                 user_id=mission.customer_id,
-                title="Kiện hàng đang chờ bạn tới nhận",
+                title="Your Package Is Ready for Pickup",
                 message=(
-                    f"Kiện hàng của chuyến bay #{mission.id} đã về Hub và đang chờ bạn "
-                    f"tới nhận. Vui lòng tới nhận sớm; sau 3 ngày kể từ khi hàng về Hub, "
-                    f"đơn sẽ tự động bị hủy."
+                    f"The package for mission #{mission.id} has arrived at the Hub and is awaiting "
+                    f"your pickup. Please collect it soon; the order will be automatically cancelled "
+                    f"3 days after arriving at the Hub."
                 ),
                 notifications_type=NotificationType.MISSION_STATUS,
                 reference_id=PICKUP_REMINDER_REF,
@@ -402,10 +477,10 @@ async def run_aging_priority_watcher(db: AsyncSession):
         if order.customer_id:
             db.add(Notification(
                 user_id=order.customer_id,
-                title="Đơn hàng của bạn đang được ưu tiên xử lý",
+                title="Your Order Has Been Prioritized",
                 message=(
-                    f"Đơn hàng #{order.id} đã được nâng lên Aging Priority để đảm bảo "
-                    f"giao hàng đúng thời gian cam kết của bạn."
+                    f"Order #{order.id} has been upgraded to Aging Priority to ensure "
+                    f"delivery within your committed time window."
                 ),
                 notifications_type=NotificationType.MISSION_STATUS,
                 reference_id=str(order.id),
@@ -416,11 +491,11 @@ async def run_aging_priority_watcher(db: AsyncSession):
         for op_id in operator_ids:
             db.add(Notification(
                 user_id=op_id,
-                title="⚡ Aging Priority: Cần lên lịch bay gấp",
+                title="⚡ Aging Priority: Urgent Flight Scheduling Required",
                 message=(
-                    f"Đơn #{order.id} (NORMAL mode) đã đạt Aging Priority. "
-                    f"Deadline giao hàng: {order.estimated_window_end.strftime('%H:%M %d/%m') if order.estimated_window_end else 'N/A'}. "
-                    f"Vui lòng lên lịch mission ngay để không vi phạm cam kết."
+                    f"Order #{order.id} (NORMAL mode) has reached Aging Priority. "
+                    f"Delivery deadline: {order.estimated_window_end.strftime('%H:%M %d/%m') if order.estimated_window_end else 'N/A'}. "
+                    f"Please schedule a mission immediately to avoid SLA breach."
                 ),
                 notifications_type=NotificationType.MISSION_STATUS,
                 reference_id=str(order.id),
@@ -513,10 +588,10 @@ async def run_critical_order_notifier(db: AsyncSession):
         for op_id in operator_ids:
             db.add(Notification(
                 user_id=op_id,
-                title=f"🚨 CRITICAL — Đơn #{order.id} quá hạn {int(overdue_mins)} phút",
+                title=f"🚨 CRITICAL — Order #{order.id} overdue by {int(overdue_mins)} mins",
                 message=(
-                    f"Đơn #{order.id} ({d_mode}) đã quá hạn giao {int(overdue_mins)} phút "
-                    f"mà chưa có Mission. Cần lập lịch bay ngay!"
+                    f"Order #{order.id} ({d_mode}) is overdue for delivery by {int(overdue_mins)} mins "
+                    f"with no Mission assigned. Schedule a flight immediately!"
                 ),
                 notifications_type=NotificationType.MISSION_STATUS,
                 mission_id=str(order.id),
@@ -528,10 +603,10 @@ async def run_critical_order_notifier(db: AsyncSession):
         if order.customer_id:
             db.add(Notification(
                 user_id=order.customer_id,
-                title="Đơn hàng của bạn đang bị trì hoãn",
+                title="Your Order Is Delayed",
                 message=(
-                    f"Đơn hàng #{order.id} của bạn đang bị trì hoãn hơn dự kiến. "
-                    f"Đội ngũ của chúng tôi đang xử lý khẩn cấp và sẽ cập nhật sớm nhất."
+                    f"Your order #{order.id} is taking longer than expected. "
+                    f"Our team is handling this urgently and will update you as soon as possible."
                 ),
                 notifications_type=NotificationType.MISSION_STATUS,
                 mission_id=str(order.id),
@@ -635,7 +710,7 @@ async def run_deadline_alert_watcher(db: AsyncSession):
         if existing.scalar_one_or_none():
             continue
 
-        slack_str = f"{int(slack_mins)} phút"
+        slack_str = f"{int(slack_mins)} mins"
         eta_str = w_end.strftime("%H:%M %d/%m") if w_end else "N/A"
         icon = "🔴" if priority_level == "HIGH" else "🟡"
 
@@ -643,11 +718,11 @@ async def run_deadline_alert_watcher(db: AsyncSession):
         for op_id in operator_ids:
             db.add(Notification(
                 user_id=op_id,
-                title=f"{icon} [{priority_level}] Đơn #{order.id} sắp đến hạn ({slack_str})",
+                title=f"{icon} [{priority_level}] Order #{order.id} nearing deadline ({slack_str})",
                 message=(
-                    f"Đơn #{order.id} ({d_mode}) chưa có Mission. "
-                    f"Còn {slack_str} trước khi hết thời gian điều phối. "
-                    f"ETA cam kết với khách: {eta_str}. Vui lòng lập lịch ngay!"
+                    f"Order #{order.id} ({d_mode}) has no Mission yet. "
+                    f"{slack_str} remaining before the dispatch deadline. "
+                    f"Committed ETA: {eta_str}. Please schedule immediately!"
                 ),
                 notifications_type=NotificationType.MISSION_STATUS,
                 reference_id=ref_id,
@@ -658,10 +733,10 @@ async def run_deadline_alert_watcher(db: AsyncSession):
         for tech_id in technician_ids:
             db.add(Notification(
                 user_id=tech_id,
-                title=f"{icon} Chuẩn bị drone — Đơn #{order.id} giao trong {slack_str}",
+                title=f"{icon} Prepare Drone — Order #{order.id} due in {slack_str}",
                 message=(
-                    f"Đơn hàng #{order.id} ({d_mode}) sắp được lên lịch bay. "
-                    f"Vui lòng đảm bảo drone và pin tại Hub sẵn sàng. "
+                    f"Order #{order.id} ({d_mode}) is about to be scheduled for flight. "
+                    f"Please ensure drones and batteries at the Hub are ready. "
                     f"ETA: {eta_str}."
                 ),
                 notifications_type=NotificationType.MISSION_STATUS,

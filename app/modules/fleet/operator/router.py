@@ -6,7 +6,7 @@ from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
 from app.modules.fleet.models import Drone, Battery, DroneStatus, batteries_status, BatteryAvailableStatus, compute_battery_available_status
-from app.modules.system.models import Hub
+from app.modules.missions.bundle_service import get_all_hubs_cached
 from typing import Optional, Union
 from pydantic import BaseModel
 from datetime import datetime
@@ -52,20 +52,22 @@ class BatteryOverviewResponse(BaseModel):
 
 # ── Drone endpoints ───────────────────────────────────────────────────────────
 
-@router.get("/drones", response_model=list[DroneOverviewResponse], summary="Tất cả drone ở mọi hub")
+@router.get("/drones", response_model=list[DroneOverviewResponse], summary="List all drones across all hubs")
 async def list_all_drones(
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Operator xem toàn bộ drone ở tất cả các hub."""
+    """
+    Operator xem toàn bộ drone ở tất cả các hub.
+    [PERF NOTE] Dùng get_all_hubs_cached(db) map hub_name trong RAM; không SQL JOIN hubs hay query db.get(Hub) trong vòng lặp.
+    """
+    hub_map = {h.id: h.name for h in await get_all_hubs_cached(db)}
     result = await db.execute(
-        select(Drone, Hub.name.label("hub_name"))
-        .outerjoin(Hub, Drone.current_hub_id == Hub.id)
-        .order_by(Drone.current_hub_id, Drone.id)
+        select(Drone).order_by(Drone.current_hub_id, Drone.id)
     )
-    rows = result.all()
+    drones = result.scalars().all()
     response = []
-    for drone, hub_name in rows:
+    for drone in drones:
         d = {
             "id": drone.id,
             "name": drone.name,
@@ -74,7 +76,7 @@ async def list_all_drones(
             "max_speed": drone.max_speed,
             "status": drone.status,
             "current_hub_id": drone.current_hub_id,
-            "hub_name": hub_name,
+            "hub_name": hub_map.get(drone.current_hub_id) if drone.current_hub_id else None,
             "battery_level_pct": drone.battery_level_pct,
             "utilization_pct": drone.utilization_pct,
         }
@@ -82,22 +84,18 @@ async def list_all_drones(
     return response
 
 
-@router.get("/drones/{drone_id}", response_model=DroneOverviewResponse, summary="Chi tiết một drone")
+@router.get("/drones/{drone_id}", response_model=DroneOverviewResponse, summary="Get drone details")
 async def get_drone(
     drone_id: str,
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
 ):
     from fastapi import HTTPException
-    result = await db.execute(
-        select(Drone, Hub.name.label("hub_name"))
-        .outerjoin(Hub, Drone.current_hub_id == Hub.id)
-        .where(Drone.id == drone_id)
-    )
-    row = result.first()
-    if not row:
+    drone = await db.get(Drone, drone_id)
+    if not drone:
         raise HTTPException(status_code=404, detail="Drone not found")
-    drone, hub_name = row
+    hub_map = {h.id: h.name for h in await get_all_hubs_cached(db)}
+    hub_name = hub_map.get(drone.current_hub_id) if drone.current_hub_id else None
     return {
         "id": drone.id,
         "name": drone.name,
@@ -114,12 +112,12 @@ async def get_drone(
 
 # ── Battery endpoints ─────────────────────────────────────────────────────────
 
-@router.get("/batteries", response_model=list[BatteryOverviewResponse], summary="Tất cả pin ở mọi hub")
+@router.get("/batteries", response_model=list[BatteryOverviewResponse], summary="List all batteries across all hubs")
 async def list_all_batteries(
-    hub_id: Optional[int] = Query(None, description="Lọc pin theo Hub ID"),
+    hub_id: Optional[int] = Query(None, description="Filter batteries by Hub ID"),
     available_status: Optional[BatteryAvailableStatus] = Query(
         None,
-        description="Lọc theo trạng thái khả dụng: Charging | Ready | In Use | Replaced"
+        description="Filter by availability status: Charging | Ready | In Use | Replaced"
     ),
     user: CurrentUser = Depends(allow_operator),
     db: AsyncSession = Depends(get_async_db),
@@ -138,21 +136,20 @@ async def list_all_batteries(
     **Dùng để chọn hub thay pin:** lọc `available_status=Ready` kèm `hub_id` để biết
     hub nào đang có pin sẵn sàng thay khi drone dừng trên route.
     """
-    stmt = (
-        select(Battery, Hub.name.label("hub_name"))
-        .outerjoin(Hub, Battery.current_hub_id == Hub.id)
-        .order_by(Battery.current_hub_id, Battery.id)
-    )
+    # [PERF NOTE] Map hub_name bằng get_all_hubs_cached(db) trong RAM thay vì SQL JOIN hubs.
+    hub_map = {h.id: h.name for h in await get_all_hubs_cached(db)}
+    stmt = select(Battery).order_by(Battery.current_hub_id, Battery.id)
 
     # Lọc theo hub_id nếu có
     if hub_id is not None:
         stmt = stmt.where(Battery.current_hub_id == hub_id)
 
     result = await db.execute(stmt)
-    rows = result.all()
+    batteries = result.scalars().all()
 
     response = []
-    for battery, hub_name in rows:
+    for battery in batteries:
+        hub_name = hub_map.get(battery.current_hub_id) if battery.current_hub_id else None
         computed = compute_battery_available_status(battery)
 
         # Lọc theo available_status nếu có (filter sau khi tính toán)

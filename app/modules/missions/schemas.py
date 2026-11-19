@@ -1,4 +1,4 @@
-﻿from pydantic import BaseModel
+﻿from pydantic import BaseModel, field_validator
 from typing import Dict, Optional, Union, Any
 from datetime import datetime
 from app.modules.missions.models import MissionStatus
@@ -30,13 +30,25 @@ class ActiveFlightsResponse(BaseModel):
 
 
 class RelayHubBatteryOptionSchema(BaseModel):
-    """Thông tin một viên pin khả dụng tại Hub trung gian."""
+    """Details of an available battery at an intermediate relay hub."""
     id: str
     serial_number: str
     battery_model: Optional[str] = None
     capacity_wh: float
     charge_level_pct: int = 100
     available_energy_wh: float
+
+
+class RouteWeatherSchema(BaseModel):
+    temperature_c: Optional[float] = None
+    wind_speed_ms: Optional[float] = None
+    wind_gust_ms: Optional[float] = None
+    precipitation_mm: Optional[float] = None
+    humidity_pct: Optional[float] = None
+    condition_label: Optional[str] = None
+    weather_summary: Optional[str] = None
+    is_bad_weather: bool = False
+    warning_message: Optional[str] = None
 
 
 class RouteLegSchema(BaseModel):
@@ -67,16 +79,28 @@ class RouteLegSchema(BaseModel):
     is_dispatch: bool = False
     payload_kg: Optional[float] = None
     note: Optional[str] = None
+    weather: Optional[RouteWeatherSchema] = None
+    weather_summary: Optional[str] = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_leg_status(cls, v):
+        if not v:
+            return v
+        s = v.value if hasattr(v, "value") else str(v)
+        if s.strip().upper() in ("IN_PROGRESS", "IN PROGRESS", "IN-PROGRESS"):
+            return "FLYING"
+        return s
 
 
 class HubBatteryStatus(BaseModel):
-    """Trạng thái pin và viên pin được chỉ định thay thế tại một Hub trung gian trong relay route."""
+    """Battery inventory status and designated swap battery at an intermediate relay hub."""
     hub_id: int
     hub_code: str
     hub_name: str
-    ready_count: int = 0        # số pin Ready (sạc 100%, tương thích, chưa gắn drone, chưa bị giữ chỗ)
+    ready_count: int = 0  # số pin Ready (sạc 100%, tương thích, chưa gắn drone, chưa bị giữ chỗ)
     compatible_models: list[str] = []
-    feasible: bool = True       # True nếu có ít nhất 1 pin Ready tương thích và đủ năng lượng (dự phòng >= 20%)
+    feasible: bool = True  # True nếu có ít nhất 1 pin Ready tương thích và đủ năng lượng (dự phòng >= 20%)
     # Chỉ định chính xác viên pin tại Hub trung gian sẽ được dùng để thay cho chặng tiếp theo
     selected_battery_id: Optional[str] = None
     selected_battery_serial: Optional[str] = None
@@ -155,7 +179,10 @@ class RouteOptionSchema(BaseModel):
     pickup_hub_code: Optional[str] = None
     # Thông tin tốc độ hành trình & giải thích AI XAI (SHAP theo FA26IS01)
     flight_speed_mps: Optional[float] = None
+    flight_altitude_m: Optional[float] = None
     speed_profile_label: Optional[str] = None
+    weather: Optional[RouteWeatherSchema] = None
+    weather_summary: Optional[str] = None
     shap_values: Optional[Dict[str, float]] = None
     ai_explanation: Optional[Union[AIExplanationSchema, Dict[str, Any]]] = None
 
@@ -186,6 +213,16 @@ class MissionResponse(BaseModel):
     distance_m: Optional[float] = None
     delivery_fee: Optional[float] = None
     status: MissionStatus
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_mission_status(cls, v):
+        if not v:
+            return v
+        s = v.value if hasattr(v, "value") else str(v)
+        if s.strip().lower() in ("in progress", "in_progress", "in-progress", "active mission", "active_mission"):
+            return MissionStatus.FLYING
+        return v
     scheduled_time: Optional[datetime] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
@@ -264,7 +301,7 @@ class TelemetryDataResponse(TelemetryDataCreate):
 
 
 class HubCheckpointResponse(BaseModel):
-    """Log mỗi lần drone đi qua Hub trung gian"""
+    """Log entry each time the drone passes through an intermediate hub."""
     id: int
     mission_id: Union[int, str]
     hub_id: Optional[int]
@@ -283,7 +320,7 @@ class HubCheckpointResponse(BaseModel):
 
 
 class TelemetryIngestResponse(BaseModel):
-    """Response của POST /telemetry — bao gồm logs đã lưu và checkpoint mới tạo (nếu có)"""
+    """Response for POST /telemetry — includes saved telemetry logs and newly created checkpoints (if any)."""
     saved_count: int
     logs: list[TelemetryDataResponse]
     new_checkpoints: list[HubCheckpointResponse]
@@ -294,6 +331,7 @@ class LiveTrackingDrone(BaseModel):
     mission_id: str
     drone_id: Optional[Union[str, int]]
     status: MissionStatus
+    handling_status: Optional[str] = None  # HandlingStatus: INCOMING, AT_HUB, READY, CANNOT_CONTINUE
     latest_lat: Optional[float]
     latest_lng: Optional[float]
     latest_altitude: Optional[float]
@@ -327,12 +365,82 @@ class LiveTrackingResponse(BaseModel):
     active_count: int
     drones: list[LiveTrackingDrone]
 
+
+class AlternativeComparisonItem(BaseModel):
+    id: str
+    label: str
+    feasible: bool = True
+    reason: str
+
+
+class NaturalLanguageShapExplanation(BaseModel):
+    selected_id: str
+    selected_label: str
+    summary: str
+    reasons_selected: list[str] = []
+    why_not_others: list[AlternativeComparisonItem] = []
+
+
+class CandidateBatteryOption(BaseModel):
+    id: str
+    serial_number: Optional[str] = None
+    model: Optional[str] = None
+    capacity_wh: Optional[float] = None
+    charge_level_pct: int = 0
+    available_energy_wh: float = 0.0
+    is_pre_mounted: bool = False
+    is_recommended: bool = False
+    feasible: bool = True
+    infeasible_reason: Optional[str] = None
+    selection_reason: Optional[str] = None
+
+
+class CandidateDroneOption(BaseModel):
+    id: str
+    name: str
+    model: str
+    current_hub_id: Optional[int] = None
+    current_hub_name: Optional[str] = None
+    is_local: bool = True
+    deadhead_km: float = 0.0
+    payload_capacity_kg: float = 0.0
+    is_recommended: bool = False
+    feasible: bool = True
+    infeasible_reason: Optional[str] = None
+    selection_reason: Optional[str] = None
+    eligible_batteries: list[CandidateBatteryOption] = []
+
+
+class RecommendResourcesRequest(BaseModel):
+    orderId: str
+    bundledOrderIds: Optional[list[str]] = None
+
+
+class RecommendResourcesResponse(BaseModel):
+    order_id: str
+    bundled_order_ids: list[str] = []
+    total_payload_kg: float
+    effective_origin_hub_id: int
+    effective_origin_hub_name: Optional[str] = None
+    is_replan_dispatch: bool = False
+    is_cross_hub_dispatch: bool = False
+    recommended_drone_id: str
+    recommended_drone_name: str
+    recommended_drone_model: str
+    recommended_battery_id: str
+    recommended_battery_serial: Optional[str] = None
+    drone_explanation: NaturalLanguageShapExplanation
+    battery_explanation: NaturalLanguageShapExplanation
+    available_drones: list[CandidateDroneOption] = []
+
+
 class MissionPlanningAnalyzeRequest(BaseModel):
     orderId: str
-    droneId: Union[str, int]
+    droneId: Optional[Union[str, int]] = None
     batteryId: Optional[str] = None
     battery_id: Optional[str] = None
     bundledOrderIds: Optional[list[str]] = None
+    recommend_mode: Optional[str] = "AUTO"  # AUTO (theo delivery_mode), ECO (tiết kiệm pin), FAST (tốc độ nhanh)
 
 class MissionPlanningAnalyzeResponse(BaseModel):
     orderId: Optional[str] = None
@@ -353,6 +461,7 @@ class MissionPlanningAnalyzeResponse(BaseModel):
     pickupHubName: Optional[str] = None
     pickupHubCode: Optional[str] = None
     routes: list[RouteOptionSchema]
+    route_explanation: Optional[NaturalLanguageShapExplanation] = None
 
 class MissionCreateRequest(BaseModel):
     orderId: str
@@ -420,7 +529,7 @@ class FailsafeEvaluateResponse(BaseModel):
     wind_speed: float
     wind_warning: bool
     status: str  # SAFE | WARNING | RTH_TRIGGERED | DIVERT_TRIGGERED | EMERGENCY_LAND_TRIGGERED
-    tier: int    # 0: Bình thường | 1: RTH | 2: Divert Hub | 3: Emergency Landing
+    tier: int  # 0: Bình thường | 1: RTH | 2: Divert Hub | 3: Emergency Landing
     action: str  # CONTINUE | RETURN_TO_HOME | DIVERT_TO_HUB | EMERGENCY_LAND
     reason: str
     pnr_reached: bool
@@ -434,7 +543,7 @@ class FailsafeEvaluateResponse(BaseModel):
 class FailsafeExecuteRequest(BaseModel):
     action: str  # RETURN_TO_HOME | DIVERT_TO_HUB | EMERGENCY_LAND
     target_hub_id: Optional[int] = None
-    reason: Optional[str] = "Phát hiện suy hao pin bất thường giữa chặng"
+    reason: Optional[str] = "Abnormal mid-flight battery drain detected"
 
 class FailsafeExecuteResponse(BaseModel):
     mission_id: str
@@ -446,3 +555,69 @@ class FailsafeExecuteResponse(BaseModel):
     incident_id: Optional[int] = None
     alert_id: Optional[int] = None
     message: str
+
+
+class ShapFeatureAttribution(BaseModel):
+    feature: str
+    label: str
+    raw_value: str
+    shap_contribution: float
+    direction: str  # "positive" | "negative" | "neutral"
+    impact: str
+
+
+class DecisionShapExplanation(BaseModel):
+    selected_id: str
+    selected_label: str
+    total_score: float
+    base_value: float
+    baseline_reference: str
+    shap_values: Dict[str, float]
+    feature_contributions: list[ShapFeatureAttribution]
+    why_selected: str
+    counterfactuals: list[Dict[str, Any]] = []
+
+
+class AutoDispatchXAIReport(BaseModel):
+    model_type: str = "Multi-Criteria Additive SHAP + Physics-Informed Flight Energy SHAP"
+    explainability_standard: str = "Additive Shapley Attribution (base_value + sum(shap_values) = total_score)"
+    delivery_mode: str
+    optimization_objective: str
+    effective_origin_hub_id: int
+    is_replan_dispatch: bool = False
+    is_cross_hub_dispatch: bool = False
+    drone_decision: DecisionShapExplanation
+    battery_decision: DecisionShapExplanation
+    route_decision: DecisionShapExplanation
+    physics_energy_shap: Optional[Dict[str, float]] = None
+    physics_energy_explanation: Optional[AIExplanationSchema] = None
+    relay_swap_batteries: list[Dict[str, Any]] = []
+    executive_summary: str
+
+
+class AutoDispatchRequest(BaseModel):
+    orderId: str
+    bundledOrderIds: Optional[list[str]] = None
+    recommend_mode: Optional[str] = "AUTO"  # AUTO (theo delivery_mode), ECO, FAST
+    dry_run: bool = False
+
+
+class AutoDispatchResponse(BaseModel):
+    status: str  # "MISSION_CREATED" | "DRY_RUN_PREVIEW"
+    dry_run: bool = False
+    mission_created: bool = False
+    message: str
+    order_id: str
+    bundled_order_ids: list[str] = []
+    total_payload_kg: float
+    selected_drone_id: str
+    selected_drone_name: str
+    selected_drone_model: str
+    selected_battery_id: str
+    selected_battery_serial: Optional[str] = None
+    selected_route_id: str
+    selected_route_string: str
+    selected_route: RouteOptionSchema
+    available_routes: list[RouteOptionSchema] = []
+    xai_shap_report: AutoDispatchXAIReport
+    mission: Optional[MissionResponse] = None

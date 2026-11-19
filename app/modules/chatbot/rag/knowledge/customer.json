@@ -1,61 +1,61 @@
 [
   {
-    "title": "Cách tạo đơn hàng giao drone",
-    "content": "Để tạo đơn hàng: (1) Chọn Hub xuất phát và Hub đích; (2) Nhập thông tin kiện hàng: trọng lượng (tối đa 10kg), loại hàng; (3) Chọn chế độ giao hàng Normal, Express hoặc Scheduled; (4) Xem báo giá và xác nhận. Đơn hàng sẽ ở trạng thái PENDING cho đến khi Operator lên lịch bay.",
+    "title": "How to Create a Drone Delivery Order",
+    "content": "To create an order: (1) Select Origin Hub and Destination Hub; (2) Enter package details: weight (max 10kg) and package category; (3) Choose delivery mode: Normal, Express, or Scheduled; (4) Review the quotation and confirm. The order remains in PENDING status until an Operator schedules a flight mission.",
     "category": "order_process",
     "role": "customer"
   },
   {
-    "title": "Kích thước kiện hàng cho phép",
-    "content": "DroneOptAI hỗ trợ 4 kích thước: Size S (≤1kg, ≤20x15x10cm), Size M (≤3kg, ≤35x25x20cm), Size L (≤5kg, ≤50x40x30cm), Size XL (≤10kg, ≤70x50x40cm). Vượt quá kích thước tối đa sẽ không được chấp nhận. Tổng trọng lượng tối đa toàn mạng lưới là 10kg.",
+    "title": "Allowed Package Sizes",
+    "content": "DroneOptAI supports 4 package sizes: Size S (≤1kg, ≤20x15x10cm), Size M (≤3kg, ≤35x25x20cm), Size L (≤5kg, ≤50x40x30cm), Size XL (≤10kg, ≤70x50x40cm). Packages exceeding maximum dimensions are not accepted. The maximum weight across the entire network is 10kg.",
     "category": "package_rules",
     "role": "customer"
   },
   {
-    "title": "Các loại hàng hóa được phép vận chuyển",
-    "content": "DroneOptAI chấp nhận: Tài liệu, Điện tử, Quần áo, Thực phẩm đóng gói, Hàng gia dụng nhỏ, Đồ fragile (có phụ phí 15%), Hàng y tế không nguy hiểm. KHÔNG chấp nhận: chất lỏng dễ cháy, vũ khí, chất độc hại, pin lithium rời, động vật sống.",
+    "title": "Accepted and Prohibited Package Categories",
+    "content": "DroneOptAI accepts: Documents, Electronics, Clothing, Packaged food, Small household goods, Fragile items (+15% surcharge), and Non-hazardous medical supplies. NOT accepted: flammable liquids, weapons, toxic materials, loose lithium batteries, and live animals.",
     "category": "package_rules",
     "role": "customer"
   },
   {
-    "title": "Bảng giá cước phí giao hàng",
-    "content": "Phí = Base fee + Distance fee + Payload fee + Phụ phí. Size S: Base 20,000đ, 4,000đ/km, 3,000đ/kg. Size M: Base 30,000đ, 5,000đ/km, 4,000đ/kg. Size L: Base 45,000đ, 6,000đ/km, 5,000đ/kg. Size XL: Base 65,000đ, 8,000đ/km, 6,000đ/kg. Phụ phí: Express +25%, Fragile +15%, Bảo hiểm +10%.",
+    "title": "Delivery Shipping Fee Table",
+    "content": "Fee = Base fee + Distance fee + Payload fee + Surcharges. Size S: Base 20,000 VND, 4,000 VND/km, 3,000 VND/kg. Size M: Base 30,000 VND, 5,000 VND/km, 4,000 VND/kg. Size L: Base 45,000 VND, 6,000 VND/km, 5,000 VND/kg. Size XL: Base 65,000 VND, 8,000 VND/km, 6,000 VND/kg. Surcharges: Express +25%, Fragile +15%, Insurance +10%.",
     "category": "pricing",
     "role": "customer"
   },
   {
-    "title": "Chế độ giao hàng Normal, Express và Scheduled",
-    "content": "Normal (Tiêu chuẩn): Không cần chọn giờ, hệ thống tự lập lịch trong SLA 4h từ lúc đặt. Không phụ phí. Khách bàn giao hàng trong 2h. Phù hợp khi không gấp nhưng vẫn cần giao trong ngày. Express: Giao ưu tiên, phụ phí +25% Core Fee. Drone được ưu tiên xếp lịch sớm nhất. Scheduled: Chọn thời gian giao cụ thể, phụ phí 0%. Cần bàn giao hàng trước giờ bay ít nhất 3 giờ. Khuyến nghị Scheduled khi biết trước thời gian, Normal khi linh hoạt.",
+    "title": "Normal, Express, and Scheduled Delivery Modes",
+    "content": "Normal (Standard): No need to pick a time slot; the system auto-schedules within a 4h SLA from booking. No surcharge. Customer drops off the package within 2h. Ideal when not urgent but same-day delivery is needed. Express: Priority delivery with +25% Core Fee surcharge; drones are prioritized for the earliest available schedule. Scheduled: Choose a specific delivery time with 0% surcharge; package must be handed over at least 3 hours before departure. Scheduled is recommended when timing is known in advance, and Normal when flexibility is preferred.",
     "category": "delivery_modes",
     "role": "customer"
   },
   {
-    "title": "Theo dõi đơn hàng và trạng thái giao hàng",
-    "content": "Các trạng thái đơn hàng: PENDING (chờ xử lý), SCHEDULED (đã lên lịch bay), IN_DELIVERY (drone đang bay), ARRIVED_AT_HUB (đã về hub đích, chờ nhận), DELIVERED (đã giao xong). Khách hàng có thể xem vị trí drone thời gian thực, tuyến đường và ETA trên trang Tracking.",
+    "title": "Order Tracking and Delivery Statuses",
+    "content": "Order statuses: PENDING (awaiting processing), SCHEDULED (flight scheduled), IN_DELIVERY (drone in flight), ARRIVED_AT_HUB (arrived at destination hub, awaiting pickup), DELIVERED (completed). Customers can view real-time drone location, flight route, and ETA on the Tracking page.",
     "category": "tracking",
     "role": "customer"
   },
   {
-    "title": "Thời gian giao hàng dự kiến (ETA)",
-    "content": "ETA được tính dựa trên: tuyến đường bay (khoảng cách Hub-to-Hub), tốc độ drone (khoảng 10-12 m/s), điều kiện thời tiết và tình trạng đội bay. ETA hiển thị trong khung thời gian ước tính (estimated_window_start và estimated_window_end). ETA có thể thay đổi theo điều kiện thực tế.",
+    "title": "Estimated Time of Arrival (ETA)",
+    "content": "ETA is calculated based on the flight route (Hub-to-Hub distance), drone speed (approx. 10-12 m/s), weather conditions, and fleet availability. ETA is displayed as an estimated time window (estimated_window_start and estimated_window_end) and may adjust according to live operational conditions.",
     "category": "tracking",
     "role": "customer"
   },
   {
-    "title": "Chính sách hủy đơn hàng",
-    "content": "Khách hàng chỉ có thể hủy đơn khi đơn đang ở trạng thái PENDING (chưa có drone được giao). Khi hủy, hệ thống sẽ gửi email xác nhận. Đơn đã vào trạng thái SCHEDULED hoặc đang bay (IN_DELIVERY) không thể hủy. Liên hệ Operator nếu cần hỗ trợ trong trường hợp khẩn cấp.",
+    "title": "Order Cancellation Policy",
+    "content": "Customers can only cancel an order while it is in PENDING status (before a drone is assigned). Upon cancellation, the system sends a confirmation email. Orders already in SCHEDULED or IN_DELIVERY status cannot be cancelled directly. Contact an Operator for assistance in urgent cases.",
     "category": "cancellation_policy",
     "role": "customer"
   },
   {
-    "title": "Quy trình nhận hàng tại Hub",
-    "content": "Sau khi drone hạ cánh tại Hub đích, hàng sẽ được bảo quản tối đa 5 ngày. Khách hàng sẽ nhận thông báo nhắc nhở mỗi 5 giờ. Nếu sau 5 ngày không đến nhận, đơn hàng sẽ tự động bị hủy. Khi đến nhận, xuất trình mã đơn hàng với Technician tại Hub.",
+    "title": "Hub Pickup Procedure",
+    "content": "After the drone lands at the Destination Hub, the package is held for up to 5 days. Customers receive reminder notifications every 5 hours. If uncollected after 5 days, the order is automatically cancelled. When picking up, present your order ID to the Technician at the Hub.",
     "category": "pickup_policy",
     "role": "customer"
   },
   {
-    "title": "Bảo hiểm kiện hàng",
-    "content": "DroneOptAI cung cấp tùy chọn bảo hiểm kiện hàng với phí +10% trên Core Fee. Bảo hiểm chi trả trong trường hợp hư hỏng do sự cố kỹ thuật của drone. Không áp dụng cho hàng hóa bị hư hỏng do đóng gói không đúng cách hoặc hàng cấm vận chuyển. Chọn 'has_insurance=true' khi tạo đơn.",
+    "title": "Package Insurance",
+    "content": "DroneOptAI offers optional package insurance for +10% of the Core Fee. Insurance covers damage caused by drone technical failures. It does not cover damage due to improper packaging or prohibited items. Select 'has_insurance=true' when creating an order.",
     "category": "insurance",
     "role": "customer"
   }

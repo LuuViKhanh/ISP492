@@ -86,7 +86,7 @@ class PartsRequestOut(BaseModel):
 
 def _get_tech_hub(user: CurrentUser) -> int:
     if not user.hub_id:
-        raise HTTPException(status_code=400, detail="Technician chưa được gán Hub. Liên hệ Admin.")
+        raise HTTPException(status_code=400, detail="Technician is not assigned to any hub. Please contact Admin.")
     return user.hub_id
 
 
@@ -155,10 +155,10 @@ async def create_parts_request(
     # Kiểm tra category tồn tại
     cat = await db.get(PartCategory, body.part_category_id)
     if not cat or not cat.is_active:
-        raise HTTPException(status_code=404, detail="Loại linh kiện không tồn tại.")
+        raise HTTPException(status_code=404, detail="Part category not found.")
 
     if body.quantity_needed < 1:
-        raise HTTPException(status_code=400, detail="Số lượng cần tối thiểu là 1.")
+        raise HTTPException(status_code=400, detail="Minimum required quantity is 1.")
 
     # Kiểm tra tồn kho
     inv_row = (await db.execute(
@@ -185,7 +185,7 @@ async def create_parts_request(
     )
     if has_stock:
         req.reviewed_at = now
-        req.admin_note = "Tự động duyệt — Hub đủ tồn kho."
+        req.admin_note = "Auto-approved — sufficient stock at hub."
 
     db.add(req)
     await db.flush()  # lấy req.id
@@ -201,7 +201,7 @@ async def create_parts_request(
             reason=TxnReason.REPAIR_USE,
             performed_by=user.id,
             reference_id=str(req.id),
-            note=f"Auto-approved: thay cho drone {body.drone_id or 'N/A'}",
+            note=f"Auto-approved: used for drone {body.drone_id or 'N/A'}",
             created_at=now,
         ))
 
@@ -257,9 +257,9 @@ async def get_request_detail(
 ):
     req = await db.get(PartsRequest, request_id)
     if not req:
-        raise HTTPException(status_code=404, detail="Đề xuất không tồn tại.")
+        raise HTTPException(status_code=404, detail="Parts request not found.")
     if req.requested_by != user.id and user.role != UserRole.ADMIN:
-        raise HTTPException(status_code=403, detail="Không có quyền xem đề xuất này.")
+        raise HTTPException(status_code=403, detail="You do not have permission to view this parts request.")
 
     cat = await db.get(PartCategory, req.part_category_id)
     out = PartsRequestOut.model_validate(req)
@@ -281,13 +281,13 @@ async def mark_fulfilled(
     """
     req = await db.get(PartsRequest, request_id)
     if not req:
-        raise HTTPException(status_code=404, detail="Đề xuất không tồn tại.")
+        raise HTTPException(status_code=404, detail="Parts request not found.")
     if req.requested_by != user.id:
-        raise HTTPException(status_code=403, detail="Chỉ người tạo đề xuất mới được xác nhận.")
+        raise HTTPException(status_code=403, detail="Only the request creator can confirm fulfillment.")
     if req.status not in (PartsRequestStatus.APPROVED, PartsRequestStatus.AUTO_APPROVED):
         raise HTTPException(
             status_code=400,
-            detail=f"Đề xuất đang ở trạng thái {req.status.value}, không thể xác nhận."
+            detail=f"Parts request is currently {req.status.value} and cannot be confirmed."
         )
 
     now = datetime.now(timezone.utc)
@@ -297,4 +297,4 @@ async def mark_fulfilled(
         req.actual_cost = actual_cost
 
     await db.commit()
-    return {"message": "Đã xác nhận thay linh kiện thành công.", "request_id": request_id}
+    return {"message": "Part replacement confirmed successfully.", "request_id": request_id}

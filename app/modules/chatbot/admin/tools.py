@@ -39,7 +39,7 @@ async def tool_get_system_executive_summary(db: AsyncSession, **kwargs) -> Dict[
 
     return {
         "success": True,
-        "total_revenue_vnd": f"{int(revenue):,} VNĐ",
+        "total_revenue_vnd": f"{int(revenue):,} VND",
         "raw_revenue": revenue,
         "total_orders": total_orders,
         "total_missions": total_missions,
@@ -76,12 +76,12 @@ def get_admin_gemini_tools() -> list:
     decls = [
                 types.FunctionDeclaration(
                     name="get_system_executive_summary",
-                    description="Lấy báo cáo tổng quan điều hành (doanh thu, đơn hàng, chuyến bay hoàn thành, số lượng drone).",
+                    description="Get the executive summary report (total revenue, orders, completed flight missions, and fleet drone count).",
                     parameters=types.Schema(type=types.Type.OBJECT, properties={})
                 ),
                 types.FunctionDeclaration(
                     name="get_user_role_counts",
-                    description="Thống kê số lượng người dùng theo từng vai trò (Admin, Operator, Technician, Customer).",
+                    description="Get user account statistics grouped by role (Admin, Operator, Technician, Customer).",
                     parameters=types.Schema(type=types.Type.OBJECT, properties={})
                 ),
     ]

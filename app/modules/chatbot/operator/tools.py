@@ -60,7 +60,7 @@ async def tool_get_operator_kpi(db: AsyncSession, **kwargs) -> Dict[str, Any]:
         "cancelled": cancelled,
         "rejected": rejected,
         "success_rate_pct": round(completed / finished * 100, 2) if finished else 0.0,
-        "total_revenue_vnd": f"{int(revenue):,} VNĐ"
+        "total_revenue_vnd": f"{int(revenue):,} VND"
     }
 
 
@@ -98,7 +98,7 @@ async def tool_search_mission_by_id(db: AsyncSession, mission_id: str, **kwargs)
     m = result.scalar_one_or_none()
 
     if not m:
-        return {"success": False, "message": f"Không tìm thấy chuyến bay có ID '{mission_id}'."}
+        return {"success": False, "message": f"Mission with ID '{mission_id}' was not found."}
 
     return {
         "success": True,
@@ -107,7 +107,7 @@ async def tool_search_mission_by_id(db: AsyncSession, mission_id: str, **kwargs)
         "status": m.status.value if m.status else "UNKNOWN",
         "payload_weight": m.payload_weight,
         "distance_m": m.distance_m,
-        "delivery_fee": f"{int(m.delivery_fee):,} VNĐ" if m.delivery_fee else None,
+        "delivery_fee": f"{int(m.delivery_fee):,} VND" if m.delivery_fee else None,
         "scheduled_time": m.scheduled_time.strftime("%H:%M %d/%m/%Y") if m.scheduled_time else None,
         "start_time": m.start_time.strftime("%H:%M %d/%m/%Y") if m.start_time else None,
         "end_time": m.end_time.strftime("%H:%M %d/%m/%Y") if m.end_time else None,
@@ -126,31 +126,31 @@ def get_operator_gemini_tools() -> list:
     decls = [
                 types.FunctionDeclaration(
                     name="get_active_missions",
-                    description="Lấy danh sách các chuyến bay Drone đang hoạt động trên bầu trời.",
+                    description="Get the list of drone flight missions currently active in the air.",
                     parameters=types.Schema(type=types.Type.OBJECT, properties={})
                 ),
                 types.FunctionDeclaration(
                     name="get_operator_kpi",
-                    description="Lấy số liệu thống kê vận hành (tổng số chuyến, hoàn thành, tỷ lệ thành công, doanh thu).",
+                    description="Get operational statistics (total missions, completed, cancelled, rejected, success rate, and revenue).",
                     parameters=types.Schema(type=types.Type.OBJECT, properties={})
                 ),
                 types.FunctionDeclaration(
                     name="get_recent_incidents",
-                    description="Xem danh sách các sự cố bay gần đây của phi đội Drone.",
+                    description="View the list of recent flight incidents across the drone fleet.",
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
-                            "limit": types.Schema(type=types.Type.INTEGER, description="Số lượng sự cố cần lấy.")
+                            "limit": types.Schema(type=types.Type.INTEGER, description="Number of recent incidents to retrieve.")
                         }
                     )
                 ),
                 types.FunctionDeclaration(
                     name="search_mission_by_id",
-                    description="Tra cứu chi tiết chuyến bay theo Mission ID.",
+                    description="Look up detailed information for a flight mission by Mission ID.",
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
-                            "mission_id": types.Schema(type=types.Type.STRING, description="Mã chuyến bay.")
+                            "mission_id": types.Schema(type=types.Type.STRING, description="Flight mission ID.")
                         },
                         required=["mission_id"]
                     )

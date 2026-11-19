@@ -101,7 +101,7 @@ async def update_user(
             if user.email.startswith("archived_") or user.email.startswith("deleted_"):
                 raise HTTPException(
                     status_code=400,
-                    detail="Tài khoản này đã bị lưu trữ vĩnh viễn do email đã được đăng ký mới bởi tài khoản khác. Không thể hoàn tác."
+                    detail="This account has been permanently archived because its email was re-registered by another account. This action cannot be undone."
                 )
         user.is_active = body.is_active
         
@@ -133,7 +133,7 @@ async def delete_user(user_id: str, db: AsyncSession = Depends(get_async_db)):
 
     return {
         "success": True,
-        "message": "Tài khoản người dùng đã được xóa (vô hiệu hóa) thành công",
+        "message": "User account has been deleted (deactivated) successfully",
         "user_id": user.id,
         "is_active": user.is_active
     }
@@ -158,7 +158,7 @@ async def restore_user(user_id: str, db: AsyncSession = Depends(get_async_db)):
     if user.email.startswith("archived_") or user.email.startswith("deleted_"):
         raise HTTPException(
             status_code=400,
-            detail="Tài khoản này đã bị lưu trữ vĩnh viễn do email đã được đăng ký mới bởi tài khoản khác. Không thể hoàn tác."
+            detail="This account has been permanently archived because its email was re-registered by another account. This action cannot be undone."
         )
 
     user.is_active = True

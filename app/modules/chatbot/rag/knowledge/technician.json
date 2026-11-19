@@ -1,50 +1,135 @@
 [
   {
-    "title": "Quy trình bảo trì drone định kỳ",
-    "content": "Lịch bảo trì định kỳ được tự động tạo dựa trên: số giờ bay tích lũy (interval_flight_hours) hoặc khoảng cách thời gian (interval_days). Khi đến hạn, hệ thống tạo MaintenanceAlert tự động mỗi giờ. Technician tạo Work Order từ Alert → tiến hành kiểm tra → ghi Maintenance Record → cập nhật trạng thái drone.",
+    "title": "Scheduled Drone Maintenance Workflow",
+    "content": "Preventive maintenance schedules are automatically generated based on accumulated flight hours (interval_flight_hours) or elapsed days (interval_days). When due, the system generates a MaintenanceAlert automatically every hour. The Technician creates a Work Order from the Alert -> performs inspection -> logs a Maintenance Record -> updates drone status.",
     "category": "maintenance_process",
     "role": "technician"
   },
   {
-    "title": "Quy trình xử lý Work Order",
-    "content": "Work Order có 3 trạng thái: PENDING → IN_PROGRESS → COMPLETED. Khi tạo Work Order từ Alert: nhập mô tả vấn đề và drone liên quan. Dùng PATCH /work-orders/{id}/inspection để cập nhật tiến độ và ghi action_taken. Khi completed, điền resolved_at tự động. Mọi thay đổi trạng thái đều được ghi vào WorkOrderLog để audit.",
+    "title": "Work Order Handling Workflow",
+    "content": "Work Orders have 3 statuses: PENDING -> IN_PROGRESS -> COMPLETED. When creating a Work Order from an Alert, enter the issue description and related drone. Use PATCH /work-orders/{id}/inspection to update progress and record action_taken. Upon completion, resolved_at is populated automatically. All status transitions are logged in WorkOrderLog for auditing.",
     "category": "work_order",
     "role": "technician"
   },
   {
-    "title": "Kiểm tra và quản lý pin (Battery)",
-    "content": "Pin được sạc tự động khi đang đỗ tại Hub theo thuật toán CC-CV: dưới 80% sạc nhanh (tuyến tính), từ 80-100% sạc chậm dần (exponential decay). Technician có thể: xem trạng thái pin tại Hub, gắn pin vào drone cho mission, đánh dấu sạc đầy thủ công (mark-charged). Cảnh báo tự động khi pin ≤20% và khi pin bảo trì quá hạn >7 ngày.",
+    "title": "Battery Inspection and Management",
+    "content": "Batteries charge automatically while docked at a Hub using a CC-CV algorithm: fast linear charging below 80%, and slower exponential decay from 80-100%. Technicians can view battery status at Hubs, mount batteries onto drones for missions, and manually mark batteries charged (mark-charged). Automatic alerts trigger when battery ≤20% or maintenance is overdue >7 days.",
     "category": "battery_management",
     "role": "technician"
   },
   {
-    "title": "Xử lý kiện hàng đến Hub (Inbound Package)",
-    "content": "Quy trình xử lý kiện hàng tại Hub xuất phát: (1) Nhận hàng từ khách → cập nhật handling_status = AT_HUB; (2) Kiểm tra hàng, lắp pin vào drone → handling_status = READY; (3) Drone cất cánh khi nhận telemetry đầu tiên. Xem danh sách kiện cần nhận qua /technician/deliveries/outbound. Xác nhận kiện đã đến Hub đích qua /deliveries/confirmations.",
+    "title": "Inbound Package Handling at Hub",
+    "content": "Package handling at the Origin Hub: (1) Receive package from customer -> update handling_status = AT_HUB; (2) Inspect package and mount battery on drone -> handling_status = READY; (3) Drone takes off upon receiving the first telemetry packet. View outbound packages via /technician/deliveries/outbound and confirm destination arrivals via /deliveries/confirmations.",
     "category": "package_handling",
     "role": "technician"
   },
   {
-    "title": "Ghi nhận kết quả bảo trì (Maintenance Record)",
-    "content": "Sau khi hoàn thành sửa chữa, tạo Maintenance Record bao gồm: chẩn đoán (diagnosis), hành động khắc phục (corrective_action), trạng thái drone sau bảo trì (resulting_drone_status), danh sách hạng mục kiểm tra (inspection_items với is_completed). Maintenance Record liên kết với Work Order và drone để tra cứu lịch sử.",
+    "title": "Recording Maintenance Results (Maintenance Record)",
+    "content": "After completing repairs, create a Maintenance Record including diagnosis, corrective_action, resulting_drone_status, and inspection_items (with is_completed flags). Each Maintenance Record links to its Work Order and drone for full maintenance history traceability.",
     "category": "maintenance_record",
     "role": "technician"
   },
   {
-    "title": "Xác nhận drone về Hub sau khi giao hàng",
-    "content": "Khi drone hạ cánh tại Hub đích sau khi giao hàng: Technician dùng /technician/fleet/missions/{id}/confirm-arrival để xác nhận. Hệ thống tự động cập nhật current_hub_id của drone. Sau xác nhận, drone sẵn sàng cho chuyến bay tiếp theo. Technician cũng xác nhận khách nhận hàng qua /technician/deliveries/confirmations/{orderId}/confirm-pickup.",
+    "title": "Confirming Drone Arrival After Delivery",
+    "content": "When a drone lands at the Destination Hub after delivery, the Technician calls /technician/fleet/missions/{id}/confirm-arrival to confirm. The system automatically updates the drone's current_hub_id, making it ready for the next mission. Technicians also confirm customer package pickup via /technician/deliveries/confirmations/{orderId}/confirm-pickup.",
     "category": "arrival_confirmation",
     "role": "technician"
   },
   {
-    "title": "Cảnh báo bảo trì tự động (Maintenance Alerts)",
-    "content": "Hệ thống tự động tạo 3 loại cảnh báo: (1) Lịch bảo trì đến hạn (từ MaintenanceSchedule); (2) Pin thấp ≤20% (kiểm tra mỗi giờ); (3) Bảo trì quá hạn >7 ngày; (4) Mất tín hiệu drone >3 giây khi đang bay (real-time). Technician xem và xử lý cảnh báo qua /technician/fleet/maintenance-alerts. Mỗi cảnh báo chỉ tạo 1 lần (dedup tự động).",
+    "title": "Automated Maintenance Alerts",
+    "content": "The system automatically generates maintenance alerts for: (1) Due maintenance schedules (from MaintenanceSchedule); (2) Low battery ≤20% (checked hourly); (3) Overdue maintenance >7 days; (4) Drone signal loss >3 seconds in flight (real-time). Technicians view and handle alerts via /technician/fleet/maintenance-alerts. Each alert is deduplicated automatically.",
     "category": "alerts",
     "role": "technician"
   },
   {
     "title": "Drone Fleet Overview",
-    "content": "Xem tổng quan đội drone qua Dashboard: tổng số drone, tỉ lệ sẵn sàng (Available/Total*100%), utilization trung bình, số drone bảo trì. Xem chi tiết từng drone: lần bảo trì cuối, lần bay cuối, lịch bảo trì tiếp theo, lịch sử bảo trì đầy đủ. Drone có các trạng thái: AVAILABLE, IN_MISSION, MAINTENANCE, RETIRED.",
+    "content": "View fleet-wide status on the Dashboard: total drones, readiness rate (Available/Total*100%), average utilization, and drones under maintenance. Inspect per-drone details: last maintenance, last flight, next scheduled maintenance, and full maintenance history. Drone statuses: AVAILABLE, IN_MISSION, MAINTENANCE, RETIRED.",
     "category": "fleet_overview",
+    "role": "technician"
+  },
+
+  {
+    "title": "Incident: Pin yếu — cách giải quyết",
+    "content": "Khi drone báo incident do pin yếu (battery low, charge drop): (1) Kiểm tra charge_level_pct — nếu dưới 15% phải thay ngay; (2) Tạo Replacement Request type=BATTERY, ghi damaged_item_id = battery_id bị lỗi, lý do 'Pin sụt áp đột ngột'; (3) Admin cấp pin mới từ Hub; (4) Tháo pin cũ, lắp pin mới có charge ≥80%; (5) Đánh dấu pin cũ là REPLACED qua API. Nếu pin chỉ hết do bay lâu (charge thấp nhưng không lỗi) thì chỉ cần sạc, không cần thay.",
+    "category": "incident_resolution",
+    "role": "technician"
+  },
+  {
+    "title": "Incident: Mất tín hiệu — cách giải quyết",
+    "content": "Khi drone mất tín hiệu telemetry >3 giây, hệ thống tự tạo MaintenanceAlert 'Mất tín hiệu quá 3s'. Quy trình xử lý: (1) Kiểm tra vật lý: antenna, kết nối cáp tín hiệu từ FC tới radio module; (2) Nếu cáp tín hiệu bị đứt/lỏng → tạo Replacement Request type=PART, chọn PartCategory 'Cáp tín hiệu ESC-Motor' hoặc 'Cáp nguồn pin'; (3) Nếu antenna bị hỏng vật lý → tạo Replacement Request type=PART, chọn Sensor; (4) Thay thế linh kiện → test lại telemetry; (5) Nếu sau thay thế vẫn mất tín hiệu liên tục → đánh giá hư Flight Controller, xem xét RETIRED.",
+    "category": "incident_resolution",
+    "role": "technician"
+  },
+  {
+    "title": "Incident: Cánh hỏng / rung lắc bất thường — cách giải quyết",
+    "content": "Khi drone rung bất thường hoặc cánh quạt bị vỡ/nứt: (1) Dừng ngay và đặt drone vào bảo trì (MAINTENANCE); (2) Kiểm tra toàn bộ 4 cánh — quan sát vết nứt, biến dạng; (3) Tạo Replacement Request type=PART, chọn PartCategory tương ứng: 'Cánh quạt DJI Mavic 3', 'Cánh quạt DJI Matrice 300', hoặc 'Cánh quạt DJI FlyCart 30' tùy model drone; (4) Nhập quantity = số cánh cần thay (thường 4 cánh/bộ); (5) Sau khi Admin cấp linh kiện, thay toàn bộ bộ cánh, cân bằng lại; (6) Bay thử không tải 2 phút để xác nhận ổn định.",
+    "category": "incident_resolution",
+    "role": "technician"
+  },
+  {
+    "title": "Incident: Động cơ hỏng — cách giải quyết",
+    "content": "Khi một hoặc nhiều động cơ (motor) không hoạt động hoặc phát ra tiếng lạ: (1) Tắt nguồn ngay, không thử khởi động lại; (2) Dùng tay quay thử từng motor — motor tốt quay trơn đều, motor hỏng sẽ cứng hoặc rít; (3) Tạo Work Order ghi rõ 'Motor số [X] hỏng'; (4) Tạo Replacement Request type=PART, chọn PartCategory 'Động cơ DJI Mavic 3' hoặc 'Động cơ DJI Matrice 300'; (5) Thay motor mới → test spin test không cánh → gắn cánh → test bay thử; (6) Nếu ≥2 motor hỏng cùng lúc → khả năng lỗi ESC, kiểm tra thêm ESC.",
+    "category": "incident_resolution",
+    "role": "technician"
+  },
+  {
+    "title": "Incident: ESC hỏng — cách giải quyết",
+    "content": "Electronic Speed Controller (ESC) hỏng thường do quá nhiệt, quá tải hoặc ngắn mạch: (1) Triệu chứng: motor không phản hồi, ESC phát nóng bất thường, beep cảnh báo; (2) Tạo Work Order mô tả 'ESC [số] không phản hồi motor'; (3) Tạo Replacement Request type=PART, chọn 'Bo mạch ESC DJI Mavic 3' hoặc 'Bo mạch ESC DJI Matrice 300'; (4) Thay ESC mới → cài lại calibration motor; (5) Nếu sau khi thay ESC motor vẫn không chạy → kiểm tra cáp kết nối FC-ESC; (6) Ghi kết quả vào Maintenance Record.",
+    "category": "incident_resolution",
+    "role": "technician"
+  },
+  {
+    "title": "Incident: Bo mạch điều khiển bay (Flight Controller) hỏng — cách giải quyết",
+    "content": "Flight Controller (FC) hỏng là sự cố nghiêm trọng: (1) Triệu chứng: drone không phản hồi điều khiển, GPS mất, hệ thống failsafe kích hoạt liên tục; (2) Thử reset firmware — nếu không phục hồi thì FC bị hỏng; (3) Tạo Work Order với severity cao; (4) Tạo Replacement Request type=PART, chọn 'Bo mạch điều khiển bay (Flight Controller) DJI Mavic 3'; (5) Thay FC mới → cài đặt lại firmware, calibrate IMU, compass; (6) Thời gian sửa chữa 2-4 giờ — cần đặt drone MAINTENANCE trong suốt quá trình; (7) Bay thử kiểm tra đầy đủ trước khi đưa vào vận hành.",
+    "category": "incident_resolution",
+    "role": "technician"
+  },
+  {
+    "title": "Incident: Hạ cánh khẩn cấp / Incident Return — cách giải quyết",
+    "content": "Khi drone kích hoạt Incident Return (hạ cánh khẩn cấp do sự cố): (1) Operator đã kích hoạt Emergency Land — drone tự về điểm an toàn; (2) Technician nhận alert, đến kiểm tra drone; (3) Kiểm tra toàn bộ: cánh, motor, pin, khung; (4) Nếu chỉ pin yếu → thay pin, drone về AVAILABLE; (5) Nếu có hư hỏng vật lý (nứt cánh, motor kẹt) → tạo Work Order + Replacement Request tương ứng; (6) Nếu hư hại nặng (khung biến dạng, FC hỏng, nhiều motor hỏng cùng lúc) → đánh giá không thể tiếp tục bảo trì, xem mục 'Drone hư hại nặng'.",
+    "category": "incident_resolution",
+    "role": "technician"
+  },
+  {
+    "title": "Incident: Va chạm / Khung bị biến dạng — cách giải quyết",
+    "content": "Khi drone va chạm và khung bị cong/vỡ: (1) Kiểm tra cẩn thận: cánh, arm (càng cánh), landing gear, camera gimbal; (2) Nếu chỉ arm hoặc landing gear bị hỏng → tạo Replacement Request type=PART, chọn 'Khung cánh (Arm) DJI Matrice 300'; (3) Nếu khung chính bị biến dạng nghiêm trọng → không tự sửa, đánh giá RETIRED; (4) Gimbal bị lỏng/hỏng → tạo Replacement Request type=PART, chọn Gimbal; (5) Sau khi thay thế, chạy full calibration: IMU, compass, gimbal; (6) Ghi đầy đủ vào Incident và Maintenance Record.",
+    "category": "incident_resolution",
+    "role": "technician"
+  },
+  {
+    "title": "Incident: Cảm biến GPS/Lidar hỏng — cách giải quyết",
+    "content": "Khi GPS hoặc cảm biến điều hướng bị hỏng: (1) Triệu chứng: vị trí drone không ổn định, drift liên tục, warning GPS signal weak; (2) Kiểm tra kết nối vật lý của module GPS; (3) Nếu chỉ cáp GPS lỏng → siết lại, test lại; (4) Nếu module GPS hỏng hẳn → tạo Replacement Request type=PART, chọn 'Cảm biến GPS dự phòng' (compatible với Matrice 300 / FlyCart 30); (5) Thay module GPS → calibrate compass lại bắt buộc; (6) Drone KHÔNG được bay khi chưa có GPS lock ổn định.",
+    "category": "incident_resolution",
+    "role": "technician"
+  },
+  {
+    "title": "Drone hư hại nặng — đánh giá không thể tiếp tục bảo trì (RETIRED)",
+    "content": "Khi drone bị hư hại quá mức không thể phục hồi: (1) Điều kiện đánh giá RETIRED: khung chính biến dạng không thể phục hồi, ≥3 motor hỏng đồng thời, FC + ESC hỏng cùng lúc, thiệt hại do nước (ngập nước hoàn toàn), chi phí sửa chữa ước tính >70% giá trị drone mới; (2) Quy trình: Technician tạo Work Order với diagnosis 'Không thể tiếp tục bảo trì', ghi rõ lý do; (3) Cập nhật operational_status = RETIRED qua Admin; (4) Tháo và bảo quản các linh kiện còn dùng được (pin, cảm biến, ESC tốt); (5) Báo cáo Admin để xem xét đặt mua drone thay thế; (6) Ghi đầy đủ incident và Maintenance Record cho mục đích bảo hiểm.",
+    "category": "incident_resolution",
+    "role": "technician"
+  },
+  {
+    "title": "Quy trình tạo Replacement Request (Yêu cầu thay thế)",
+    "content": "Khi cần thay pin hoặc linh kiện: (1) Vào menu Supplies > Replacement Requests; (2) Chọn type: BATTERY (thay pin) hoặc PART (thay linh kiện); (3) Điền damaged_item_id: nhập battery_id hoặc drone_id bị hỏng; (4) Nếu PART: chọn PartCategory từ danh mục (cánh, motor, ESC, FC, cáp, cảm biến...); (5) Nhập quantity và reason (mô tả chi tiết tình trạng hỏng); (6) Đính kèm photo_urls nếu có ảnh hư hỏng; (7) Submit → Admin nhận notification và sẽ cấp phát (SUPPLIED) hoặc từ chối (REJECTED); (8) Sau khi SUPPLIED: thực hiện thay thế, cập nhật Work Order là COMPLETED.",
+    "category": "replacement_request",
+    "role": "technician"
+  },
+  {
+    "title": "Bảng tóm tắt sự cố và hành động xử lý",
+    "content": "Tóm tắt nhanh các sự cố và hành động: | Sự cố | Hành động | Loại thay thế | --- | --- | --- | Pin yếu/sụt áp | Thay pin mới | BATTERY | Mất tín hiệu telemetry | Kiểm tra cáp, thay antenna/cáp | PART (Cable/Sensor) | Cánh vỡ/nứt | Thay bộ cánh | PART (Propeller) | Motor không quay | Thay motor | PART (Motor) | ESC không phản hồi | Thay ESC | PART (ESC) | FC không hoạt động | Thay Flight Controller | PART (FlightController) | GPS drift | Thay module GPS | PART (Sensor) | Khung biến dạng nhẹ | Thay arm/landing gear | PART (Frame) | Hư hại toàn bộ | Đánh giá RETIRED | Không thay thế",
+    "category": "incident_summary",
+    "role": "technician"
+  },
+  {
+    "title": "Thời gian bảo trì ước tính theo loại sự cố",
+    "content": "Thời gian sửa chữa tham khảo: Thay pin: 10-15 phút. Thay cánh quạt: 20-30 phút (bao gồm cân bằng). Thay motor: 45-60 phút (bao gồm calibration). Thay ESC: 60-90 phút (bao gồm cài đặt lại). Thay Flight Controller: 2-4 giờ (firmware + calibration đầy đủ). Thay GPS module: 30-45 phút (bao gồm compass calibration). Thay arm/khung: 45-60 phút. Đánh giá RETIRED: 30 phút (kiểm tra + báo cáo). Lưu ý: thời gian trên chưa tính thời gian chờ linh kiện từ Admin cấp phát.",
+    "category": "maintenance_time",
+    "role": "technician"
+  },
+  {
+    "title": "Kiểm tra drone sau bảo trì (Post-Maintenance Checklist)",
+    "content": "Trước khi đưa drone về AVAILABLE sau bảo trì: (1) Kiểm tra cơ học: siết vít toàn bộ, cánh cân bằng, không có bộ phận lỏng lẻo; (2) Kiểm tra pin: charge ≥80%, không phình, nhiệt độ bình thường; (3) Kiểm tra kết nối: tất cả cáp cắm chắc, không bị hở; (4) Kiểm tra phần mềm: telemetry hoạt động, GPS lock, compass calibrated; (5) Test motor: spin test không cánh 30 giây, kiểm tra nhiệt độ motor; (6) Bay thử: hover 2 phút không tải, kiểm tra độ ổn định; (7) Ghi đầy đủ Maintenance Record và đóng Work Order. Chỉ chuyển sang AVAILABLE khi TẤT CẢ bước trên pass.",
+    "category": "post_maintenance_check",
     "role": "technician"
   }
 ]

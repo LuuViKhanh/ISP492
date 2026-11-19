@@ -29,11 +29,11 @@ async def embed_text(text: str, api_key: Optional[str] = None) -> list[float]:
     try:
         from google import genai
     except ImportError:
-        raise ImportError("Cần cài đặt thư viện: pip install google-genai")
+        raise ImportError("Required package missing: pip install google-genai")
 
     key = api_key or os.getenv("GEMINI_API_KEY") or ""
     if not key:
-        raise ValueError("GEMINI_API_KEY chưa được cấu hình trong .env")
+        raise ValueError("GEMINI_API_KEY is not configured in .env")
 
     text = text.strip()[:2048]  # Truncate để tiết kiệm token quota
     if not text:

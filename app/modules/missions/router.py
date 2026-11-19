@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
@@ -28,12 +29,12 @@ async def get_mission_kpi(
     tỷ lệ thành công, khoảng cách trung bình, tải trọng trung bình và tổng doanh thu.
     Dành cho Operator hoặc Admin.
     """
-    result = await db.execute(select(Mission))
+    result = await db.execute(select(Mission).where(Mission.status != MissionStatus.CANCELLED))
     missions = result.scalars().all()
 
     total = len(missions)
     completed = sum(1 for m in missions if m.status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED))
-    cancelled = sum(1 for m in missions if m.status == MissionStatus.CANCELLED)
+    cancelled = 0
     rejected = sum(1 for m in missions if m.status == MissionStatus.REJECTED)
     finished = completed + cancelled + rejected
 
@@ -64,12 +65,19 @@ async def get_mission_status(
     Dành cho Operator hoặc Admin.
     """
     result = await db.execute(
-        select(Mission.status, func.count().label("count")).group_by(Mission.status)
+        select(Mission.status, func.count().label("count"))
+        .where(Mission.status != MissionStatus.CANCELLED)
+        .group_by(Mission.status)
     )
     rows = result.all()
-    return MissionStatusResponse(
-        status_breakdown={row.status.value: row.count for row in rows}
-    )
+    breakdown: dict[str, int] = {}
+    for row in rows:
+        val = row.status.value if hasattr(row.status, "value") else str(row.status or "")
+        if val == "Cancelled":
+            continue
+        key = MissionStatus.FLYING.value if val in ("In Progress", "Active mission") else val
+        breakdown[key] = breakdown.get(key, 0) + row.count
+    return MissionStatusResponse(status_breakdown=breakdown)
 
 
 @router.get("/dashboard/active-flights", response_model=ActiveFlightsResponse)
@@ -83,7 +91,13 @@ async def get_active_flights(
     Dành cho Operator hoặc Admin.
     """
     result = await db.execute(
-        select(Mission).where(Mission.status == MissionStatus.FLYING)
+        select(Mission).where(
+            Mission.status.in_([
+                MissionStatus.FLYING,
+                MissionStatus.IN_PROGRESS,
+                MissionStatus.ACTIVE_MISSION,
+            ])
+        )
     )
     missions = result.scalars().all()
     return ActiveFlightsResponse(
@@ -115,6 +129,8 @@ async def create_mission_request(user: CurrentUser = Depends(allow_operator_and_
 
 @router.get("/", response_model=list[MissionResponse])
 async def get_missions(
+    limit: Optional[int] = Query(None, ge=1, le=500, description="Giới hạn số mission trả về (mặc định trả tất cả để tương thích FE)"),
+    offset: int = Query(0, ge=0, description="Vị trí bắt đầu phân trang"),
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -123,10 +139,20 @@ async def get_missions(
     API này trả về danh sách toàn bộ nhiệm vụ được sắp xếp theo ID giảm dần,
     kèm theo chi tiết tuyến đường đã lên lịch (giống cấu trúc mission-planning/analyze).
     Yêu cầu người dùng phải đăng nhập.
+    [PERF NOTE] Hỗ trợ ?limit=&offset= khi dữ liệu lớn; mọi mapping chi tiết đi qua batch helper build_missions_response_list (cấm N+1).
     """
     from app.modules.missions.operator.router import build_missions_response_list
 
-    result = await db.execute(select(Mission).order_by(Mission.id.desc()))
+    stmt = (
+        select(Mission)
+        .where(Mission.status != MissionStatus.CANCELLED)
+        .order_by(Mission.id.desc())
+    )
+    if offset > 0:
+        stmt = stmt.offset(offset)
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    result = await db.execute(stmt)
     missions = result.scalars().all()
 
     return await build_missions_response_list(db, missions)
@@ -144,7 +170,7 @@ async def get_mission_detail_general(
     from app.modules.missions.operator.router import build_mission_detail_response
 
     mission = await db.get(Mission, mission_id)
-    if not mission:
+    if not mission or mission.status == MissionStatus.CANCELLED:
         raise HTTPException(status_code=404, detail="Mission not found")
     return await build_mission_detail_response(db, mission)
 

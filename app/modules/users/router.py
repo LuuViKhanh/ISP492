@@ -101,7 +101,7 @@ async def delete_my_account(
     if order_check.scalar_one_or_none():
         raise HTTPException(
             status_code=400,
-            detail="Không thể xóa tài khoản khi bạn đang có đơn hàng chưa hoàn tất hoặc đang được giao."
+            detail="Cannot delete account while you have unfinished or in-delivery orders."
         )
 
     # 2. Ràng buộc đối với Kỹ thuật viên (Technician): không có phiếu bảo trì dang dở
@@ -120,7 +120,7 @@ async def delete_my_account(
         if wo_check.scalar_one_or_none():
             raise HTTPException(
                 status_code=400,
-                detail="Không thể xóa tài khoản kỹ thuật viên khi đang có phiếu bảo trì chưa hoàn thành."
+                detail="Cannot delete technician account while there are unfinished maintenance work orders."
             )
 
     # 3. Soft Delete: chuyển trạng thái is_active = False
@@ -134,5 +134,5 @@ async def delete_my_account(
 
     return {
         "success": True,
-        "message": "Tài khoản của bạn đã được xóa thành công khỏi hệ thống."
+        "message": "Your account has been successfully deleted from the system."
     }
