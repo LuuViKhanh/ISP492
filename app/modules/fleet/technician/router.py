@@ -2932,10 +2932,12 @@ async def get_outbound_history(
                 Drone.name.label("drone_code"),
                 Battery.id.label("battery_id"),
                 Battery.serial_number.label("battery_code"),
+                Hub.name.label("origin_hub_name"),  # ← Thêm tên hub gốc
             )
             .outerjoin(Drone, Mission.drone_id == Drone.id)
             .outerjoin(Battery, Mission.battery_id == Battery.id)
             .outerjoin(Order, Mission.order_id == Order.id)
+            .outerjoin(Hub, Mission.origin_hub_id == Hub.id)  # ← Join Hub
         )
         
         # Filter: chỉ chuyến bay từ hub của technician
@@ -2955,14 +2957,20 @@ async def get_outbound_history(
             (
                 m_id, order_id, origin_hub_id, dest_hub_id,
                 start_time, m_status, origin_received_at, receiver_name,
-                drone_id, drone_code, battery_id, battery_code,
+                drone_id, drone_code, battery_id, battery_code, origin_hub_name,
             ) = row
+            
+            # Lấy tên hub đích từ DB
+            dest_hub = await db.get(Hub, dest_hub_id) if dest_hub_id else None
+            dest_hub_name = dest_hub.name if dest_hub else None
             
             response.append({
                 "mission_id": str(m_id) if m_id else None,
                 "order_id": order_id,
                 "origin_hub_id": origin_hub_id,
+                "origin_hub_name": origin_hub_name,  # ← Thêm tên hub gốc
                 "destination_hub_id": dest_hub_id,
+                "destination_hub_name": dest_hub_name,  # ← Thêm tên hub đích
                 "customer_dropoff_at": origin_received_at.isoformat() if origin_received_at else None,  # Lúc khách gửi tại hub
                 "drone_departed_at": start_time.isoformat() if start_time else None,  # Lúc drone xuất phát
                 "status": m_status,

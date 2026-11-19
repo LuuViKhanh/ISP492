@@ -28,6 +28,7 @@ class OrderStatus(str, enum.Enum):
     AT_HUB = "AT_HUB"                        # KH đã mang hàng đến hub, chờ operator tạo mission
     IN_DELIVERY = "IN_DELIVERY"
     DELIVERED_TO_HUB = "DELIVERED_TO_HUB"
+    DELIVERED_TO_CUSTOMER = "DELIVERED_TO_CUSTOMER"  # ← Khách đã nhận hàng
     CANCELLED = "CANCELLED"
 
 

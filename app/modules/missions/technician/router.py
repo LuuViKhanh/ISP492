@@ -670,12 +670,12 @@ async def get_confirmations(
             Mission.id.label("mission_code"),
             cast(Mission.status, String).label("status"),
             cast(Mission.handling_status, String).label("handling_status"),
-            Hub.name.label("origin_hub_name"),
+            Hub.name.label("destination_hub_name"),  # ← Hub đích (nơi khách nhận)
             Drone.name.label("drone_name"),
             Battery.serial_number.label("battery_serial"),
             User.full_name.label("customer_name")
         ).outerjoin(
-            Hub, Mission.origin_hub_id == Hub.id
+            Hub, Mission.destination_hub_id == Hub.id  # ← Join với destination hub
         ).outerjoin(
             Drone, Mission.drone_id == Drone.id
         ).outerjoin(
@@ -708,7 +708,7 @@ async def get_confirmations(
                 "order_id": row.order_id,
                 "order_code": row.order_id,
                 "mission_code": row.mission_code,
-                "origin_hub": row.origin_hub_name,
+                "destination_hub": row.destination_hub_name,  # ← Hub đích thay vì hub gốc
                 "drone": row.drone_name,
                 "battery": row.battery_serial,
                 "customer_name": row.customer_name,
