@@ -928,7 +928,7 @@ async def get_drone_flight_history(
         select(
             Mission.id.label("mission_id"),
             Mission.status.label("mission_status"),
-            Mission.started_at,
+            Mission.start_time,
             Mission.arrived_at,
             Mission.battery_id,
             OrderModel.id.label("order_id"),
@@ -960,8 +960,8 @@ async def get_drone_flight_history(
     flights = []
     for row in rows:
         duration_min = None
-        if row.started_at and row.arrived_at:
-            duration = row.arrived_at - row.started_at
+        if row.start_time and row.arrived_at:
+            duration = row.arrived_at - row.start_time
             duration_min = int(duration.total_seconds() / 60)
 
         legs_count = legs_count_map.get(row.mission_id, 0)
@@ -971,7 +971,7 @@ async def get_drone_flight_history(
             "mission_id": row.mission_id,
             "order_id": row.order_id,
             "order_code": row.order_code,
-            "started_at": row.started_at,
+            "started_at": row.start_time,
             "arrived_at": row.arrived_at,
             "duration_minutes": duration_min,
             "battery_id": row.battery_id,
