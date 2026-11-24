@@ -7,6 +7,7 @@ from app.database.db import get_async_db
 from app.modules.auth import service
 from app.modules.auth.schemas import LoginRequest, RegisterRequest, TokenResponse, UserResponse, ForgotPasswordRequest, ResetPasswordRequest, ChangePasswordRequest
 from app.modules.system.service import log_activity
+from app.shared.dependencies import get_current_user, CurrentUser
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -119,13 +120,17 @@ async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(
 
 
 @router.post("/change-password")
-async def change_password(body: ChangePasswordRequest, db: AsyncSession = Depends(get_async_db), user: dict = Depends(service.get_current_user)):
+async def change_password(body: ChangePasswordRequest, db: AsyncSession = Depends(get_async_db), user: CurrentUser = Depends(get_current_user)):
     """
     Thay đổi mật khẩu.
-    Người dùng phải cung cấp mật khẩu cũ để xác minh, sau đó nhập mật khẩu mới.
+    Người dùng phải cung cấp mật khẩu cũ để xác minh, sau đó nhập mật khẩu mới và xác nhận.
     """
+    # Kiểm tra new_password và confirm_new_password có trùng không
+    if body.new_password != body.confirm_new_password:
+        raise HTTPException(status_code=400, detail="New password and confirm password do not match")
+    
     # Lấy user từ database
-    current_user = await service.get_user_by_id(db, user["sub"])
+    current_user = await service.get_user_by_id(db, user.id)
     if not current_user:
         raise HTTPException(status_code=404, detail="User not found")
     
