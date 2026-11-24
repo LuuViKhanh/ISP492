@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.database.db import get_async_db
 from app.modules.auth import service
-from app.modules.auth.schemas import LoginRequest, RegisterRequest, TokenResponse, UserResponse, ForgotPasswordRequest, ResetPasswordRequest
+from app.modules.auth.schemas import LoginRequest, RegisterRequest, TokenResponse, UserResponse, ForgotPasswordRequest, ResetPasswordRequest, ChangePasswordRequest
 from app.modules.system.service import log_activity
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -116,6 +116,32 @@ async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(
         raise HTTPException(status_code=400, detail="Invalid or expired token")
     await log_activity(db, action="PASSWORD_RESET", description="Password reset successfully")
     return {"message": "Password reset successfully"}
+
+
+@router.post("/change-password")
+async def change_password(body: ChangePasswordRequest, db: AsyncSession = Depends(get_async_db), user: dict = Depends(service.get_current_user)):
+    """
+    Thay đổi mật khẩu.
+    Người dùng phải cung cấp mật khẩu cũ để xác minh, sau đó nhập mật khẩu mới.
+    """
+    # Lấy user từ database
+    current_user = await service.get_user_by_id(db, user["sub"])
+    if not current_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Kiểm tra mật khẩu cũ
+    if not service.verify_password(body.old_password, current_user.hashed_password):
+        raise HTTPException(status_code=401, detail="Old password is incorrect")
+    
+    # Cập nhật mật khẩu mới
+    current_user.hashed_password = service.hash_password(body.new_password)
+    db.add(current_user)
+    await db.commit()
+    
+    await log_activity(db, action="PASSWORD_CHANGED", user_id=current_user.id, user_email=current_user.email,
+                       resource_type="users", resource_id=current_user.id,
+                       description=f"Password changed successfully: {current_user.email}")
+    return {"message": "Password changed successfully"}
 
 
 # ── Logout ────────────────────────────────────────────────────────────────────

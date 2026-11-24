@@ -1372,7 +1372,8 @@ async def list_maintenance_alerts(
                 select(func.max(MaintenanceAlert.id))
                 .where(MaintenanceAlert.work_order_id == None)
                 .group_by(MaintenanceAlert.drone_id)
-            )
+            ),
+            Drone.status.in_([DroneStatus.MAINTENANCE, DroneStatus.AVAILABLE])  # ← Hiện cả 2
         )
         .order_by(MaintenanceAlert.id.desc())
     )
@@ -1521,6 +1522,11 @@ async def list_work_orders(
         .outerjoin(User, cast(WorkOrder.technician_id, String) == User.id)
         .order_by(WorkOrder.id.desc())
     )
+    
+    # Filter: chỉ work orders của drone tại hub của technician
+    if user.hub_id:
+        query = query.where(Drone.current_hub_id == int(user.hub_id))
+    
     result = await db.execute(query)
     rows = result.all()
     
@@ -1553,11 +1559,16 @@ async def get_work_order(
         .outerjoin(User, cast(WorkOrder.technician_id, String) == User.id)
         .where(WorkOrder.id == work_order_id)
     )
+    
+    # Filter: chỉ work orders của drone tại hub của technician
+    if user.hub_id:
+        query = query.where(Drone.current_hub_id == int(user.hub_id))
+    
     result = await db.execute(query)
     row = result.first()
     
     if not row:
-        raise HTTPException(status_code=404, detail="Work order not found")
+        raise HTTPException(status_code=404, detail="Work order not found or not at your hub")
         
     wo, drone_code, model, assigned_technician_name = row
     wo_dict = wo.__dict__.copy()
