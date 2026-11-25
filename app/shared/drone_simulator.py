@@ -855,16 +855,14 @@ async def simulate_mission_flight(mission_id: str) -> None:
         effective_interval = simulator_config.interval_sec / simulator_config.speed_multiplier
         await asyncio.sleep(effective_interval)
 
-        # ── Dấu hiệu gần hub: Giảm tốc độ & độ cao từ từ (lần 10% cuối) ──
+        # ── Hạ cánh mượt mà: Bắt đầu giảm từ 50% quãng đường ──
         progress = (idx + 1) / total_points  # 0.0 → 1.0
-        approaching_hub = progress >= 0.9  # Lần 10% cuối là gần hub
+        is_descending = progress >= 0.5  # Bắt đầu giảm từ 50% (cách xa hub hơn)
         
-        if approaching_hub:
-            # Giảm tốc từ CRUISE_SPEED → 0 m/s (chạm đất)
-            descent_factor = (progress - 0.9) / 0.1  # 0.0 → 1.0 khi từ 90% → 100%
+        if is_descending:
+            # descent_factor: từ 0.0 (50%) → 1.0 (100%)
+            descent_factor = (progress - 0.5) / 0.5  
             speed = round(CRUISE_SPEED * (1 - descent_factor), 2)  # Giảm từ cruise → 0 m/s
-            
-            # Giảm độ cao từ CRUISE_ALTITUDE → 0m (chạm đất)
             altitude = round(CRUISE_ALTITUDE * (1 - descent_factor), 2)  # Giảm → 0m
         else:
             # Giả lập sensor values chuẩn hóa lúc bay bình thường
