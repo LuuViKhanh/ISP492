@@ -36,6 +36,49 @@ async def run_battery_overdue_alerts_logic(db: AsyncSession):
     """)
     res_batt = await db.execute(query_battery)
     batt_ids = [row[0] for row in res_batt.fetchall()]
+
+    # Notify technicians of each drone's hub (same transaction, never breaks the worker)
+    if batt_ids:
+        try:
+            from app.modules.system.models import Notification, NotificationType
+            from app.modules.auth.models import User, ROLE_NAME_TO_ID
+            from app.shared.roles import UserRole
+            from app.core.timezone import get_vn_datetime
+            from sqlalchemy import select
+            tech_role_id = ROLE_NAME_TO_ID.get(UserRole.TECHNICIAN)
+            if tech_role_id:
+                async with db.begin_nested():
+                    rows = (await db.execute(
+                        text("""
+                            SELECT a.id, a.drone_id, d.current_hub_id, d.battery_level_pct
+                            FROM maintenance_alerts a JOIN drones d ON d.id = a.drone_id
+                            WHERE a.id = ANY(:ids)
+                        """),
+                        {"ids": list(batt_ids)},
+                    )).fetchall()
+                    _now = get_vn_datetime()
+                    for alert_id, drone_id, hub_id, pct in rows:
+                        if not hub_id:
+                            continue
+                        tech_ids = (await db.execute(
+                            select(User.id).where(
+                                User.role_id == tech_role_id,
+                                User.is_active == True,
+                                User.hub_id == str(hub_id),
+                            )
+                        )).scalars().all()
+                        for tid in tech_ids:
+                            db.add(Notification(
+                                user_id=str(tid),
+                                title=f"Battery maintenance required — Drone #{drone_id}",
+                                message=f"Drone #{drone_id} battery is at {pct}%. Please check and recharge or replace the battery.",
+                                notifications_type=NotificationType.MAINTENANCE,
+                                drone_id=str(drone_id),
+                                reference_id=f"LOW_BATTERY_{alert_id}",
+                                created_at=_now,
+                            ))
+        except Exception as _e:
+            print(f"[NOTIFY] Failed to send battery maintenance notification: {_e}")
     
     query_overdue = text("""
         INSERT INTO maintenance_alerts (drone_id, source, title, status)
@@ -151,6 +194,27 @@ async def run_preventive_maintenance_scheduler(db: AsyncSession):
                     reference_id=f"FLIGHT_HOURS_{drone.id}",
                     created_at=now,
                 ))
+
+        # Notify admins when maintenance is overdue (EV-7)
+        if is_overdue:
+            try:
+                from app.shared.workers import get_admin_ids
+                async with db.begin_nested():
+                    for aid in await get_admin_ids(db):
+                        db.add(Notification(
+                            user_id=str(aid),
+                            title=f"Drone #{drone.id} maintenance overdue ({hours:.1f}h)",
+                            message=(
+                                f"Drone {drone.name} has {hours:.1f} flight hours, above the "
+                                f"{MAINTENANCE_THRESHOLD_HOURS:.0f}h maintenance threshold."
+                            ),
+                            notifications_type=NotificationType.MAINTENANCE,
+                            drone_id=str(drone.id),
+                            reference_id=f"FLIGHT_HOURS_ADMIN_{drone.id}",
+                            created_at=now,
+                        ))
+            except Exception as _e:
+                print(f"[NOTIFY] Failed to notify admins of overdue maintenance: {_e}")
         created += 1
 
     if created > 0:

@@ -16,3 +16,6 @@ tests/
 
 # Diagram build artifacts
 .archify/
+
+# Auto DB backups before defense reset
+backup_before_defense_reset_*.json

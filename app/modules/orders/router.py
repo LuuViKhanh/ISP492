@@ -1145,6 +1145,29 @@ async def cancel_order(
     order.status = OrderStatus.CANCELLED
     order.cancelled_at = now
     order.updated_at = now
+
+    # Notify the customer that staff cancelled the order (same transaction, never breaks the cancel)
+    try:
+        from app.modules.system.models import Notification as _Notif, NotificationType as _NT
+        from app.modules.missions.models import PaymentStatus as _PS
+        if order.customer_id:
+            _paid = order.payment_status == _PS.PAID
+            _reason = (body.reason.strip() if body and getattr(body, "reason", None) else "") or "Cancelled by staff"
+            _msg = f"Your order #{order_id} was cancelled. Reason: {_reason}."
+            if _paid:
+                _msg += " Your payment will be refunded."
+            async with db.begin_nested():
+                db.add(_Notif(
+                    user_id=str(order.customer_id),
+                    title=f"Order #{order_id} cancelled",
+                    message=_msg,
+                    notifications_type=_NT.MISSION_STATUS,
+                    reference_id=f"ORDER_CANCELLED_{order_id}",
+                    created_at=now,
+                ))
+    except Exception as _e:
+        print(f"[NOTIFY] Failed to send order cancellation notification: {_e}")
+
     await db.commit()
     from app.modules.missions.bundle_service import invalidate_route_analysis_cache
     invalidate_route_analysis_cache()

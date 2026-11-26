@@ -66,7 +66,7 @@ def compute_delivery_status(order: Order, mission: Optional[Mission]) -> tuple[s
             return "PAID", "Paid, Awaiting Drop-off"
         return "PENDING", "Pending"
     
-    ms_str = (mission.status.value if hasattr(mission.status, "value") else str(mission.status or "")).upper()
+    ms_str = (mission.status.value if hasattr(mission.status, "value") else str(mission.status or "")).upper().replace(" ", "_")
     if mission.arrival_confirmed_at is not None or ms_str in ("MISSION_COMPLETED", "COMPLETED"):
         return "DELIVERED", "Delivered"
     if mission.arrived_at is not None:
@@ -451,7 +451,9 @@ async def get_my_customer_orders(
 ):
     """BE - GET /api/v1/customer/orders: Luôn filter theo `current_user.id` từ JWT Token."""
     from app.modules.chatbot.customer.tools import tool_get_my_orders
-    res = await tool_get_my_orders(db=db, limit=limit, current_user_id=str(current_user.id))
+    res = await tool_get_my_orders(
+        db=db, limit=limit, current_user_id=str(current_user.id), include_cancelled=True
+    )
     res.pop("_actions", None)
     return res
 
@@ -464,7 +466,9 @@ async def get_my_customer_order_detail(
 ):
     """BE - GET /api/v1/customer/orders/{order_id}: Kiểm tra quyền sở hữu `order.customer_id == current_user.id`."""
     from app.modules.chatbot.customer.tools import tool_get_order_detail
-    res = await tool_get_order_detail(db=db, order_id=order_id, current_user_id=str(current_user.id))
+    res = await tool_get_order_detail(
+        db=db, order_id=order_id, current_user_id=str(current_user.id), include_cancelled=True
+    )
     if not res.get("success"):
         code = res.get("code", "ORDER_NOT_FOUND")
         status_code = 403 if code == "ORDER_ACCESS_DENIED" else 404
@@ -561,6 +565,23 @@ async def cancel_order_with_reason(
     order.cancellation_reason = full_reason
     order.updated_at = now
 
+    # Notify admins and operators (same transaction, never breaks the cancel)
+    try:
+        from app.modules.system.models import Notification as _Notif, NotificationType as _NT
+        from app.shared.workers import get_operator_and_admin_ids
+        async with db.begin_nested():
+            for _uid in await get_operator_and_admin_ids(db):
+                db.add(_Notif(
+                    user_id=str(_uid),
+                    title=f"Order #{order_id} cancelled by customer",
+                    message=f"Customer cancelled order #{order_id}. Reason: {full_reason}.",
+                    notifications_type=_NT.MISSION_STATUS,
+                    reference_id=f"ORDER_CANCELLED_BY_CUSTOMER_{order_id}",
+                    created_at=now,
+                ))
+    except Exception as _e:
+        print(f"[NOTIFY] Failed to send order cancellation notification: {_e}")
+
     await db.commit()
 
     return {
@@ -641,7 +662,7 @@ async def track_delivery(
     điểm đầu/cuối tuyến, đường đã bay (polyline) và số checkpoint đã qua.
     """
     order = await db.get(Order, order_id)
-    if not order or order.status == OrderStatus.CANCELLED:
+    if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     if order.customer_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not your order")
@@ -748,6 +769,9 @@ async def track_delivery(
         mission_id=mission.id if mission else None,
         mission_status=current_mission_status,
         drone_id=mission.drone_id if mission else None,
+        order_status=order.status.value if hasattr(order.status, "value") else str(order.status or ""),
+        cancelled_at=order.cancelled_at,
+        cancellation_reason=order.cancellation_reason,
     )
 
     # Thu thập toàn bộ Hub ID (từ order và mission legs)

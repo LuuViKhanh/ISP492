@@ -1,4 +1,4 @@
-﻿"""
+"""
 [Technician] Supplies â€” Xem vÃ  quáº£n lÃ½ linh kiá»‡n táº¡i Hub cá»§a mÃ¬nh
 
 Endpoints:
@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.db import get_async_db
 from app.shared.dependencies import CurrentUser, RoleChecker
 from app.shared.roles import UserRole
+from app.modules.supplies.audit import audit_supply_action
 from app.modules.supplies.models import (
     PartCategory, HubSupply, SupplyTransaction, PartsRequest,
     PartsRequestStatus, SupplyTxnReason,
@@ -224,6 +225,12 @@ async def create_parts_request(
             print(f"[NOTIF] Parts request notify error: {_e}")
 
     await db.commit()
+    await audit_supply_action(
+        db, user, "CREATE_PARTS_REQUEST", req.id,
+        f"Requested {body.quantity_needed}x {cat.name} at Hub #{hub_id}",
+        details={"request_id": req.id, "hub_id": hub_id, "part_category_id": body.part_category_id,
+                 "quantity_needed": body.quantity_needed, "drone_id": body.drone_id},
+    )
     out = PartsRequestOut.model_validate(req)
     out.part_name = cat.name
     return out
@@ -297,6 +304,11 @@ async def mark_fulfilled(
     if actual_cost is not None:
         req.actual_cost = actual_cost
     await db.commit()
+    await audit_supply_action(
+        db, user, "FULFILL_PARTS_REQUEST", req.id,
+        f"Confirmed fulfillment of parts request #{req.id}",
+        details={"request_id": req.id, "actual_cost": actual_cost},
+    )
     return {"message": "Part replacement confirmed successfully.", "request_id": request_id,
             "status": PartsRequestStatus.FULFILLED.value}
 
@@ -375,7 +387,7 @@ async def get_my_hub_detail(
     }
 
 
-@router.post("/adjust", summary="Äiá»u chá»‰nh sá»‘ lÆ°á»£ng sau kiá»ƒm kÃª thá»±c táº¿")
+@router.post("/adjust", summary="Điều chỉnh số lượng sau kiểm kê thực tế")
 async def adjust_supply(
     body: AdjustBody,
     db: AsyncSession = Depends(get_async_db),
@@ -425,6 +437,11 @@ async def adjust_supply(
         created_at=now,
     ))
     await db.commit()
+    await audit_supply_action(
+        db, user, "STOCK_ADJUST", hub_id,
+        f"Adjusted {body.quantity_delta:+d}x {cat.name} at Hub #{hub_id}",
+        details={"hub_id": hub_id, "part_category_id": body.part_category_id, "quantity_delta": body.quantity_delta},
+    )
     return {
         "message": f"Adjusted {'+' if body.quantity_delta > 0 else ''}{body.quantity_delta}x {cat.name}.",
         "new_quantity": inv.quantity,
@@ -432,7 +449,7 @@ async def adjust_supply(
     }
 
 
-@router.post("/discard", summary="Ghi nháº­n linh kiá»‡n há»ng / háº¿t háº¡n táº¡i Hub")
+@router.post("/discard", summary="Ghi nhận linh kiện hỏng / hết hạn tại Hub")
 async def discard_supply(
     body: DiscardBody,
     db: AsyncSession = Depends(get_async_db),
@@ -475,6 +492,11 @@ async def discard_supply(
         created_at=now,
     ))
     await db.commit()
+    await audit_supply_action(
+        db, user, "STOCK_DISCARD", hub_id,
+        f"Recorded discard of {body.quantity}x {cat.name} at Hub #{hub_id}",
+        details={"hub_id": hub_id, "part_category_id": body.part_category_id, "quantity": body.quantity},
+    )
     return {
         "message": f"Recorded discard of {body.quantity}x {cat.name}.",
         "remaining_quantity": inv.quantity,
@@ -482,7 +504,7 @@ async def discard_supply(
     }
 
 
-@router.patch("/threshold", summary="Äáº·t ngÆ°á»¡ng cáº£nh bÃ¡o tá»“n kho táº¡i Hub")
+@router.patch("/threshold", summary="Đặt ngưỡng cảnh báo tồn kho tại Hub")
 async def set_threshold(
     body: ThresholdBody,
     db: AsyncSession = Depends(get_async_db),
@@ -515,6 +537,11 @@ async def set_threshold(
         inv.updated_at = now
 
     await db.commit()
+    await audit_supply_action(
+        db, user, "UPDATE_THRESHOLD", hub_id,
+        f"Set min stock threshold to {body.min_stock_threshold} for part #{body.part_category_id} at Hub #{hub_id}",
+        details={"hub_id": hub_id, "part_category_id": body.part_category_id, "min_stock_threshold": body.min_stock_threshold},
+    )
     return {
         "message": f"Alert threshold set to {body.min_stock_threshold}.",
         "part_category_id": body.part_category_id,

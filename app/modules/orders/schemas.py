@@ -270,6 +270,9 @@ class TrackingResponse(BaseModel):
     current_leg: Optional[TrackingCurrentLegSchema] = None
     legs: List[TrackingLegSchema] = []
     trail: List[TrailPointSchema] = []
+    order_status: Optional[str] = None
+    cancelled_at: Optional[datetime] = None
+    cancellation_reason: Optional[str] = None
 
 
 # ── Mission Report ────────────────────────────────────────────────────

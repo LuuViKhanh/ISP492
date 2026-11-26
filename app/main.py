@@ -100,15 +100,24 @@ async def run_realtime_cronjobs():
         tick = (tick + 1) % 5
         await asyncio.sleep(3)
 
+_WARMUP_STATE: dict = {
+    "ready": False,
+    "warmup_sec": None,
+    "hubs": 0,
+    "weather_cells": 0,
+}
+
+
 async def _warmup_caches_background():
     """
     [PERF NOTE] Nạp ấm (warm-up) các cache RAM và connection pool DB ngay khi server vừa khởi động
-    và định kỳ làm mới mỗi 12 phút (720s) ở chế độ nền (non-blocking) để lượt bấm đầu tiên
-    của Operator / Hội đồng luôn đạt tốc độ warm (~1.5s) mà không cần bấm mồi trước:
-    1. Bắt tay SSL trước với Supabase pool + cache Hubs & Battery Compatibility.
+    và định kỳ làm mới mỗi 4 phút (240s < TTL 300s của Hubs/Compat cache) ở chế độ nền (non-blocking)
+    để lượt bấm đầu tiên của Operator / Hội đồng luôn đạt tốc độ warm mà không cần bấm mồi trước:
+    1. Bắt tay SSL + nạp 18 ENUM codecs cho 5 kết nối Supabase pool + cache Hubs & Battery Compatibility.
     2. Load sẵn model ML predict_flight_energy vào RAM.
-    3. Fetch song song thời tiết Open-Meteo theo lưới 0.05° cho cả tọa độ Hub lẫn midpoint giữa các Hub.
+    3. Fetch song song thời tiết Open-Meteo theo lưới 0.1° cho cả tọa độ Hub lẫn midpoint giữa các Hub.
     """
+    import time
     from sqlalchemy import text
     from app.database.db import AsyncSessionLocal
     from app.modules.missions.bundle_service import (
@@ -124,6 +133,7 @@ async def _warmup_caches_background():
 
     first_run = True
     while True:
+        t0 = time.perf_counter()
         try:
             hubs = []
             async with AsyncSessionLocal() as db:
@@ -134,10 +144,11 @@ async def _warmup_caches_background():
                 await asyncio.gather(
                     _warm_extra_pool_conn(),
                     _warm_extra_pool_conn(),
+                    _warm_extra_pool_conn(),
+                    _warm_extra_pool_conn(),
                     asyncio.to_thread(predict_flight_energy_cached, 10.0, 1.0),
                     return_exceptions=True,
                 )
-                first_run = False
 
             valid_hubs = [h for h in hubs if h.latitude is not None and h.longitude is not None]
             unique_cells: set[tuple[float, float]] = set()
@@ -160,12 +171,28 @@ async def _warmup_caches_background():
                     *(_warm_one(lat, lng) for lat, lng in unique_cells),
                     return_exceptions=True,
                 )
+
+            if first_run:
+                elapsed = round(time.perf_counter() - t0, 2)
+                _WARMUP_STATE["ready"] = True
+                _WARMUP_STATE["warmup_sec"] = elapsed
+                _WARMUP_STATE["hubs"] = len(valid_hubs)
+                _WARMUP_STATE["weather_cells"] = len(unique_cells)
+                first_run = False
+                print(
+                    f"[STARTUP WARMUP] Ready in {elapsed}s "
+                    f"(pool=5, hubs={len(valid_hubs)}, weather_cells={len(unique_cells)})"
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             print(f"[STARTUP WARMUP WARNING] Không thể warm-up cache nền: {exc}")
+            if first_run:
+                _WARMUP_STATE["ready"] = True
+                _WARMUP_STATE["warmup_sec"] = round(time.perf_counter() - t0, 2)
+                first_run = False
 
-        await asyncio.sleep(720)
+        await asyncio.sleep(240)
 
 
 @asynccontextmanager
@@ -322,6 +349,11 @@ def root():
     return {
         "message": "Welcome to DroneOptAI API Gateway"
     }
+
+
+@app.get("/health/ready")
+def health_ready():
+    return _WARMUP_STATE
 
 
 if __name__ == "__main__":

@@ -133,7 +133,7 @@ async def get_activity_logs(
         filters.append("action ILIKE :action")
         params["action"] = f"%{action}%"
     if role:
-        filters.append("role = :role")
+        filters.append("LOWER(role) = LOWER(:role)")
         params["role"] = role
     if resource_type:
         filters.append("resource_type ILIKE :resource_type")

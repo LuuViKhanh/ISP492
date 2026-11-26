@@ -89,6 +89,30 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_async_d
 
 # ── Login (email + password) ──────────────────────────────────────────────────
 
+async def _log_failed_login_bg(
+    user_id: str | None,
+    user_email: str,
+    role_value: str | None,
+    description: str,
+) -> None:
+    """Ghi log đăng nhập thất bại. Không bao giờ ghi mật khẩu. Lỗi ghi log không ảnh hưởng response."""
+    try:
+        async with AsyncSessionLocal() as bg_db:
+            await log_activity(
+                bg_db,
+                action="LOGIN",
+                user_id=user_id,
+                user_email=user_email,
+                role=role_value,
+                resource_type="users",
+                resource_id=user_id,
+                description=description,
+                status="failed",
+            )
+    except Exception:
+        pass
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(
     body: LoginRequest,
@@ -101,8 +125,22 @@ async def login(
     """
     user = await service.get_user_by_email(db, body.email)
     if not user or not user.hashed_password or not await service.verify_password_async(body.password, user.hashed_password):
+        background_tasks.add_task(
+            _log_failed_login_bg,
+            user.id if user else None,
+            body.email,
+            user.role.value if user else None,
+            "Invalid email or password",
+        )
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not user.is_active:
+        background_tasks.add_task(
+            _log_failed_login_bg,
+            user.id,
+            user.email,
+            user.role.value,
+            "Account inactive",
+        )
         raise HTTPException(
             status_code=403, 
             detail="This account has been deleted or suspended. Please contact an administrator for assistance."

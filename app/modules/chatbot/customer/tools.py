@@ -69,9 +69,10 @@ async def _find_customer_order(
     db: AsyncSession,
     current_user_id: Optional[str],
     order_id: Optional[str] = None,
+    include_cancelled: bool = False,
 ) -> Dict[str, Any]:
     """
-    Hàm bảo mật cốt lõi:
+    Hàm bảo mật cốt lõi (`include_cancelled=True` chỉ dùng cho REST, cho phép xem đơn đã hủy):
     - Bắt buộc `current_user_id` từ JWT Token.
     - Nếu có `order_id`: tìm đơn và kiểm tra `order.customer_id == current_user_id`.
     - Nếu không truyền `order_id`: tự động lấy đơn hàng mới nhất của `current_user_id`.
@@ -98,7 +99,7 @@ async def _find_customer_order(
         res = await db.execute(stmt)
         order = res.scalar_one_or_none()
 
-        if not order or order.status == OrderStatus.CANCELLED:
+        if not order or (order.status == OrderStatus.CANCELLED and not include_cancelled):
             return {
                 "ok": False,
                 "error_payload": {
@@ -504,9 +505,14 @@ async def tool_get_my_orders(
     db: AsyncSession,
     limit: int = 5,
     current_user_id: Optional[str] = None,
+    include_cancelled: bool = False,
     **kwargs,
 ) -> Dict[str, Any]:
-    """9. Lấy danh sách các đơn hàng gần đây của khách hàng hiện tại."""
+    """9. Lấy danh sách các đơn hàng gần đây của khách hàng hiện tại.
+
+    `include_cancelled=True` (chỉ REST endpoint dùng) trả cả đơn CANCELLED kèm
+    `cancelled_at` / `cancellation_reason`. Chatbot giữ mặc định False.
+    """
     if not current_user_id:
         return {
             "type": "order_list",
@@ -516,12 +522,12 @@ async def tool_get_my_orders(
         }
 
     safe_limit = min(max(int(limit or 5), 1), 15)
+    conditions = [Order.customer_id == str(current_user_id)]
+    if not include_cancelled:
+        conditions.append(Order.status != OrderStatus.CANCELLED)
     stmt = (
         select(Order)
-        .where(
-            Order.customer_id == str(current_user_id),
-            Order.status != OrderStatus.CANCELLED,
-        )
+        .where(*conditions)
         .order_by(Order.created_at.desc())
         .limit(safe_limit)
     )
@@ -552,23 +558,25 @@ async def tool_get_my_orders(
     for o in orders:
         mission = mission_by_order.get(o.id)
         status_info = CustomerStatusService.compute_customer_delivery_status(o, mission)
-        order_items.append(
-            {
-                "order_id": o.id,
-                "customer_status": status_info["customer_status"],
-                "status_label": status_info["status_label"],
-                "status_label_vi": status_info["status_label_vi"],
-                "order_status": o.status.value if o.status else "PENDING",
-                "payment_status": o.payment_status.value if o.payment_status else "UNPAID",
-                "delivery_mode": o.delivery_mode.value if o.delivery_mode else "SCHEDULED",
-                "payload_kg": o.payload_kg,
-                "delivery_fee": round(o.delivery_fee) if o.delivery_fee else 0,
-                "delivery_fee_formatted": f"{int(round(o.delivery_fee)):,} VND" if o.delivery_fee else "0 VND",
-                "origin_hub": _hub_dict(hub_map.get(o.origin_hub_id)),
-                "destination_hub": _hub_dict(hub_map.get(o.destination_hub_id)),
-                "created_at": o.created_at.isoformat() if o.created_at else None,
-            }
-        )
+        item = {
+            "order_id": o.id,
+            "customer_status": status_info["customer_status"],
+            "status_label": status_info["status_label"],
+            "status_label_vi": status_info["status_label_vi"],
+            "order_status": o.status.value if o.status else "PENDING",
+            "payment_status": o.payment_status.value if o.payment_status else "UNPAID",
+            "delivery_mode": o.delivery_mode.value if o.delivery_mode else "SCHEDULED",
+            "payload_kg": o.payload_kg,
+            "delivery_fee": round(o.delivery_fee) if o.delivery_fee else 0,
+            "delivery_fee_formatted": f"{int(round(o.delivery_fee)):,} VND" if o.delivery_fee else "0 VND",
+            "origin_hub": _hub_dict(hub_map.get(o.origin_hub_id)),
+            "destination_hub": _hub_dict(hub_map.get(o.destination_hub_id)),
+            "created_at": o.created_at.isoformat() if o.created_at else None,
+        }
+        if include_cancelled:
+            item["cancelled_at"] = o.cancelled_at.isoformat() if o.cancelled_at else None
+            item["cancellation_reason"] = o.cancellation_reason
+        order_items.append(item)
 
     actions = []
     if order_items:
@@ -619,19 +627,26 @@ async def tool_get_order_detail(
     db: AsyncSession,
     order_id: str,
     current_user_id: Optional[str] = None,
+    include_cancelled: bool = False,
     **kwargs,
 ) -> Dict[str, Any]:
     """11. Xem chi tiết một đơn hàng cụ thể (bắt buộc kiểm tra quyền sở hữu)."""
-    found = await _find_customer_order(db, current_user_id=current_user_id, order_id=order_id)
+    found = await _find_customer_order(
+        db, current_user_id=current_user_id, order_id=order_id, include_cancelled=include_cancelled
+    )
     if not found["ok"]:
         return found["error_payload"]
 
-    return await _build_full_order_status_payload(
+    payload = await _build_full_order_status_payload(
         order=found["order"],
         origin_hub=found["origin_hub"],
         dest_hub=found["dest_hub"],
         mission=found["mission"],
     )
+    if include_cancelled:
+        payload["cancelled_at"] = found["order"].cancelled_at.isoformat() if found["order"].cancelled_at else None
+        payload["cancellation_reason"] = found["order"].cancellation_reason
+    return payload
 
 
 async def tool_get_customer_delivery_status(

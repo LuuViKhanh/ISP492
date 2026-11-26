@@ -23,7 +23,7 @@ Endpoints:
 from datetime import datetime, timezone
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +37,7 @@ from app.modules.supplies.models import (
 )
 from app.modules.missions.models import Mission, MissionStatus
 from app.modules.system.models import Hub
+from app.modules.supplies.audit import audit_supply_action
 from app.modules.fleet.models import Battery
 
 router = APIRouter(prefix="/admin/supplies", tags=["Admin - Supplies"])
@@ -47,20 +48,41 @@ _COMPLETED_MS = (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETE
 
 # ── Schemas ────────────────────────────────────────────────────────
 
+def _clean_category_name(value: str) -> str:
+    name = (value or "").strip()
+    if not name:
+        raise ValueError("Category name is required")
+    if len(name) > 100:
+        raise ValueError("Category name must be at most 100 characters")
+    return name
+
+
 class CategoryCreate(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=100)
     category_type: PartCategoryType
     compatible_drone_models: Optional[List[str]] = None
     unit_cost: Optional[float] = None
     description: Optional[str] = None
 
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        return _clean_category_name(v)
+
 
 class CategoryUpdate(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     unit_cost: Optional[float] = None
     description: Optional[str] = None
     compatible_drone_models: Optional[List[str]] = None
     is_active: Optional[bool] = None
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return _clean_category_name(v)
 
 
 class ReceiveStockBody(BaseModel):
@@ -214,6 +236,11 @@ async def create_category(
     db.add(cat)
     await db.commit()
     await db.refresh(cat)
+    await audit_supply_action(
+        db, user, "CREATE_CATEGORY", cat.id,
+        f"Created part category '{cat.name}' ({body.category_type})",
+        details={"name": cat.name, "category_type": str(body.category_type)},
+    )
     return cat
 
 
@@ -234,6 +261,11 @@ async def update_category(
     if body.is_active is not None: cat.is_active = body.is_active
     await db.commit()
     await db.refresh(cat)
+    await audit_supply_action(
+        db, user, "UPDATE_CATEGORY", cat.id,
+        f"Updated part category '{cat.name}'",
+        details=body.model_dump(exclude_none=True),
+    )
     return cat
 
 
@@ -319,6 +351,11 @@ async def receive_stock(
         created_at=now,
     ))
     await db.commit()
+    await audit_supply_action(
+        db, user, "STOCK_RECEIVE", body.part_category_id,
+        f"Received {body.quantity}x {cat.name} at Hub #{body.hub_id}",
+        details={"hub_id": body.hub_id, "part_category_id": body.part_category_id, "quantity": body.quantity},
+    )
     return {
         "message": f"Successfully received {body.quantity}x {cat.name} → Hub #{body.hub_id}.",
         "new_quantity": inv.quantity,
@@ -392,6 +429,14 @@ async def transfer_stock(
         created_at=now,
     ))
     await db.commit()
+    await audit_supply_action(
+        db, user, "STOCK_TRANSFER", body.part_category_id,
+        f"Transferred {body.quantity}x {cat_name}: Hub #{body.from_hub_id} -> Hub #{body.to_hub_id}",
+        details={
+            "from_hub_id": body.from_hub_id, "to_hub_id": body.to_hub_id,
+            "part_category_id": body.part_category_id, "quantity": body.quantity,
+        },
+    )
     return {
         "message": f"Successfully transferred {body.quantity}x {cat_name}: Hub #{body.from_hub_id} → Hub #{body.to_hub_id}.",
         "from_hub_new_qty": src.quantity,
@@ -573,6 +618,11 @@ async def reject_request(
     req.reviewed_at = now
     req.admin_note = body.admin_note or "Rejected by Admin."
     await db.commit()
+    await audit_supply_action(
+        db, user, "REJECT_PARTS_REQUEST", req.id,
+        f"Rejected parts request #{req.id} for Hub #{req.hub_id}",
+        details={"request_id": req.id, "hub_id": req.hub_id, "admin_note": req.admin_note},
+    )
 
     # NOTE: No in-app notification for reject — Tech sees status change in app.
     return {"message": "Parts request rejected.", "request_id": request_id}
@@ -831,6 +881,11 @@ async def adjust_hub_supply(
         created_at=now,
     ))
     await db.commit()
+    await audit_supply_action(
+        db, user, "STOCK_ADJUST", hub_id,
+        f"Adjusted {body.quantity_delta:+d}x {cat.name} at Hub #{hub_id}",
+        details={"hub_id": hub_id, "part_category_id": body.part_category_id, "quantity_delta": body.quantity_delta},
+    )
     return {
         "message": f"Adjusted {'+' if body.quantity_delta > 0 else ''}{body.quantity_delta}x {cat.name} at Hub #{hub_id}.",
         "new_quantity": inv.quantity,
@@ -886,6 +941,11 @@ async def discard_hub_supply(
         created_at=now,
     ))
     await db.commit()
+    await audit_supply_action(
+        db, user, "STOCK_DISCARD", hub_id,
+        f"Discarded {body.quantity}x {cat.name} at Hub #{hub_id}",
+        details={"hub_id": hub_id, "part_category_id": body.part_category_id, "quantity": body.quantity},
+    )
     return {
         "message": f"Discarded {body.quantity}x {cat.name} at Hub #{hub_id}.",
         "remaining_quantity": inv.quantity,
@@ -926,6 +986,11 @@ async def set_hub_threshold(
         inv.updated_at = datetime.now(timezone.utc)
 
     await db.commit()
+    await audit_supply_action(
+        db, user, "UPDATE_THRESHOLD", hub_id,
+        f"Set min stock threshold to {body.min_stock_threshold} for part #{body.part_category_id} at Hub #{hub_id}",
+        details={"hub_id": hub_id, "part_category_id": body.part_category_id, "min_stock_threshold": body.min_stock_threshold},
+    )
     return {
         "message": f"Alert threshold updated to {body.min_stock_threshold}.",
         "hub_id": hub_id,
@@ -1020,6 +1085,11 @@ async def bulk_receive(
         })
 
     await db.commit()
+    await audit_supply_action(
+        db, user, "STOCK_RECEIVE", hub_id,
+        f"Bulk received {len(results)} part type(s) into Hub #{hub_id}",
+        details={"hub_id": hub_id, "items": [{"part_category_id": i.part_category_id, "quantity": i.quantity} for i in body.items]},
+    )
     return {
         "message": f"Successfully received {len(results)} part type(s) into Hub #{hub_id}.",
         "hub_id": hub_id,
@@ -1242,6 +1312,11 @@ async def confirm_supply(
 
     await db.commit()
 
+    await audit_supply_action(
+        db, user, "SUPPLY_REPLACEMENT", req.id,
+        f"Supplied replacement request #{req.id} ({req.type.value}, qty {req.quantity})",
+        details={"request_id": req.id, "type": req.type.value, "hub_id": req.hub_id, "quantity": req.quantity},
+    )
     # NOTE: Replacement supply/reject — no in-app notification.
     # Tech is notified via maintenance alerts and mission scheduling events.
 
@@ -1277,6 +1352,11 @@ async def reject_replacement_request(
     req.reviewed_at = now
     req.rejection_reason = body.rejection_reason
     await db.commit()
+    await audit_supply_action(
+        db, user, "REJECT_REPLACEMENT", req.id,
+        f"Rejected replacement request #{req.id}: {body.rejection_reason}",
+        details={"request_id": req.id, "type": req.type.value, "hub_id": req.hub_id},
+    )
 
     # NOTE: No in-app notification for replacement reject.
     return {

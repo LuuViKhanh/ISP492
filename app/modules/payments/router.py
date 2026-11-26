@@ -473,7 +473,33 @@ async def refund_order(
         order.refund_amount = refund_amount
         order.refund_reason = body.reason
         order.refund_status = "PENDING"  # Chờ PayOS xác nhận
-        
+
+        # Notify customer and admins (same transaction, never breaks the refund)
+        try:
+            from app.modules.system.models import Notification as _Notif, NotificationType as _NT
+            from app.shared.workers import get_admin_ids
+            async with db.begin_nested():
+                if order.customer_id:
+                    db.add(_Notif(
+                        user_id=str(order.customer_id),
+                        title=f"Refund processed for Order #{order_id}",
+                        message=f"A refund of {int(refund_amount):,} VND for order #{order_id} was issued. Reason: {body.reason}. Funds usually arrive in 1-3 days.",
+                        notifications_type=_NT.PAYMENT,
+                        reference_id=f"REFUND_CUSTOMER_{order_id}",
+                        created_at=now,
+                    ))
+                for _aid in await get_admin_ids(db):
+                    db.add(_Notif(
+                        user_id=str(_aid),
+                        title=f"Refund issued for Order #{order_id}",
+                        message=f"Refund of {int(refund_amount):,} VND issued for order #{order_id}. Reason: {body.reason}.",
+                        notifications_type=_NT.PAYMENT,
+                        reference_id=f"REFUND_ADMIN_{order_id}",
+                        created_at=now,
+                    ))
+        except Exception as _e:
+            print(f"[NOTIFY] Failed to send refund notification: {_e}")
+
         await db.commit()
         
         # Gửi email hoàn tiền ở nền sau khi commit
