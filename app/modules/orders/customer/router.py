@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from pydantic import BaseModel, Field as PydanticField, field_validator
 import uuid
 import math
 
@@ -318,10 +319,8 @@ async def create_order(
         updated_at=now
     )
     db.add(new_order)
-    await db.commit()
-    await db.refresh(new_order)
 
-    # ── Notify Customer & tất cả Operators về đơn hàng mới ──────────────────
+    # ── Notify Customer & tất cả Operators trong cùng 1 transaction (bỏ commit thứ 2 & refresh thừa) ──
     try:
         from app.modules.auth.models import User as _User, ROLE_NAME_TO_ID as _ROLE_MAP
         from app.modules.system.models import Notification as _Notif, NotificationType as _NT
@@ -332,10 +331,9 @@ async def create_order(
         _vn_now = _get_vn_dt()
         _time_str = _vn_now.strftime("%H:%M:%S %d/%m/%Y")
 
-        # 1. Thông báo cho Customer xác nhận tạo đơn thành công kèm thời gian
         db.add(_Notif(
             user_id=str(current_user.id),
-            title=f"✅ Order #{new_order.id} Created Successfully",
+            title=f"Order #{new_order.id} Created Successfully",
             message=(
                 f"Order #{new_order.id} ({body.package_label or 'Package'}, {body.payload_kg} kg) "
                 f"was created at {_time_str}. Route: {origin_hub.name} -> {dest_hub.name}. "
@@ -346,14 +344,13 @@ async def create_order(
             created_at=_vn_now,
         ))
 
-        # 2. Thông báo cho Operators
         _op_role_id = _ROLE_MAP.get(_Role.OPERATOR)
         if _op_role_id:
             _ops = (await db.execute(select(_User.id).where(_User.role_id == _op_role_id))).scalars().all()
             for _op_id in _ops:
                 db.add(_Notif(
                     user_id=_op_id,
-                    title=f"📦 New Order #{new_order.id}",
+                    title=f"New Order #{new_order.id}",
                     message=(
                         f"Customer placed order #{new_order.id} at {_time_str} "
                         f"({_mode_str}, {body.payload_kg} kg). "
@@ -364,34 +361,36 @@ async def create_order(
                     reference_id=f"NEW_ORDER_{new_order.id}",
                     created_at=_vn_now,
                 ))
-
-        # 3. Thông báo cho Technician tại Hub gốc (origin_hub)
-        # Technician là người sẽ nhận hàng khi khách mang đến Hub
-        _tech_role_id = _ROLE_MAP.get(_Role.TECHNICIAN)
-        if _tech_role_id and new_order.origin_hub_id:
-            _techs = (await db.execute(
-                select(_User.id).where(
-                    _User.role_id == _tech_role_id,
-                    _User.hub_id == new_order.origin_hub_id,
-                    _User.is_active == True,
-                )
-            )).scalars().all()
-            for _tech_id in _techs:
-                db.add(_Notif(
-                    user_id=_tech_id,
-                    title=f"📬 New order incoming — {origin_hub.name}",
-                    message=(
-                        f"Order #{new_order.id} ({_mode_str}, {body.payload_kg} kg) created at {_time_str}. "
-                        f"Customer will drop off the package at your Hub. "
-                        f"Please prepare to receive and verify the package."
-                    ),
-                    notifications_type=_NT.MISSION_STATUS,
-                    reference_id=f"NEW_ORDER_{new_order.id}",
-                    created_at=_vn_now,
-                ))
-        await db.commit()
     except Exception as _e:
         print(f"[NOTIFY] Lỗi gửi thông báo đơn mới: {_e}")
+
+    await db.commit()
+
+    # ── Gửi email xác nhận đơn hàng cho customer (non-blocking) ──────────────
+    _sender_email_addr = (new_order.sender_email or "").strip()
+    if _sender_email_addr:
+        import asyncio as _asyncio
+        from app.core.email import send_order_confirmation_email as _send_order_confirm
+        from app.core.config import settings as _settings
+
+        _eta_str = None
+        if new_order.estimated_window_end:
+            _eta_str = new_order.estimated_window_end.strftime("%H:%M %d/%m/%Y")
+
+        _asyncio.create_task(
+            _send_order_confirm(
+                to_email=_sender_email_addr,
+                order_id=new_order.id,
+                package_label=new_order.package_label,
+                payload_kg=new_order.payload_kg,
+                delivery_mode=new_order.delivery_mode.value if new_order.delivery_mode else None,
+                origin_hub_name=origin_hub.name if origin_hub else None,
+                destination_hub_name=dest_hub.name if dest_hub else None,
+                delivery_fee=new_order.delivery_fee,
+                estimated_window_end=_eta_str,
+                frontend_url=_settings.FRONTEND_URL,
+            )
+        )
 
     return OrderCreateResponse(
         id=new_order.id,
@@ -475,6 +474,104 @@ async def get_my_customer_order_detail(
 
 
 # ══════════════════════════════════════════════════════════════════════
+# CANCEL ORDER WITH REASON
+# ══════════════════════════════════════════════════════════════════════
+
+_CANCELLATION_REASONS = [
+    "changed_my_mind",
+    "wrong_information",
+    "price_too_high",
+    "found_alternative",
+    "delivery_too_slow",
+    "other",
+]
+
+
+class CancelOrderRequest(BaseModel):
+    reason: str = PydanticField(
+        ...,
+        description=f"Lý do hủy đơn. Các giá trị hợp lệ: {_CANCELLATION_REASONS}"
+    )
+    note: Optional[str] = PydanticField(default=None, max_length=500, description="Ghi chú thêm (tùy chọn)")
+
+
+@router.patch(
+    "/orders/{order_id}/cancel",
+    summary="Hủy đơn hàng kèm lý do",
+)
+async def cancel_order_with_reason(
+    order_id: str,
+    body: CancelOrderRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    **[Customer API] Hủy đơn hàng kèm lý do.**
+
+    Chỉ được hủy khi:
+    - Order đang ở trạng thái `PENDING`.
+    - Chưa thanh toán (UNPAID/PENDING payment).
+    - Lý do phải thuộc danh sách: `changed_my_mind`, `wrong_information`, `price_too_high`,
+      `found_alternative`, `delivery_too_slow`, `other`.
+    """
+    if body.reason not in _CANCELLATION_REASONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid reason. Must be one of: {_CANCELLATION_REASONS}"
+        )
+
+    order = await db.get(Order, order_id)
+    if not order or order.status == OrderStatus.CANCELLED:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if str(order.customer_id) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not your order")
+    if order.payment_status == PaymentStatus.PAID:
+        raise HTTPException(
+            status_code=400,
+            detail="Paid orders cannot be cancelled directly. Contact support for a refund."
+        )
+    if order.status != OrderStatus.PENDING:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel order in '{order.status.value}' status. Only PENDING orders can be cancelled."
+        )
+
+    # Đã lập mission (bất kỳ trạng thái nào chưa hủy) thì không cho customer hủy nữa
+    existing_mission = (await db.execute(
+        select(Mission.id).where(
+            Mission.order_id == order_id,
+            Mission.status != MissionStatus.CANCELLED,
+        ).limit(1)
+    )).scalars().first()
+    if existing_mission:
+        raise HTTPException(
+            status_code=400,
+            detail="A flight mission has already been created for this order, so it can no longer be cancelled by the customer. Contact an operator."
+        )
+
+    from app.core.timezone import get_vn_naive_datetime
+    now = get_vn_naive_datetime()
+
+    full_reason = body.reason
+    if body.note:
+        full_reason = f"{body.reason}: {body.note.strip()}"
+
+    order.status = OrderStatus.CANCELLED
+    order.cancelled_at = now
+    order.cancellation_reason = full_reason
+    order.updated_at = now
+
+    await db.commit()
+
+    return {
+        "message": "Order cancelled successfully.",
+        "order_id": order_id,
+        "reason": full_reason,
+        "cancelled_at": now.isoformat(),
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════
 # DELETE ORDER (chỉ khi còn PENDING và chưa có mission)
 # ══════════════════════════════════════════════════════════════════════
 @router.delete("/orders/{order_id}", status_code=204, summary="Xóa đơn hàng (chỉ khi chưa xử lý)")
@@ -554,7 +651,7 @@ async def track_delivery(
 
     current_mission_status = None
     if mission:
-        if mission.status in (MissionStatus.FLYING, MissionStatus.IN_PROGRESS, MissionStatus.ACTIVE_MISSION):
+        if mission.status == MissionStatus.FLYING:
             current_mission_status = MissionStatus.FLYING.value
         else:
             current_mission_status = mission.status.value if hasattr(mission.status, "value") else str(mission.status)
@@ -686,13 +783,39 @@ async def track_delivery(
             resp.destination = RoutePointSchema(latitude=d_hub.latitude, longitude=d_hub.longitude, name=d_hub.name)
 
     if mission:
-        # 1. Drone Location & Battery
-        latest = (await db.execute(
-            select(TelemetryLog)
+        # 1 & 2 & 4. Gộp 3 lần quét telemetry_logs (latest, path_logs, trail) thành 1 câu SQL nhẹ (chỉ 6 cột)
+        path_rows = (await db.execute(
+            select(
+                TelemetryLog.latitude,
+                TelemetryLog.longitude,
+                TelemetryLog.altitude,
+                TelemetryLog.speed,
+                TelemetryLog.battery_voltage,
+                TelemetryLog.timestamp,
+            )
             .where(TelemetryLog.mission_id == mission.id)
-            .order_by(TelemetryLog.timestamp.desc())
-            .limit(1)
-        )).scalar_one_or_none()
+            .order_by(TelemetryLog.timestamp.asc())
+            .limit(MAX_PATH_POINTS)
+        )).all()
+
+        if len(path_rows) >= MAX_PATH_POINTS:
+            trail_rows = list(reversed((await db.execute(
+                select(
+                    TelemetryLog.latitude,
+                    TelemetryLog.longitude,
+                    TelemetryLog.altitude,
+                    TelemetryLog.speed,
+                    TelemetryLog.battery_voltage,
+                    TelemetryLog.timestamp,
+                )
+                .where(TelemetryLog.mission_id == mission.id)
+                .order_by(TelemetryLog.timestamp.desc())
+                .limit(50)
+            )).all()))
+        else:
+            trail_rows = path_rows[-50:]
+
+        latest = trail_rows[-1] if trail_rows else None
 
         bat_pct = None
         if mission.drone_id:
@@ -713,14 +836,7 @@ async def track_delivery(
                 last_updated=latest.timestamp,
             )
 
-        # 2. Travelled path & Checkpoints
-        path_logs = (await db.execute(
-            select(TelemetryLog.latitude, TelemetryLog.longitude)
-            .where(TelemetryLog.mission_id == mission.id)
-            .order_by(TelemetryLog.timestamp.asc())
-            .limit(MAX_PATH_POINTS)
-        )).all()
-        resp.travelled_path = [RoutePointSchema(latitude=lat, longitude=lng) for lat, lng in path_logs]
+        resp.travelled_path = [RoutePointSchema(latitude=r.latitude, longitude=r.longitude) for r in path_rows]
         resp.checkpoints_passed = len(mission.checkpoints_json or [])
 
         # 3. Legs & Current Leg
@@ -779,14 +895,7 @@ async def track_delivery(
             )
         resp.legs = legs_list
 
-        # 4. Trail: 50 điểm telemetry gần nhất (sắp xếp tăng dần theo thời gian)
-        trail_res = await db.execute(
-            select(TelemetryLog)
-            .where(TelemetryLog.mission_id == mission.id)
-            .order_by(TelemetryLog.timestamp.desc())
-            .limit(50)
-        )
-        recent_telemetry = list(reversed(trail_res.scalars().all()))
+        # 4. Trail: 50 điểm telemetry gần nhất (đã tách sẵn từ path_rows/trail_rows)
         resp.trail = [
             TrailPointSchema(
                 latitude=t.latitude,
@@ -795,7 +904,7 @@ async def track_delivery(
                 speed=t.speed,
                 timestamp=t.timestamp,
             )
-            for t in recent_telemetry
+            for t in trail_rows
         ]
 
     return resp
@@ -880,13 +989,12 @@ async def get_mission_report(
             if drone:
                 drone_schema = ReportDroneSchema(id=drone.id, name=drone.name, model=drone.model)
 
-        logs = (await db.execute(
-            select(TelemetryLog.energy_consumed_wh, TelemetryLog.timestamp)
+        tel_agg = (await db.execute(
+            select(func.max(TelemetryLog.energy_consumed_wh), func.count(TelemetryLog.id))
             .where(TelemetryLog.mission_id == mission.id)
-            .order_by(TelemetryLog.timestamp.asc())
-        )).all()
-        energies = [e for e, _ in logs if e is not None]
-        actual_energy = max(energies) if energies else None
+        )).one()
+        actual_energy = tel_agg[0]
+        tel_points = int(tel_agg[1] or 0)
         start_ts = mission.departed_at or mission.start_time
         end_ts = mission.arrival_confirmed_at or mission.end_time or mission.arrived_at
         actual_duration = None
@@ -895,7 +1003,7 @@ async def get_mission_report(
         actuals = ReportActualsSchema(
             actual_duration_min=actual_duration,
             actual_energy_wh=actual_energy,
-            telemetry_points=len(logs),
+            telemetry_points=tel_points,
         )
 
     return MissionReportResponse(
@@ -914,4 +1022,217 @@ async def get_mission_report(
         drone=drone_schema,
         actuals=actuals,
         generated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# DELIVERY RATING
+# ══════════════════════════════════════════════════════════════════════
+
+from app.modules.missions.models import DeliveryRating
+
+
+class RatingRequest(BaseModel):
+    rating: int = PydanticField(..., ge=1, le=5, description="Rating from 1 to 5 stars")
+    comment: Optional[str] = PydanticField(default=None, max_length=1000, description="Optional feedback comment")
+
+    @field_validator("rating")
+    @classmethod
+    def validate_rating(cls, v: int) -> int:
+        if v < 1 or v > 5:
+            raise ValueError("Rating must be between 1 and 5")
+        return v
+
+
+class RatingResponse(BaseModel):
+    id: int
+    order_id: str
+    rating: int
+    comment: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+@router.post(
+    "/orders/{order_id}/rating",
+    response_model=RatingResponse,
+    status_code=201,
+    summary="Đánh giá trải nghiệm giao hàng (1-5 sao)",
+)
+async def submit_delivery_rating(
+    order_id: str,
+    body: RatingRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    **[Customer API] Gửi đánh giá trải nghiệm sau khi nhận hàng.**
+
+    - Chỉ được đánh giá khi order ở trạng thái `DELIVERED_TO_HUB`.
+    - Mỗi đơn chỉ được đánh giá **1 lần**.
+    - `rating`: 1-5 sao. `comment`: tùy chọn, tối đa 1000 ký tự.
+    """
+    order = await db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.customer_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not your order")
+    if order.status not in (OrderStatus.DELIVERED_TO_HUB, OrderStatus.DELIVERED_TO_CUSTOMER):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Can only rate delivered orders (DELIVERED_TO_HUB or DELIVERED_TO_CUSTOMER). Current: {order.status.value if order.status else 'unknown'}"
+        )
+
+    # Check already rated
+    existing = (await db.execute(
+        select(DeliveryRating).where(DeliveryRating.order_id == order_id)
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail="You have already rated this order")
+
+    from app.core.timezone import get_vn_naive_datetime
+    now = get_vn_naive_datetime()
+
+    rating_obj = DeliveryRating(
+        order_id=order_id,
+        customer_id=str(current_user.id),
+        rating=body.rating,
+        comment=body.comment,
+        created_at=now,
+    )
+    db.add(rating_obj)
+    await db.commit()
+    await db.refresh(rating_obj)
+    return rating_obj
+
+
+@router.get(
+    "/orders/{order_id}/rating",
+    response_model=RatingResponse,
+    summary="Xem đánh giá của đơn hàng",
+)
+async def get_delivery_rating(
+    order_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """**[Customer API] Xem đánh giá đã gửi cho đơn hàng."""
+    order = await db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.customer_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not your order")
+
+    rating_obj = (await db.execute(
+        select(DeliveryRating).where(DeliveryRating.order_id == order_id)
+    )).scalar_one_or_none()
+    if not rating_obj:
+        raise HTTPException(status_code=404, detail="No rating found for this order")
+    return rating_obj
+
+
+# ══════════════════════════════════════════════════════════════════════
+# LIVE POSITION (lightweight real-time GPS endpoint)
+# ══════════════════════════════════════════════════════════════════════
+
+class LivePositionResponse(BaseModel):
+    order_id: str
+    mission_id: Optional[str]
+    mission_status: Optional[str]
+    # GPS
+    latitude: Optional[float]
+    longitude: Optional[float]
+    altitude_m: Optional[float]
+    speed_mps: Optional[float]
+    battery_pct: Optional[float]
+    # Timing
+    last_update: Optional[datetime]
+    elapsed_sec: Optional[int]      # Giây đã bay
+    eta_sec: Optional[int]          # Giây còn lại tới ETA
+    # Human-readable
+    is_flying: bool
+    status_label: str
+
+
+@router.get(
+    "/orders/{order_id}/live-position",
+    response_model=LivePositionResponse,
+    summary="Vị trí GPS thời gian thực của drone đang giao hàng",
+)
+async def get_live_position(
+    order_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    **[Customer API] Vị trí GPS live của drone đang giao đơn hàng.**
+
+    Endpoint nhẹ, chỉ trả về vị trí mới nhất từ telemetry. Gọi mỗi 3-5s từ FE để
+    update marker trên bản đồ mà không cần load full tracking response.
+
+    - Trả về `is_flying: false` nếu mission chưa cất cánh hoặc đã hoàn thành.
+    - `eta_sec`: giây còn lại tới `estimated_window_end` (null nếu đã giao xong).
+    - `last_update`: timestamp của telemetry log cuối cùng.
+    """
+    order = await db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.customer_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not your order")
+
+    mission = await _latest_mission_for_order(db, order_id)
+
+    flying_statuses = {MissionStatus.FLYING}
+    is_flying = bool(mission and mission.status in flying_statuses)
+
+    # Latest telemetry log
+    lat = lng = alt = speed = bat_pct = None
+    last_update = None
+    if mission:
+        tlog = (await db.execute(
+            select(TelemetryLog)
+            .where(TelemetryLog.mission_id == str(mission.id))
+            .order_by(TelemetryLog.id.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+        if tlog:
+            lat, lng, alt = tlog.latitude, tlog.longitude, tlog.altitude
+            speed = tlog.speed
+            bat_pct = tlog.battery_pct
+            last_update = tlog.timestamp
+
+    # ETA
+    from app.core.timezone import get_vn_naive_datetime
+    now_vn = get_vn_naive_datetime()
+    eta_sec = None
+    if order.estimated_window_end and is_flying:
+        eta_naive = order.estimated_window_end.replace(tzinfo=None) if order.estimated_window_end.tzinfo else order.estimated_window_end
+        eta_sec = max(0, int((eta_naive - now_vn).total_seconds()))
+
+    # Elapsed
+    elapsed_sec = None
+    dep_at = (mission.departed_at or mission.start_time) if mission else None
+    if dep_at and is_flying:
+        d_start = dep_at.replace(tzinfo=None) if dep_at.tzinfo else dep_at
+        elapsed_sec = max(0, int((now_vn - d_start).total_seconds()))
+
+    # Status label
+    code, label = compute_delivery_status(order, mission)
+
+    return LivePositionResponse(
+        order_id=order_id,
+        mission_id=str(mission.id) if mission else None,
+        mission_status=mission.status.value if mission and hasattr(mission.status, "value") else None,
+        latitude=lat,
+        longitude=lng,
+        altitude_m=alt,
+        speed_mps=speed,
+        battery_pct=bat_pct,
+        last_update=last_update,
+        elapsed_sec=elapsed_sec,
+        eta_sec=eta_sec,
+        is_flying=is_flying,
+        status_label=label,
     )

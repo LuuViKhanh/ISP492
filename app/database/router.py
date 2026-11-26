@@ -95,10 +95,10 @@ def create_table(payload: CreateTable):
         with engine.connect() as conn:
             conn.execute(text(payload.ddl))
             conn.commit()
-        print(f"✅ Table created via DDL")
+        print(f"Table created via DDL")
         return {"status": "success", "message": "Table created"}
     except Exception as e:
-        print(f"❌ CREATE TABLE ERROR: {e}")
+        print(f"CREATE TABLE ERROR: {e}")
         return {"status": "error", "message": str(e)}
 
 # =====================================================
@@ -108,15 +108,15 @@ def create_table(payload: CreateTable):
 @router.delete("/tables/{table_name}")
 def drop_table(table_name: str):
     """Xóa vĩnh viễn một bảng khỏi database.
-    ⚠️ Không thể hoàn tác!"""
+    Không thể hoàn tác!"""
     try:
         with engine.connect() as conn:
             conn.execute(text(f'DROP TABLE IF EXISTS "{table_name}" CASCADE'))
             conn.commit()
-        print(f"🗑️ Table '{table_name}' dropped")
+        print(f"Table '{table_name}' dropped")
         return {"status": "success", "message": f"Table '{table_name}' dropped"}
     except Exception as e:
-        print(f"❌ DROP TABLE ERROR: {e}")
+        print(f"DROP TABLE ERROR: {e}")
         return {"status": "error", "message": str(e)}
 
 # =====================================================
@@ -159,7 +159,7 @@ def execute_sql(payload: ExecuteSQL):
             }
 
     except Exception as e:
-        print(f"❌ EXECUTE SQL ERROR: {e}")
+        print(f"EXECUTE SQL ERROR: {e}")
         return {"status": "error", "message": str(e)}
 
 # =====================================================
@@ -223,13 +223,13 @@ def insert_rows(table_name: str, payload: InsertRow):
             conn.execute(text(sql), payload.values)
             conn.commit()
 
-        print(f"✅ Inserted {len(payload.values)} row(s) into '{table_name}'")
+        print(f"Inserted {len(payload.values)} row(s) into '{table_name}'")
         return {
             "status": "success",
             "message": f"Inserted {len(payload.values)} row(s)"
         }
     except Exception as e:
-        print(f"❌ INSERT ERROR: {e}")
+        print(f"INSERT ERROR: {e}")
         return {"status": "error", "message": str(e)}
 
 # =====================================================
@@ -260,13 +260,13 @@ def update_rows(table_name: str, payload: UpdateRows):
             result = conn.execute(text(sql), params)
             conn.commit()
 
-        print(f"✅ Updated {result.rowcount} row(s) in '{table_name}'")
+        print(f"Updated {result.rowcount} row(s) in '{table_name}'")
         return {
             "status": "success",
             "rows_affected": result.rowcount
         }
     except Exception as e:
-        print(f"❌ UPDATE ERROR: {e}")
+        print(f"UPDATE ERROR: {e}")
         return {"status": "error", "message": str(e)}
 
 # =====================================================
@@ -276,7 +276,7 @@ def update_rows(table_name: str, payload: UpdateRows):
 @router.delete("/tables/{table_name}/rows")
 def delete_rows(table_name: str, payload: DeleteRows):
     """Xóa các row theo điều kiện WHERE.
-    ⚠️ Để xóa toàn bộ bảng, dùng endpoint DROP TABLE.
+    Để xóa toàn bộ bảng, dùng endpoint DROP TABLE.
 
     Ví dụ body:
     {
@@ -291,11 +291,11 @@ def delete_rows(table_name: str, payload: DeleteRows):
             result = conn.execute(text(sql), payload.where_params or {})
             conn.commit()
 
-        print(f"🗑️ Deleted {result.rowcount} row(s) from '{table_name}'")
+        print(f"Deleted {result.rowcount} row(s) from '{table_name}'")
         return {
             "status": "success",
             "rows_affected": result.rowcount
         }
     except Exception as e:
-        print(f"❌ DELETE ERROR: {e}")
+        print(f"DELETE ERROR: {e}")
         return {"status": "error", "message": str(e)}

@@ -5,9 +5,11 @@ PayOS client wrapper.
 SDK: pip install payos
 """
 
+from functools import lru_cache
 from app.core.config import settings
 
 
+@lru_cache(maxsize=1)
 def get_payos():
     """Khởi tạo PayOS client với credentials từ config."""
     try:

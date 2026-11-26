@@ -4,7 +4,7 @@ Tools dành cho Technician Chatbot.
 
 from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func, or_
 
 try:
     from google.genai import types
@@ -14,25 +14,31 @@ except (ImportError, ModuleNotFoundError):
 from app.modules.fleet.models import Drone, DroneStatus, Battery, WorkOrder, WorkOrderStatus
 
 
-async def tool_get_fleet_status(db: AsyncSession, **kwargs) -> Dict[str, Any]:
-    """Lấy tổng quan tình trạng đội Drone."""
-    result = await db.execute(select(Drone))
-    drones = result.scalars().all()
+async def tool_get_fleet_status(db: AsyncSession, hub_id: Optional[int] = None, **kwargs) -> Dict[str, Any]:
+    """Lấy tổng quan tình trạng đội Drone tại hub của technician."""
+    drone_scope = [] if hub_id is None else [Drone.current_hub_id == hub_id]
+    counts_rows = (await db.execute(
+        select(Drone.status, func.count(Drone.id)).where(*drone_scope).group_by(Drone.status)
+    )).all()
+    counts = {st: int(cnt) for st, cnt in counts_rows}
+    total = sum(counts.values())
+    available = counts.get(DroneStatus.AVAILABLE, 0)
+    in_flight = counts.get(DroneStatus.IN_FLIGHT, 0)
+    maintenance = counts.get(DroneStatus.MAINTENANCE, 0)
 
-    total = len(drones)
-    available = sum(1 for d in drones if d.status == DroneStatus.AVAILABLE)
-    in_flight = sum(1 for d in drones if d.status == DroneStatus.IN_FLIGHT)
-    maintenance = sum(1 for d in drones if d.status == DroneStatus.MAINTENANCE)
-
+    sample_rows = (await db.execute(
+        select(Drone.id, Drone.name, Drone.model, Drone.status, Drone.battery_level_pct)
+        .where(*drone_scope).limit(10)
+    )).all()
     drone_summary = [
         {
-            "id": d.id,
-            "name": d.name,
-            "model": d.model,
-            "status": d.status.value if d.status else "UNKNOWN",
-            "battery_pct": d.battery_level_pct
+            "id": r.id,
+            "name": r.name,
+            "model": r.model,
+            "status": r.status.value if r.status else "UNKNOWN",
+            "battery_pct": r.battery_level_pct
         }
-        for d in drones[:10]
+        for r in sample_rows
     ]
 
     return {
@@ -45,10 +51,20 @@ async def tool_get_fleet_status(db: AsyncSession, **kwargs) -> Dict[str, Any]:
     }
 
 
-async def tool_get_battery_status(db: AsyncSession, **kwargs) -> Dict[str, Any]:
-    """Kiểm tra tình trạng pin (đặc biệt là pin yếu cần sạc)."""
-    result = await db.execute(select(Battery))
-    batteries = result.scalars().all()
+async def tool_get_battery_status(db: AsyncSession, hub_id: Optional[int] = None, **kwargs) -> Dict[str, Any]:
+    """Kiểm tra tình trạng pin tại hub của technician (pin đặt ở hub hoặc đang gắn trên drone của hub)."""
+    if hub_id is None:
+        battery_scope = []
+    else:
+        hub_drone_ids = select(Drone.id).where(Drone.current_hub_id == hub_id)
+        battery_scope = [or_(Battery.current_hub_id == hub_id, Battery.drone_id.in_(hub_drone_ids))]
+    total_batteries = int((await db.execute(
+        select(func.count(Battery.id)).where(*battery_scope)
+    )).scalar() or 0)
+    low_rows = (await db.execute(
+        select(Battery.id, Battery.serial_number, Battery.charge_level_pct, Battery.current_hub_id, Battery.drone_id)
+        .where(Battery.charge_level_pct.isnot(None), Battery.charge_level_pct < 30, *battery_scope)
+    )).all()
 
     low_batteries = [
         {
@@ -58,23 +74,24 @@ async def tool_get_battery_status(db: AsyncSession, **kwargs) -> Dict[str, Any]:
             "hub_id": b.current_hub_id,
             "drone_id": b.drone_id
         }
-        for b in batteries
-        if b.charge_level_pct is not None and b.charge_level_pct < 30
+        for b in low_rows
     ]
 
     return {
         "success": True,
-        "total_batteries": len(batteries),
+        "total_batteries": total_batteries,
         "low_battery_count": len(low_batteries),
         "low_batteries_needing_charge": low_batteries
     }
 
 
-async def tool_get_pending_work_orders(db: AsyncSession, **kwargs) -> Dict[str, Any]:
-    """Lấy danh sách các lệnh sửa chữa/bảo dưỡng đang chờ hoặc đang thực hiện."""
+async def tool_get_pending_work_orders(db: AsyncSession, hub_id: Optional[int] = None, **kwargs) -> Dict[str, Any]:
+    """Lấy danh sách lệnh sửa chữa/bảo dưỡng đang chờ hoặc đang thực hiện của drone tại hub."""
     stmt = select(WorkOrder).where(
         WorkOrder.status.in_([WorkOrderStatus.PENDING, WorkOrderStatus.IN_PROGRESS])
     )
+    if hub_id is not None:
+        stmt = stmt.where(WorkOrder.drone_id.in_(select(Drone.id).where(Drone.current_hub_id == hub_id)))
     result = await db.execute(stmt)
     work_orders = result.scalars().all()
 
@@ -125,6 +142,26 @@ def get_technician_gemini_tools() -> list:
     if rag_decl:
         decls.append(rag_decl)
     return [types.Tool(function_declarations=decls)]
+
+
+def build_technician_tools_map(hub_id: Optional[int]) -> Dict[str, Any]:
+    """
+    Tạo tools_map đã gắn phạm vi dữ liệu theo hub của người dùng.
+    - hub_id là số: chỉ thấy dữ liệu của hub đó.
+    - hub_id là None: không có phạm vi lọc (chỉ dùng cho Admin).
+    Technician không có hub thì router phải truyền -1 để không thấy dữ liệu nào.
+    """
+    def bind(fn):
+        async def _wrapped(db, **kwargs):
+            return await fn(db, hub_id=hub_id, **kwargs)
+        return _wrapped
+
+    return {
+        "get_fleet_status": bind(tool_get_fleet_status),
+        "get_battery_status": bind(tool_get_battery_status),
+        "get_pending_work_orders": bind(tool_get_pending_work_orders),
+        "search_knowledge_base": _tool_search_kb_technician,
+    }
 
 
 TECHNICIAN_TOOLS_MAP = {

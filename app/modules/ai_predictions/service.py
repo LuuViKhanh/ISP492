@@ -46,6 +46,18 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
+
+def calculate_bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Compute initial geographic bearing in degrees [0, 360) clockwise from true North."""
+    if lat1 == lat2 and lon1 == lon2:
+        return 0.0
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dlambda = math.radians(lon2 - lon1)
+    y = math.sin(dlambda) * math.cos(phi2)
+    x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(dlambda)
+    return round((math.degrees(math.atan2(y, x)) + 360.0) % 360.0, 2)
+
 def _safe_float(val, default: float) -> float:
     if val is None or pd.isna(val):
         return default
@@ -61,6 +73,7 @@ def predict_flight_energy(
     speed: float = 10.0,
     altitude: float = 50.0,
     weather_override: Optional[dict] = None,
+    bearing_deg: Optional[float] = None,
 ) -> dict:
     """
     [Core AI Service] Dự đoán tiêu thụ năng lượng của Drone (Deterministic & Physics-informed XAI SHAP).
@@ -102,8 +115,11 @@ def predict_flight_energy(
     wind_spd = round(base_wind * wind_mult, 2)
     wind_gust = round(base_gust * wind_mult, 2)
 
-    # Góc đón gió xác định (deterministic) dựa trên cự ly & tải trọng
-    hub_bearing = float(int(round(dist_km * 45 + payload_kg * 15)) % 360)
+    # Góc đón gió: ưu tiên phương vị địa lý thực giữa 2 Hub nếu được truyền vào, fallback xác định theo cự ly & tải trọng
+    if bearing_deg is not None:
+        hub_bearing = float(bearing_deg) % 360.0
+    else:
+        hub_bearing = float(int(round(dist_km * 45 + payload_kg * 15)) % 360)
     rel_angle = abs(wind_dir - hub_bearing) % 360
     if rel_angle > 180:
         rel_angle = 360 - rel_angle
@@ -180,11 +196,16 @@ def predict_flight_energy(
     }
 
     # Đóng gói AI Explanation
-    speed_impact_desc = (
-        f"Aerodynamic drag at high speed ({safe_speed:.1f} m/s) increases energy consumption by +{shap_speed:.1f} Wh"
-        if shap_speed > 0
-        else "Eco cruise speed (10.0 m/s) optimizes energy efficiency with no excess drag penalty"
-    )
+    if shap_speed > 0:
+        speed_impact_desc = (
+            f"Aerodynamic drag at high speed ({safe_speed:.1f} m/s) increases energy consumption by +{shap_speed:.1f} Wh"
+        )
+    elif shap_speed < 0:
+        speed_impact_desc = (
+            f"Low-speed safety cruise ({safe_speed:.1f} m/s) reduces aerodynamic drag ({shap_speed:.1f} Wh) for maximum reserve"
+        )
+    else:
+        speed_impact_desc = "Eco cruise speed (10.0 m/s) optimizes energy efficiency with no excess drag penalty"
     wind_impact_desc = "Tailwind assists flight and saves battery" if shap_wind <= 0 else "Headwind increases aerodynamic drag"
 
     ai_explanation = {
@@ -243,8 +264,16 @@ def predict_flight_energy(
         ],
         "summary": (
             f"Cruise speed {safe_speed:.1f} m/s at {safe_alt:.0f}m altitude "
-            f"{'increases energy consumption by +' + str(round(shap_speed + shap_alt, 1)) + ' Wh due to aerodynamic drag' if (shap_speed + shap_alt) > 0 else 'achieves optimal energy efficiency'} "
-            f"over {dist_km:.2f} km with a {payload_kg:.2f} kg payload."
+            + (
+                f"increases energy consumption by +{round(shap_speed + shap_alt, 1)} Wh due to aerodynamic drag"
+                if (shap_speed + shap_alt) > 0
+                else (
+                    f"lowers aerodynamic/altitude load ({round(shap_speed + shap_alt, 1)} Wh) for higher safety margin"
+                    if (shap_speed + shap_alt) < 0
+                    else "achieves optimal energy efficiency"
+                )
+            )
+            + f" over {dist_km:.2f} km with a {payload_kg:.2f} kg payload."
         )
     }
 

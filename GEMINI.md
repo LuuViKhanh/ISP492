@@ -24,3 +24,16 @@ Whenever you write or run tests (unit tests, integration tests, API tests, or ve
 - You **MUST** use real data from the database to test against realistic states and records.
 - Tests **MUST NOT** permanently affect, mutate, corrupt, or leave residual test data in the database.
 - Any test that performs write operations (`INSERT`, `UPDATE`, `DELETE`) **MUST** run inside an isolated database transaction (or `SAVEPOINT`) that is strictly rolled back (`ROLLBACK`) upon test completion, or use read-only queries (`SELECT`) so the database remains completely unchanged after testing.
+
+# Test Execution & Timeout Rule
+
+Whenever executing tests or verification scripts:
+
+- **NEVER** run monolithic all-in-one scripts that loop sequentially over many records (e.g., scanning 10–40+ orders) or allow a test command to hang in the background (`task-*`) for a long duration without output.
+- **MUST** break verification into small, focused, single-purpose checks (1 scenario or 1–3 explicit record IDs / `LIMIT 1` per run) and separate pure offline checks (`compileall`, `app.openapi()`) from live remote DB/HTTP checks (`Supabase`, `Open-Meteo`).
+- **MUST** protect every DB, HTTP, or `asyncio` test script against hung Windows DNS/socket executor threads (`asyncio.run()` hanging on `shutdown_default_executor` when sandbox blocks network):
+  - **NEVER** rely only on `asyncio.wait_for(...)` alone.
+  - **ALWAYS** attach a `daemon=True` OS-level watchdog at the very top of the script (e.g. `wd = threading.Timer(20.0, lambda: (print("WATCHDOG_TIMEOUT", flush=True), os._exit(2))); wd.daemon = True; wd.start()` — use `10–12s` when probing sandboxed network and `<= 25s` when running live DB tests). Leaving `daemon = True` guarantees the process exits immediately on pass rather than waiting for the timer.
+  - **ALWAYS** run Python unbuffered (`python -u`) and log step timestamps with `flush=True` before imports, DB connect, and each test case.
+- When a minimal `10–12s` sandbox probe terminates on network isolation (`WATCHDOG_TIMEOUT`), immediately fix by re-running that single test with `BypassSandbox: true` (keeping `toolSummary` identical) rather than waiting or retrying blindly.
+- If any background test task (`task-*`) stalls without progress beyond its expected window (~30s), inspect/cancel it immediately with `manage_task`, diagnose the blocker, and split/bound the test cleanly.

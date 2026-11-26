@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import asyncio
 import secrets
 import bcrypt
 import httpx
@@ -21,6 +22,14 @@ def hash_password(plain: str) -> str:
 
 def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed.encode())
+
+
+async def hash_password_async(plain: str) -> str:
+    return await asyncio.to_thread(hash_password, plain)
+
+
+async def verify_password_async(plain: str, hashed: str) -> bool:
+    return await asyncio.to_thread(verify_password, plain, hashed)
 
 
 # ── JWT helpers ───────────────────────────────────────────────────────────────
@@ -60,17 +69,17 @@ async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
 
 
 async def get_user_by_id(db: AsyncSession, user_id: str) -> Optional[User]:
-    result = await db.execute(select(User).where(User.id == user_id))
-    return result.scalar_one_or_none()
+    return await db.get(User, user_id)
 
 
 # ── Register ──────────────────────────────────────────────────────────────────
 
 async def register_user(db: AsyncSession, email: str, full_name: str, password: str) -> User:
+    hashed = await hash_password_async(password)
     user = User(
         email=email,
         full_name=full_name,
-        hashed_password=hash_password(password),
+        hashed_password=hashed,
         role_id=ROLE_NAME_TO_ID[UserRole.CUSTOMER],
     )
     db.add(user)
@@ -103,7 +112,7 @@ async def reset_password(db: AsyncSession, token: str, new_password: str) -> boo
     user = res.scalar_one_or_none()
     if not user or not user.is_active:
         return False
-    user.hashed_password = hash_password(new_password)
+    user.hashed_password = await hash_password_async(new_password)
     user.reset_token = None
     user.reset_token_expires_at = None
     db.add(user)
@@ -118,7 +127,7 @@ GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 
 async def exchange_google_code(code: str) -> dict:
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(GOOGLE_TOKEN_URL, data={
             "code": code,
             "client_id": settings.GOOGLE_CLIENT_ID,

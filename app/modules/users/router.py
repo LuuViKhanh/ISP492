@@ -59,7 +59,6 @@ async def update_profile(
         user.full_name = body.full_name
     db.add(user)
     await db.commit()
-    await db.refresh(user)
     return user
 
 

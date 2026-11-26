@@ -1,0 +1,75 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="SD 3.1.4 - Sign In Google OAuth" id="sd314">
+    <mxGraphModel dx="900" dy="400" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2000" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/><mxCell id="1" parent="0"/>
+        <mxCell id="title" value="Sequence Diagram - Sign In with Google OAuth 2.0&#xa;UC-03 | GET /api/v1/auth/google  &amp;  /google/callback | Actor: :RegisteredUser, :GoogleOAuthAPI" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=14;fontStyle=1;" vertex="1"><mxGeometry x="300" y="15" width="1300" height="40" as="geometry"/></mxCell>
+
+        <!-- HEADERS TOP -->
+        <mxCell id="h_user" value=":RegisteredUser" parent="1" style="shape=umlActor;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1"><mxGeometry x="40" y="75" width="40" height="60" as="geometry"/></mxCell>
+        <mxCell id="h_page" value=":LoginPage" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="190" y="80" width="135" height="45" as="geometry"/></mxCell>
+        <mxCell id="h_router" value=":AuthRouter" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="430" y="80" width="135" height="45" as="geometry"/></mxCell>
+        <mxCell id="h_service" value=":AuthService" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="670" y="80" width="135" height="45" as="geometry"/></mxCell>
+        <mxCell id="h_google" value=":GoogleOAuthAPI" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="910" y="80" width="145" height="45" as="geometry"/></mxCell>
+        <mxCell id="h_account" value=":Account (DB)" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="1160" y="80" width="135" height="45" as="geometry"/></mxCell>
+
+        <!-- LIFELINES -->
+        <mxCell id="ll1" edge="1" parent="1" style="endArrow=none;dashed=1;strokeColor=#000000;" value=""><mxGeometry relative="1" as="geometry"><mxPoint x="60" y="150" as="sourcePoint"/><mxPoint x="60" y="1100" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="ll2" edge="1" parent="1" style="endArrow=none;dashed=1;strokeColor=#000000;" value=""><mxGeometry relative="1" as="geometry"><mxPoint x="258" y="125" as="sourcePoint"/><mxPoint x="258" y="1100" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="ll3" edge="1" parent="1" style="endArrow=none;dashed=1;strokeColor=#000000;" value=""><mxGeometry relative="1" as="geometry"><mxPoint x="498" y="125" as="sourcePoint"/><mxPoint x="498" y="1100" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="ll4" edge="1" parent="1" style="endArrow=none;dashed=1;strokeColor=#000000;" value=""><mxGeometry relative="1" as="geometry"><mxPoint x="738" y="125" as="sourcePoint"/><mxPoint x="738" y="1100" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="ll5" edge="1" parent="1" style="endArrow=none;dashed=1;strokeColor=#000000;" value=""><mxGeometry relative="1" as="geometry"><mxPoint x="983" y="125" as="sourcePoint"/><mxPoint x="983" y="1100" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="ll6" edge="1" parent="1" style="endArrow=none;dashed=1;strokeColor=#000000;" value=""><mxGeometry relative="1" as="geometry"><mxPoint x="1228" y="125" as="sourcePoint"/><mxPoint x="1228" y="1100" as="targetPoint"/></mxGeometry></mxCell>
+
+        <!-- ACTIVATION BARS -->
+        <mxCell id="ab1" value="" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;" vertex="1"><mxGeometry x="252" y="195" width="12" height="800" as="geometry"/></mxCell>
+        <mxCell id="ab2" value="" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;" vertex="1"><mxGeometry x="492" y="235" width="12" height="720" as="geometry"/></mxCell>
+        <mxCell id="ab3" value="" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;" vertex="1"><mxGeometry x="732" y="420" width="12" height="440" as="geometry"/></mxCell>
+        <mxCell id="ab4" value="" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;" vertex="1"><mxGeometry x="977" y="455" width="12" height="85" as="geometry"/></mxCell>
+        <mxCell id="ab5" value="" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;" vertex="1"><mxGeometry x="1222" y="700" width="12" height="50" as="geometry"/></mxCell>
+
+        <!-- MESSAGES -->
+        <mxCell id="m1" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="1. Click 'Sign in with Google'"><mxGeometry relative="1" y="10" as="geometry"><mxPoint as="offset"/><mxPoint x="60" y="200" as="sourcePoint"/><mxPoint x="252" y="200" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="m2" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="2. GET /api/v1/auth/google"><mxGeometry relative="1" y="15" as="geometry"><mxPoint as="offset"/><mxPoint x="264" y="238" as="sourcePoint"/><mxPoint x="492" y="238" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="m3" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="3. 302 Redirect → Google Authorization URL (openid email profile)"><mxGeometry relative="1" y="-15" as="geometry"><mxPoint as="offset"/><mxPoint x="492" y="278" as="sourcePoint"/><mxPoint x="264" y="278" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="m4" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="4. Browser redirects to Google login"><mxGeometry relative="1" as="geometry"><mxPoint x="252" y="315" as="sourcePoint"/><mxPoint x="60" y="315" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="m5" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="5. User authenticates on Google"><mxGeometry relative="1" y="10" as="geometry"><mxPoint as="offset"/><mxPoint x="60" y="355" as="sourcePoint"/><mxPoint x="983" y="355" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="m6" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="6. Redirect → /auth/google/callback?code=..."><mxGeometry relative="1" y="-15" as="geometry"><mxPoint as="offset"/><mxPoint x="983" y="393" as="sourcePoint"/><mxPoint x="60" y="393" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="m7" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="7. GET /api/v1/auth/google/callback?code=..."><mxGeometry relative="1" y="10" as="geometry"><mxPoint as="offset"/><mxPoint x="264" y="423" as="sourcePoint"/><mxPoint x="492" y="423" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="m8" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="8. exchange_google_code(code)"><mxGeometry relative="1" y="10" as="geometry"><mxPoint as="offset"/><mxPoint x="504" y="455" as="sourcePoint"/><mxPoint x="732" y="455" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="m9" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="9. POST /token + GET /userinfo (httpx)"><mxGeometry relative="1" y="10" as="geometry"><mxPoint as="offset"/><mxPoint x="744" y="490" as="sourcePoint"/><mxPoint x="977" y="490" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="m10" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="10. { email, name, picture }"><mxGeometry relative="1" as="geometry"><mxPoint x="977" y="528" as="sourcePoint"/><mxPoint x="744" y="528" as="targetPoint"/></mxGeometry></mxCell>
+
+        <!-- ALT FRAME -->
+        <mxCell id="alt_frame" value="" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;" vertex="1"><mxGeometry x="40" y="548" width="1400" height="380" as="geometry"/></mxCell>
+        <mxCell id="alt_lbl" value="alt" parent="1" style="text;html=1;strokeColor=#000000;fillColor=#FFFFFF;align=center;verticalAlign=middle;fontSize=12;fontStyle=1;" vertex="1"><mxGeometry x="40" y="548" width="45" height="24" as="geometry"/></mxCell>
+
+        <!-- Lane failed -->
+        <mxCell id="f_lbl" value="[OAuth code invalid  |  account deactivated]" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=11;fontStyle=2;" vertex="1"><mxGeometry x="90" y="549" width="360" height="22" as="geometry"/></mxCell>
+        <mxCell id="f11" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="11. raise HTTPException 400 / 403"><mxGeometry relative="1" y="-15" as="geometry"><mxPoint as="offset"/><mxPoint x="732" y="598" as="sourcePoint"/><mxPoint x="492" y="598" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="f12" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="12. 302 Redirect → /login?error=google_failed"><mxGeometry relative="1" y="-15" as="geometry"><mxPoint as="offset"/><mxPoint x="492" y="635" as="sourcePoint"/><mxPoint x="264" y="635" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="f13" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="13. Show error message"><mxGeometry relative="1" as="geometry"><mxPoint x="252" y="668" as="sourcePoint"/><mxPoint x="60" y="668" as="targetPoint"/></mxGeometry></mxCell>
+
+        <!-- Divider -->
+        <mxCell id="div1" edge="1" parent="1" style="endArrow=none;dashed=1;strokeColor=#000000;" value=""><mxGeometry relative="1" as="geometry"><mxPoint x="40" y="690" as="sourcePoint"/><mxPoint x="1440" y="690" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="s_lbl" value="[else: Valid Google profile]" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=11;fontStyle=2;fontColor=#2d6a2d;" vertex="1"><mxGeometry x="90" y="691" width="230" height="22" as="geometry"/></mxCell>
+
+        <!-- Success lane -->
+        <mxCell id="s14" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="14. get_or_create_google_user(db, google_info)"><mxGeometry relative="1" y="15" as="geometry"><mxPoint as="offset"/><mxPoint x="744" y="720" as="sourcePoint"/><mxPoint x="1222" y="720" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="s14b" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="14b. SELECT or INSERT Account(email, full_name, role=CUSTOMER)"><mxGeometry relative="1" y="15" as="geometry"><mxPoint as="offset"/><mxPoint x="1222" y="750" as="sourcePoint"/><mxPoint x="1222" y="750" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="s14r" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="14c. user (Account)"><mxGeometry relative="1" as="geometry"><mxPoint x="1222" y="775" as="sourcePoint"/><mxPoint x="744" y="775" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="s15" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="15. create_access_token + create_refresh_token"><mxGeometry relative="1" y="15" as="geometry"><mxPoint as="offset"/><mxPoint x="504" y="808" as="sourcePoint"/><mxPoint x="732" y="808" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="s16" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="16. 302 Redirect → FE/auth/callback?access_token=...&amp;refresh_token=..."><mxGeometry relative="1" y="-15" as="geometry"><mxPoint as="offset"/><mxPoint x="492" y="862" as="sourcePoint"/><mxPoint x="264" y="862" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="s17" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="17. Store tokens, navigate to Dashboard"><mxGeometry relative="1" as="geometry"><mxPoint x="252" y="898" as="sourcePoint"/><mxPoint x="60" y="898" as="targetPoint"/></mxGeometry></mxCell>
+
+        <!-- HEADERS BOTTOM -->
+        <mxCell id="b_user" value=":RegisteredUser" parent="1" style="shape=umlActor;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1"><mxGeometry x="40" y="1060" width="40" height="60" as="geometry"/></mxCell>
+        <mxCell id="b_page" value=":LoginPage" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="190" y="1065" width="135" height="45" as="geometry"/></mxCell>
+        <mxCell id="b_router" value=":AuthRouter" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="430" y="1065" width="135" height="45" as="geometry"/></mxCell>
+        <mxCell id="b_service" value=":AuthService" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="670" y="1065" width="135" height="45" as="geometry"/></mxCell>
+        <mxCell id="b_google" value=":GoogleOAuthAPI" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="910" y="1065" width="145" height="45" as="geometry"/></mxCell>
+        <mxCell id="b_account" value=":Account (DB)" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="1160" y="1065" width="135" height="45" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

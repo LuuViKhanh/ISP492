@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     PAYOS_CHECKSUM_KEY: str = ""
     BACKEND_URL: str = "https://isp492.onrender.com"
 
+    # OAuth Redirect URLs (Multi-platform)
+    GOOGLE_CALLBACK_WEB: str = "https://droneoptai.vercel.app/auth/google/callback"
+    GOOGLE_CALLBACK_MOBILE: str = "droneoptai://auth/google/callback"
+
     # Google Gemini AI Chatbot
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.5-flash-lite"

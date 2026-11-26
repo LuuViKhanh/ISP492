@@ -43,7 +43,6 @@ async def customer_chat(
     request: Request,
     body: ChatMessageRequest,
     current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
-    db: AsyncSession = Depends(get_async_db),
 ):
     user_id = str(current_user.id) if current_user else None
     client_ip = request.client.host if request.client else "unknown"
@@ -51,7 +50,7 @@ async def customer_chat(
 
     try:
         return await execute_agent_chat(
-            db=db,
+            db=None,
             message=body.message,
             history=body.history,
             system_instruction=CUSTOMER_SYSTEM_INSTRUCTION,

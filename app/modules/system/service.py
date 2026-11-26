@@ -270,39 +270,44 @@ async def compute_total_procurement_expenses(db: AsyncSession, start_time: Optio
     2. Chi phí nhập lô Pin mới (BATTERY_BATCH_IMPORT / BATTERY_ADD)
     3. Chi phí nhập vật tư linh kiện (SupplyTransaction - RECEIVE)
     """
-    from sqlalchemy import select, func
+    from sqlalchemy import select, func, cast, Float
     from app.modules.system.models import ActivityLog
     from app.modules.supplies.models import SupplyTransaction, SupplyTxnReason, PartCategory
 
-    total = 0.0
-
-    # 1 & 2: Drone & Battery acquisitions from activity_logs
-    try:
-        q = select(ActivityLog.details_json).where(
-            ActivityLog.action.in_(["DRONE_ACQUISITION", "BATTERY_BATCH_IMPORT", "BATTERY_ADD"])
+    # Gộp cả 2 phép tính vào 1 câu SQL duy nhất (tính JSONB acquisition_cost trực tiếp trên PostgreSQL)
+    act_q = select(
+        func.coalesce(
+            func.sum(cast(ActivityLog.details_json["acquisition_cost"].as_string(), Float)),
+            0.0,
         )
-        if start_time:
-            q = q.where(ActivityLog.created_at >= start_time)
-        res = await db.execute(q)
-        for row in res.scalars().all():
-            if isinstance(row, dict):
-                total += float(row.get("acquisition_cost") or 0.0)
-    except Exception:
-        pass
+    ).where(
+        ActivityLog.action.in_(["DRONE_ACQUISITION", "BATTERY_BATCH_IMPORT", "BATTERY_ADD"]),
+        ActivityLog.details_json.isnot(None),
+    )
+    if start_time:
+        act_q = act_q.where(ActivityLog.created_at >= start_time)
 
-    # 3: Supplies received from suppliers
+    st_q = (
+        select(func.coalesce(func.sum(SupplyTransaction.quantity_delta * PartCategory.unit_cost), 0.0))
+        .join(PartCategory, SupplyTransaction.part_category_id == PartCategory.id)
+        .where(SupplyTransaction.reason == SupplyTxnReason.RECEIVE)
+    )
+    if start_time:
+        st_q = st_q.where(SupplyTransaction.created_at >= start_time)
+
     try:
-        st_q = (
-            select(func.coalesce(func.sum(SupplyTransaction.quantity_delta * PartCategory.unit_cost), 0.0))
-            .join(PartCategory, SupplyTransaction.part_category_id == PartCategory.id)
-            .where(SupplyTransaction.reason == SupplyTxnReason.RECEIVE)
-        )
-        if start_time:
-            st_q = st_q.where(SupplyTransaction.created_at >= start_time)
-        st_val = (await db.execute(st_q)).scalar()
-        if st_val:
-            total += float(st_val)
+        row = (await db.execute(select(act_q.scalar_subquery(), st_q.scalar_subquery()))).one()
+        return round(float(row[0] or 0.0) + float(row[1] or 0.0), 2)
     except Exception:
-        pass
-
-    return round(total, 2)
+        total = 0.0
+        try:
+            v1 = (await db.execute(act_q)).scalar()
+            total += float(v1 or 0.0)
+        except Exception:
+            pass
+        try:
+            v2 = (await db.execute(st_q)).scalar()
+            total += float(v2 or 0.0)
+        except Exception:
+            pass
+        return round(total, 2)

@@ -100,7 +100,7 @@ async def seed_knowledge_base(db, api_key: str = None, clear_first: bool = False
 
         await db.commit()
         total_seeded[role] = seeded
-        logger.info("[RAG Seeder] ✅ %d chunks seeded cho role '%s'.", seeded, role)
+        logger.info("[RAG Seeder] %d chunks seeded cho role '%s'.", seeded, role)
 
     return total_seeded
 

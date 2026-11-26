@@ -528,21 +528,29 @@ async def tool_get_my_orders(
     res = await db.execute(stmt)
     orders = res.scalars().all()
 
-    hubs_res = await db.execute(select(Hub))
-    hub_map = {h.id: h for h in hubs_res.scalars().all()}
+    from app.modules.missions.bundle_service import get_all_hubs_cached
+    all_hubs = await get_all_hubs_cached(db)
+    hub_map = {h.id: h for h in all_hubs}
+
+    mission_by_order: Dict[str, Mission] = {}
+    order_ids = [o.id for o in orders]
+    if order_ids:
+        m_stmt = (
+            select(Mission)
+            .distinct(Mission.order_id)
+            .where(
+                Mission.order_id.in_(order_ids),
+                Mission.status != MissionStatus.CANCELLED,
+            )
+            .order_by(Mission.order_id, Mission.scheduled_time.desc().nullslast())
+        )
+        m_res = await db.execute(m_stmt)
+        for m in m_res.scalars().all():
+            mission_by_order[m.order_id] = m
 
     order_items = []
     for o in orders:
-        m_stmt = (
-            select(Mission)
-            .where(
-                Mission.order_id == o.id,
-                Mission.status != MissionStatus.CANCELLED,
-            )
-            .order_by(Mission.scheduled_time.desc().nullslast())
-        )
-        m_res = await db.execute(m_stmt)
-        mission = m_res.scalars().first()
+        mission = mission_by_order.get(o.id)
         status_info = CustomerStatusService.compute_customer_delivery_status(o, mission)
         order_items.append(
             {
@@ -861,9 +869,7 @@ async def tool_check_cancellation_eligibility(
         eligible = False
         reason = "The package has already been handed over at the Origin Hub and cannot be cancelled directly."
     elif mission and mission.status in (
-        MissionStatus.IN_PROGRESS,
         MissionStatus.FLYING,
-        MissionStatus.ACTIVE_MISSION,
         MissionStatus.ARRIVAL_COMPLETED,
         MissionStatus.MISSION_COMPLETED,
     ):

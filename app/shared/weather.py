@@ -33,12 +33,30 @@ class WeatherData:
     condition_label: str = "Clear sky"  # Nhãn mô tả tiếng Việt
 
 
-# In-memory cache 5 phút theo tọa độ (lat, lng) làm tròn 2 chữ số thập phân (~1.1 km)
-# [PERF NOTE] Giữ nguyên cache 300s + pooled AsyncClient + in-flight deduplication; không gọi HTTP thời tiết không cache trong vòng lặp Dijkstra/telemetry.
-_WEATHER_CACHE: dict[tuple[float, float], tuple[float, WeatherData]] = {}
-_WEATHER_CACHE_TTL_SEC = 300.0
+# In-memory cache theo lưới 0.05° (~5.5 km, phù hợp độ phân giải Open-Meteo) kèm Stale-While-Revalidate (SWR)
+# [PERF NOTE] Fresh TTL 15 phút (900s, khớp chu kỳ cập nhật Open-Meteo), Stale TTL 60 phút (3600s) tự làm mới ngầm
+# để API /analyze không bao giờ bị block chờ HTTP bên ngoài khi cache vừa hết hạn.
+_WEATHER_CACHE: dict[tuple[float, float], tuple[float, Optional[WeatherData]]] = {}
+_WEATHER_CACHE_TTL_SEC = 900.0
+_WEATHER_STALE_TTL_SEC = 3600.0
+_WEATHER_NEG_CACHE_TTL_SEC = 20.0
+_WEATHER_CACHE_MAX = 512
 _WEATHER_CLIENTS_BY_LOOP: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, httpx.AsyncClient] = weakref.WeakKeyDictionary()
 _WEATHER_INFLIGHT_BY_LOOP: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[tuple[float, float], asyncio.Future]] = weakref.WeakKeyDictionary()
+
+
+def _weather_grid_key(lat: float, lng: float) -> tuple[float, float]:
+    """Làm tròn tọa độ theo lưới 0.1 độ (~11 km, khớp độ phân giải lưới Open-Meteo) để tối đa cache hit."""
+    return (
+        round(float(lat or 0.0), 1),
+        round(float(lng or 0.0), 1),
+    )
+
+
+def _set_weather_cache(cache_key: tuple[float, float], value: Optional[WeatherData]) -> None:
+    if len(_WEATHER_CACHE) >= _WEATHER_CACHE_MAX:
+        _WEATHER_CACHE.clear()
+    _WEATHER_CACHE[cache_key] = (time.monotonic(), value)
 
 
 def _get_weather_async_client() -> httpx.AsyncClient:
@@ -83,20 +101,13 @@ def weather_description(code: Optional[int]) -> str:
     return WMO_DESCRIPTIONS.get(code, f"Code {code}")
 
 
-async def fetch_weather(lat: float, lng: float, use_cache: bool = True) -> Optional[WeatherData]:
-    """
-    Gọi Open-Meteo API lấy thời tiết hiện tại tại tọa độ (lat, lng).
-    Hỗ trợ in-memory cache 5 phút theo tọa độ làm tròn 2 chữ số thập phân để tăng tốc lập tuyến.
-    Trả về WeatherData hoặc None nếu lỗi (không làm hỏng luồng chính).
-    """
-    cache_key = (round(float(lat or 0.0), 2), round(float(lng or 0.0), 2))
-    now_mono = time.monotonic()
-
-    if use_cache and cache_key in _WEATHER_CACHE:
-        cached_at, cached_data = _WEATHER_CACHE[cache_key]
-        if (now_mono - cached_at) <= _WEATHER_CACHE_TTL_SEC:
-            return cached_data
-
+async def _fetch_weather_network(
+    lat: float,
+    lng: float,
+    cache_key: tuple[float, float],
+    use_cache: bool,
+) -> Optional[WeatherData]:
+    """Thực thi gọi HTTP Open-Meteo có deduplication in-flight theo `cache_key`."""
     loop = asyncio.get_running_loop()
     inflight_map = _WEATHER_INFLIGHT_BY_LOOP.setdefault(loop, {})
     if use_cache and cache_key in inflight_map:
@@ -123,6 +134,8 @@ async def fetch_weather(lat: float, lng: float, use_cache: bool = True) -> Optio
         client = _get_weather_async_client()
         resp = await client.get(url)
         if resp.status_code != 200:
+            if use_cache and cache_key not in _WEATHER_CACHE:
+                _set_weather_cache(cache_key, None)
             if fut is not None and not fut.done():
                 fut.set_result(None)
             return None
@@ -144,18 +157,47 @@ async def fetch_weather(lat: float, lng: float, use_cache: bool = True) -> Optio
             weather_code=int(w_code) if w_code is not None else None,
             condition_label=cond_label,
         )
-        _WEATHER_CACHE[cache_key] = (time.monotonic(), w_obj)
+        _set_weather_cache(cache_key, w_obj)
         if fut is not None and not fut.done():
             fut.set_result(w_obj)
         return w_obj
 
     except Exception:
+        if use_cache and cache_key not in _WEATHER_CACHE:
+            _set_weather_cache(cache_key, None)
         if fut is not None and not fut.done():
             fut.set_result(None)
         return None
     finally:
         if fut is not None and inflight_map.get(cache_key) is fut:
             inflight_map.pop(cache_key, None)
+
+
+async def fetch_weather(lat: float, lng: float, use_cache: bool = True) -> Optional[WeatherData]:
+    """
+    Gọi Open-Meteo API lấy thời tiết hiện tại tại tọa độ (lat, lng).
+    Hỗ trợ lưới 0.05° (~5.5 km), fresh cache 15 phút và Stale-While-Revalidate 60 phút
+    (trả ngay dữ liệu cũ và làm mới ngầm ở nền) để API không bị block chờ HTTP bên ngoài.
+    """
+    cache_key = _weather_grid_key(lat, lng)
+    now_mono = time.monotonic()
+
+    if use_cache and cache_key in _WEATHER_CACHE:
+        cached_at, cached_data = _WEATHER_CACHE[cache_key]
+        age = now_mono - cached_at
+        if cached_data is not None:
+            if age <= _WEATHER_CACHE_TTL_SEC:
+                return cached_data
+            if age <= _WEATHER_STALE_TTL_SEC:
+                loop = asyncio.get_running_loop()
+                inflight_map = _WEATHER_INFLIGHT_BY_LOOP.setdefault(loop, {})
+                if cache_key not in inflight_map:
+                    asyncio.create_task(_fetch_weather_network(lat, lng, cache_key, True))
+                return cached_data
+        elif age <= _WEATHER_NEG_CACHE_TTL_SEC:
+            return None
+
+    return await _fetch_weather_network(lat, lng, cache_key, use_cache)
 
 
 def weather_to_override_dict(weather: Optional[WeatherData]) -> Optional[dict]:
@@ -218,9 +260,8 @@ def evaluate_weather_safety(weather: Optional[WeatherData], altitude_m: float = 
         warnings.append(f"Extreme weather ({cond})")
 
     is_bad = len(warnings) > 0
-    icon = "⛈️" if is_bad else ("🌧️" if precip > 0.2 else "🌤️")
     temp_str = f"{temp:.0f}°C" if temp is not None else "N/A"
-    parts = [f"{icon} {temp_str}", f"Wind {eff_wind:.1f} m/s"]
+    parts = [temp_str, f"Wind {eff_wind:.1f} m/s"]
     if precip > 0:
         parts.append(f"Rain {precip:.1f} mm")
     parts.append(cond)

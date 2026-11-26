@@ -51,7 +51,7 @@ class NotificationListResponse(BaseModel):
 # ── GET list (với pagination + filter) ────────────────────────────
 
 @router.get("", response_model=NotificationListResponse,
-            summary="List user notifications (bell 🔔)")
+            summary="List user notifications")
 async def get_notifications(
     page: int = Query(1, ge=1, description="Current page number"),
     page_size: int = Query(20, ge=1, le=100, description="Number of notifications per page"),
@@ -64,26 +64,38 @@ async def get_notifications(
     Lấy thông báo của người dùng hiện tại.
     Hỗ trợ phân trang và lọc theo trạng thái đọc / loại thông báo.
     """
-    base_q = select(Notification).where(Notification.user_id == user.id)
+    from sqlalchemy import case
+    filters = [Notification.user_id == user.id]
     if is_read is not None:
-        base_q = base_q.where(Notification.is_read == is_read)
+        filters.append(Notification.is_read == is_read)
     if notification_type is not None:
-        base_q = base_q.where(Notification.notifications_type == notification_type)
+        filters.append(Notification.notifications_type == notification_type)
 
-    total = (await db.execute(
-        select(func.count()).select_from(base_q.subquery())
-    )).scalar() or 0
-
-    unread = (await db.execute(
-        select(func.count()).select_from(
-            select(Notification)
-            .where(Notification.user_id == user.id, Notification.is_read == False)
-            .subquery()
-        )
-    )).scalar() or 0
+    if is_read is None and notification_type is None:
+        counts_row = (await db.execute(
+            select(
+                func.count(Notification.id),
+                func.count(case((Notification.is_read == False, 1))),
+            ).where(Notification.user_id == user.id)
+        )).one()
+        total = int(counts_row[0] or 0)
+        unread = int(counts_row[1] or 0)
+    else:
+        counts_row = (await db.execute(
+            select(
+                select(func.count(Notification.id)).where(*filters).scalar_subquery(),
+                select(func.count(Notification.id)).where(
+                    Notification.user_id == user.id, Notification.is_read == False
+                ).scalar_subquery(),
+            )
+        )).one()
+        total = int(counts_row[0] or 0)
+        unread = int(counts_row[1] or 0)
 
     items = (await db.execute(
-        base_q.order_by(Notification.created_at.desc())
+        select(Notification)
+        .where(*filters)
+        .order_by(Notification.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )).scalars().all()
@@ -105,11 +117,8 @@ async def get_unread_count(
     db: AsyncSession = Depends(get_async_db),
 ):
     result = (await db.execute(
-        select(func.count()).select_from(
-            select(Notification)
-            .where(Notification.user_id == user.id, Notification.is_read == False)
-            .subquery()
-        )
+        select(func.count(Notification.id))
+        .where(Notification.user_id == user.id, Notification.is_read == False)
     )).scalar() or 0
     return {"unread_count": int(result)}
 

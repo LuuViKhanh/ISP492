@@ -43,7 +43,7 @@ async def seed_rag(
     - clear_first=false (mặc định): thêm mới, không xóa data cũ.
     - clear_first=true: xóa toàn bộ và seed lại từ đầu.
 
-    ⚠️ Yêu cầu:
+    Yêu cầu:
     - GEMINI_API_KEY phải được cấu hình trong .env.
     - pgvector extension phải được bật trên Supabase.
     - Đã chạy migrate_rag_schema.py để tạo bảng knowledge_chunks.

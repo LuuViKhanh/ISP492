@@ -13,3 +13,6 @@ venv/
 # Testing
 pytest.ini
 tests/
+
+# Diagram build artifacts
+.archify/

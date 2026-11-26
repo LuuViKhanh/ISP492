@@ -48,7 +48,24 @@ RATE_LIMIT_WINDOW_SECONDS = 60
 RATE_LIMIT_MAX_REQUESTS = 12  # Tối đa 12 requests / 60s cho mỗi user/IP
 
 _CONVERSATION_STORE: Dict[str, List[ChatHistoryItem]] = {}
+_CONVERSATION_STORE_MAX = 500
 _RATE_LIMIT_BUCKETS: Dict[str, deque] = defaultdict(deque)
+_RATE_LIMIT_BUCKETS_MAX = 1000
+_GENAI_CLIENTS: Dict[str, Any] = {}
+
+
+def _get_genai_client(api_key: str) -> Any:
+    client = _GENAI_CLIENTS.get(api_key)
+    if client is None:
+        client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(
+                timeout=12000,  # 12s (Google API yêu cầu tối thiểu 10s)
+                retry_options=types.HttpRetryOptions(attempts=1),
+            ),
+        )
+        _GENAI_CLIENTS[api_key] = client
+    return client
 
 
 class ChatRateLimitError(Exception):
@@ -63,6 +80,10 @@ class ChatRateLimitError(Exception):
 def check_rate_limit(rate_key: str) -> None:
     """Kiểm tra tần suất gửi tin nhắn theo user_id hoặc IP."""
     now = time.time()
+    if len(_RATE_LIMIT_BUCKETS) > _RATE_LIMIT_BUCKETS_MAX:
+        stale_keys = [k for k, b in _RATE_LIMIT_BUCKETS.items() if not b or (now - b[-1]) > RATE_LIMIT_WINDOW_SECONDS]
+        for k in stale_keys:
+            _RATE_LIMIT_BUCKETS.pop(k, None)
     bucket = _RATE_LIMIT_BUCKETS[rate_key]
     while bucket and (now - bucket[0]) > RATE_LIMIT_WINDOW_SECONDS:
         bucket.popleft()
@@ -78,7 +99,7 @@ def check_rate_limit(rate_key: str) -> None:
 
 
 async def execute_agent_chat(
-    db: AsyncSession,
+    db: Optional[AsyncSession],
     message: str,
     history: List[ChatHistoryItem],
     system_instruction: str,
@@ -107,8 +128,8 @@ async def execute_agent_chat(
         return ChatMessageResponse(
             conversation_id=conv_id,
             reply=(
-                "⚠️ **AI library (`google-genai`) is not installed on the backend server.**\n\n"
-                "👉 Developers: please stop the backend server (Ctrl+C) and run:\n"
+                "**AI library (`google-genai`) is not installed on the backend server.**\n\n"
+                "Developers: please stop the backend server (Ctrl+C) and run:\n"
                 "```bash\n"
                 "pip install google-genai==2.29.0\n"
                 "```"
@@ -125,7 +146,7 @@ async def execute_agent_chat(
         return ChatMessageResponse(
             conversation_id=conv_id,
             reply=(
-                "⚠️ **Missing API Key:** `GEMINI_API_KEY` is not configured in the `.env` file."
+                "**Missing API Key:** `GEMINI_API_KEY` is not configured in the `.env` file."
             ),
             tools_called=[],
             data={"type": "generic_answer", "code": "AI_UNAVAILABLE"},
@@ -139,14 +160,8 @@ async def execute_agent_chat(
         if m and m not in fallback_models:
             fallback_models.append(m)
 
-    # Tắt vòng lặp retry ngầm (tenacity 5 lần) của google-genai SDK để tránh treo request 60-120s khi gặp 503
-    client = genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(
-            timeout=12000,  # 12s (Google API yêu cầu tối thiểu 10s)
-            retry_options=types.HttpRetryOptions(attempts=1),
-        ),
-    )
+    # Tái sử dụng singleton genai.Client để giữ HTTP/TLS connection pool
+    client = _get_genai_client(api_key)
 
     # 2. Chuẩn bị lịch sử hội thoại (giới hạn 10 tin nhắn gần nhất)
     store_key = f"{current_user_id or 'anon'}:{conv_id}"
@@ -237,7 +252,12 @@ async def execute_agent_chat(
 
                 func = tools_map.get(call_name)
                 if func:
-                    raw_result = await func(db=db, current_user_id=current_user_id, **call_args)
+                    if db is not None:
+                        raw_result = await func(db=db, current_user_id=current_user_id, **call_args)
+                    else:
+                        from app.database.db import AsyncSessionLocal
+                        async with AsyncSessionLocal() as tool_db:
+                            raw_result = await func(db=tool_db, current_user_id=current_user_id, **call_args)
                     if isinstance(raw_result, dict):
                         tool_result = dict(raw_result)
                         raw_actions = tool_result.pop("_actions", None) or []
@@ -332,7 +352,7 @@ async def execute_agent_chat(
         return ChatMessageResponse(
             conversation_id=conv_id,
             reply=(
-                f"⚠️ **An error occurred while connecting to the AI service:** `{error_msg}`\n\n"
+                f"**An error occurred while connecting to the AI service:** `{error_msg}`\n\n"
                 "Please try again in a moment."
             ),
             tools_called=tools_called,

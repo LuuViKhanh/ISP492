@@ -185,6 +185,12 @@ class RouteOptionSchema(BaseModel):
     weather_summary: Optional[str] = None
     shap_values: Optional[Dict[str, float]] = None
     ai_explanation: Optional[Union[AIExplanationSchema, Dict[str, Any]]] = None
+    # Trường chuẩn hóa cho FE hiển thị tách bạch các phương án tuyến bay
+    strategy_code: Optional[str] = None
+    display_title: Optional[str] = None
+    corridor_type: Optional[str] = None
+    differentiator_tag: Optional[str] = None
+    comparison_vs_recommended: Optional[Dict[str, Any]] = None
 
 
 class MissionResponse(BaseModel):

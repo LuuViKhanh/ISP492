@@ -84,10 +84,11 @@ async def run_with_retry(
     worker_name: str,
     max_retries: int = 3,
     base_backoff: float = 2.0,
+    log_on_success: bool = True,
 ) -> None:
     """
     FDE-194: Chạy một worker function với cơ chế tự động thử lại.
-    Tự động ghi kết quả vào system_logs sau mỗi lần chạy (thành công hoặc lỗi).
+    Tự động ghi kết quả vào system_logs (chỉ ghi lỗi nếu log_on_success=False để tránh spam 3s/lần).
     """
     last_exc: Exception | None = None
 
@@ -96,19 +97,19 @@ async def run_with_retry(
             async with CronSessionLocal() as session:
                 await worker_fn(session)
 
-            # Ghi system log — thành công (chỉ ghi INFO để tránh spam)
-            try:
-                async with CronSessionLocal() as slog_session:
-                    from app.modules.system.service import log_system_event
-                    await log_system_event(
-                        slog_session,
-                        source=worker_name,
-                        event="WORKER_RUN",
-                        message=f"Worker '{worker_name}' chạy thành công.",
-                        level="INFO",
-                    )
-            except Exception:
-                pass
+            if log_on_success:
+                try:
+                    async with CronSessionLocal() as slog_session:
+                        from app.modules.system.service import log_system_event
+                        await log_system_event(
+                            slog_session,
+                            source=worker_name,
+                            event="WORKER_RUN",
+                            message=f"Worker '{worker_name}' chạy thành công.",
+                            level="INFO",
+                        )
+                except Exception:
+                    pass
             return  # thành công
 
         except Exception as exc:

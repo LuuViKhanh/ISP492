@@ -48,7 +48,8 @@ def get_drone_asset_serial(drone: Drone, hub_code: Optional[str] = None) -> str:
         m_tag = "X6"
     else:
         m_tag = "DRN"
-    clean_id = str(drone.id).replace("DRN-", "")
+    m_num = re.search(r"DRN-?(\d+)$", str(drone.id))
+    clean_id = m_num.group(1) if m_num else str(drone.id).replace("DRN-", "")
     return f"{m_tag}-{h_tag}-{clean_id}"
 
 
@@ -335,16 +336,17 @@ async def get_drones_summary(
     db: AsyncSession = Depends(get_async_db),
 ):
     """Trả về 4 KPI đầu trang Drones list."""
-    total = (await db.execute(select(func.count(Drone.id)))).scalar() or 0
-    available = (await db.execute(select(func.count(Drone.id)).where(Drone.status == DroneStatus.AVAILABLE))).scalar() or 0
-    maintenance = (await db.execute(select(func.count(Drone.id)).where(Drone.status == DroneStatus.MAINTENANCE))).scalar() or 0
-    in_flight = (await db.execute(select(func.count(Drone.id)).where(Drone.status == DroneStatus.IN_FLIGHT))).scalar() or 0
+    rows = (await db.execute(
+        select(Drone.status, func.count(Drone.id)).group_by(Drone.status)
+    )).all()
+    counts = {st: int(cnt) for st, cnt in rows}
+    total = sum(counts.values())
 
     return DroneAdminSummaryResponse(
-        total_drones=int(total),
-        available_drones=int(available),
-        maintenance_drones=int(maintenance),
-        in_flight_drones=int(in_flight),
+        total_drones=total,
+        available_drones=counts.get(DroneStatus.AVAILABLE, 0),
+        maintenance_drones=counts.get(DroneStatus.MAINTENANCE, 0),
+        in_flight_drones=counts.get(DroneStatus.IN_FLIGHT, 0),
     )
 
 
@@ -450,7 +452,8 @@ async def update_drone_admin_state(
         raise HTTPException(status_code=400, detail="admin_state must be 'ACTIVE' or 'INACTIVE'")
 
     await db.commit()
-    await db.refresh(drone)
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
     return {
         "message": f"Drone {drone.id} admin_state updated to {target}",
         "drone_id": drone.id,
@@ -495,8 +498,9 @@ async def get_drone(
     if not drone:
         raise HTTPException(status_code=404, detail="Drone not found")
 
-    # Hub info
-    hub = await db.get(Hub, drone.current_hub_id) if drone.current_hub_id else None
+    # Hub info từ RAM cache
+    from app.modules.missions.bundle_service import get_all_hubs_cached
+    hub = next((h for h in await get_all_hubs_cached(db) if h.id == drone.current_hub_id), None) if drone.current_hub_id else None
     hub_name = hub.name if hub else (f"Hub #{drone.current_hub_id}" if drone.current_hub_id else None)
     hub_code = hub.code if hub else None
 
@@ -504,23 +508,44 @@ async def get_drone(
     bat_res = await db.execute(select(Battery).where(Battery.drone_id == drone.id))
     bat = bat_res.scalars().first()
 
-    # Work orders
-    wo_res = await db.execute(
-        select(WorkOrder).where(WorkOrder.drone_id == drone.id).order_by(WorkOrder.id.desc())
-    )
-    work_orders = wo_res.scalars().all()
-    open_wos = [w for w in work_orders if w.status != WorkOrderStatus.COMPLETED]
-    comp_wos = [w for w in work_orders if w.status == WorkOrderStatus.COMPLETED]
+    # Work orders: chỉ lấy counts trong SQL + tối đa 2 WO gần nhất + 1 WO mở gần nhất
+    from sqlalchemy import case
+    wo_counts_row = (await db.execute(
+        select(
+            func.count(case((WorkOrder.status != WorkOrderStatus.COMPLETED, 1))),
+            func.count(case((WorkOrder.status == WorkOrderStatus.COMPLETED, 1))),
+        ).where(WorkOrder.drone_id == drone.id)
+    )).one()
+    open_wo_count = int(wo_counts_row[0] or 0)
+    comp_wo_count = int(wo_counts_row[1] or 0)
 
-    # Lấy tên technician cho work orders gần nhất
-    tech_ids = {w.technician_id for w in work_orders if w.technician_id}
+    recent_wo_list = (await db.execute(
+        select(WorkOrder).where(WorkOrder.drone_id == drone.id).order_by(WorkOrder.id.desc()).limit(2)
+    )).scalars().all()
+
+    first_comp_resolved_at = (await db.execute(
+        select(WorkOrder.resolved_at)
+        .where(WorkOrder.drone_id == drone.id, WorkOrder.status == WorkOrderStatus.COMPLETED)
+        .order_by(WorkOrder.id.desc())
+        .limit(1)
+    )).scalar_one_or_none() if comp_wo_count > 0 else None
+
+    first_open_issue = (await db.execute(
+        select(WorkOrder.issue_description)
+        .where(WorkOrder.drone_id == drone.id, WorkOrder.status != WorkOrderStatus.COMPLETED)
+        .order_by(WorkOrder.id.desc())
+        .limit(1)
+    )).scalar_one_or_none() if open_wo_count > 0 else None
+
+    # Lấy tên technician chỉ cho 2 work orders gần nhất
+    tech_ids = {w.technician_id for w in recent_wo_list if w.technician_id}
     tech_map = {}
     if tech_ids:
-        users_res = await db.execute(select(User).where(User.id.in_(tech_ids)))
-        tech_map = {u.id: (u.full_name or "Technician") for u in users_res.scalars().all()}
+        users_res = await db.execute(select(User.id, User.full_name).where(User.id.in_(tech_ids)))
+        tech_map = {uid: (fname or "Technician") for uid, fname in users_res.all()}
 
     recent_wos: list[DroneOverviewWorkOrderItem] = []
-    for w in work_orders[:2]:
+    for w in recent_wo_list:
         upd = (w.resolved_at or w.created_at).strftime("%d/%m/%Y, %H:%M") if (w.resolved_at or w.created_at) else None
         recent_wos.append(
             DroneOverviewWorkOrderItem(
@@ -539,38 +564,32 @@ async def get_drone(
     sched = sched_res.scalars().first()
 
     last_maint_date = None
-    if comp_wos and comp_wos[0].resolved_at:
-        last_maint_date = comp_wos[0].resolved_at.strftime("%d/%m/%Y, %H:%M")
-    elif work_orders and (work_orders[0].resolved_at or work_orders[0].created_at):
-        dt = work_orders[0].resolved_at or work_orders[0].created_at
+    if first_comp_resolved_at:
+        last_maint_date = first_comp_resolved_at.strftime("%d/%m/%Y, %H:%M")
+    elif recent_wo_list and (recent_wo_list[0].resolved_at or recent_wo_list[0].created_at):
+        dt = recent_wo_list[0].resolved_at or recent_wo_list[0].created_at
         last_maint_date = dt.strftime("%d/%m/%Y, %H:%M")
     elif sched and sched.last_inspection_at:
         last_maint_date = sched.last_inspection_at.strftime("%d/%m/%Y, %H:%M")
 
     next_maint_date = sched.next_inspection_at.strftime("%d/%m/%Y, %H:%M") if sched and sched.next_inspection_at else None
-    maint_schedule_status = "Overdue" if len(open_wos) > 0 else (str(sched.status).capitalize() if sched and sched.status else "Normal")
+    maint_schedule_status = "Overdue" if open_wo_count > 0 else (str(sched.status).capitalize() if sched and sched.status else "Normal")
     maint_note = (
-        open_wos[0].issue_description if open_wos and open_wos[0].issue_description
+        first_open_issue if first_open_issue
         else (f"{sched.maintenance_type} (every {sched.interval_days} days / {sched.interval_flight_hours:.0f} flight hrs)" if sched else None)
     )
 
-    # Missions / Flight activity từ DB thật
-    msn_res = await db.execute(
-        select(Mission).where(Mission.drone_id == drone.id).order_by(Mission.departed_at.desc().nullslast())
-    )
-    missions = msn_res.scalars().all()
-    total_flights = len(missions)
-    
-    total_hours = 0.0
-    for m in missions:
-        if m.arrived_at and m.departed_at:
-            total_hours += (m.arrived_at - m.departed_at).total_seconds() / 3600.0
-
-    last_flight_str = (
-        missions[0].departed_at.strftime("%d/%m/%Y, %H:%M")
-        if missions and missions[0].departed_at
-        else None
-    )
+    # Missions / Flight activity tổng hợp trực tiếp trong SQL
+    msn_agg = (await db.execute(
+        select(
+            func.count(Mission.id),
+            func.coalesce(func.sum(func.extract("epoch", Mission.arrived_at - Mission.departed_at)), 0.0),
+            func.max(Mission.departed_at),
+        ).where(Mission.drone_id == drone.id)
+    )).one()
+    total_flights = int(msn_agg[0] or 0)
+    total_hours = float(msn_agg[1] or 0.0) / 3600.0
+    last_flight_str = msn_agg[2].strftime("%d/%m/%Y, %H:%M") if msn_agg[2] else None
 
     st_val = drone.status.value.upper() if hasattr(drone.status, "value") else str(drone.status).upper()
 
@@ -594,8 +613,8 @@ async def get_drone(
         installed_battery_serial=bat.serial_number if bat else None,
         installed_battery_model=bat.battery_model if bat else None,
         maintenance_status=DroneOverviewMaintenanceStatus(
-            open_work_orders=len(open_wos),
-            completed_work_orders=len(comp_wos),
+            open_work_orders=open_wo_count,
+            completed_work_orders=comp_wo_count,
             last_maintenance=last_maint_date,
             next_maintenance=next_maint_date,
             schedule_status=maint_schedule_status,
@@ -907,6 +926,64 @@ DRONE_DEFAULT_COSTS = {
 }
 
 
+@router.get(
+    "/drones/maintenance-due",
+    summary="Danh sách drone cần bảo dưỡng định kỳ theo giờ bay",
+)
+async def get_drones_maintenance_due(
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    **[Admin API] Danh sách drone đang tiến gần hoặc vượt ngưỡng bảo dưỡng định kỳ.**
+
+    - `status = WARNING`: 40h ≤ giờ bay < 50h — sắp đến hạn.
+    - `status = OVERDUE`: giờ bay ≥ 50h — đã quá hạn, cần bảo dưỡng ngay.
+    - Ngưỡng: 40h warning / 50h overdue (định nghĩa trong preventive_maintenance_scheduler).
+    """
+    from app.modules.fleet.technician.service import WARNING_THRESHOLD_HOURS, MAINTENANCE_THRESHOLD_HOURS
+    from app.modules.system.models import Hub
+
+    result = await db.execute(
+        select(Drone).where(
+            Drone.total_flight_hours >= WARNING_THRESHOLD_HOURS
+        ).order_by(Drone.total_flight_hours.desc())
+    )
+    drones = result.scalars().all()
+
+    hub_ids = {d.current_hub_id for d in drones if d.current_hub_id}
+    hub_map = {}
+    if hub_ids:
+        hubs = (await db.execute(select(Hub).where(Hub.id.in_(hub_ids)))).scalars().all()
+        hub_map = {h.id: h.name for h in hubs}
+
+    items = []
+    for d in drones:
+        hours = float(d.total_flight_hours or 0.0)
+        is_overdue = hours >= MAINTENANCE_THRESHOLD_HOURS
+        items.append({
+            "drone_id": d.id,
+            "drone_name": d.name,
+            "drone_model": d.model,
+            "serial_number": d.serial_number,
+            "hub_id": d.current_hub_id,
+            "hub_name": hub_map.get(d.current_hub_id) if d.current_hub_id else None,
+            "total_flight_hours": round(hours, 2),
+            "maintenance_threshold_hours": MAINTENANCE_THRESHOLD_HOURS,
+            "hours_until_due": round(max(0.0, MAINTENANCE_THRESHOLD_HOURS - hours), 2),
+            "status": "OVERDUE" if is_overdue else "WARNING",
+            "last_maintenance_at": d.last_maintenance_at.isoformat() if d.last_maintenance_at else None,
+            "drone_status": d.status.value if hasattr(d.status, "value") else str(d.status),
+        })
+
+    return {
+        "total": len(items),
+        "overdue_count": sum(1 for i in items if i["status"] == "OVERDUE"),
+        "warning_count": sum(1 for i in items if i["status"] == "WARNING"),
+        "drones": items,
+    }
+
+
 @router.post("/drones", response_model=DroneResponse, status_code=201, summary="Thêm drone mới vào kho")
 async def create_drone(
     body: DroneCreate,
@@ -929,7 +1006,9 @@ async def create_drone(
     if existing_sn.scalar_one_or_none():
         raise HTTPException(status_code=400, detail=f"Serial number '{serial_str}' already exists in the system.")
 
-    drone_id = await generate_sequential_id(db, Drone, "DRN")
+    drone_id = await generate_sequential_id(
+        db, Drone, "DRN", model_name=body.model, payload_capacity_kg=body.payload_capacity_kg
+    )
 
     drone_name = (body.name or "").strip()
     if not drone_name:
@@ -955,7 +1034,8 @@ async def create_drone(
     )
     db.add(drone)
     await db.commit()
-    await db.refresh(drone)
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
 
     # Ghi nhận chi phí mua sắm Drone
     try:
@@ -1026,7 +1106,8 @@ async def update_drone(
         drone.current_hub_id = body.current_hub_id
 
     await db.commit()
-    await db.refresh(drone)
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
     return drone
 
 
@@ -1041,6 +1122,8 @@ async def delete_drone(
         raise HTTPException(status_code=404, detail="Drone not found")
     await db.delete(drone)
     await db.commit()
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
 
 
 # ── Battery Endpoints ─────────────────────────────────────────────────────────
@@ -1168,7 +1251,9 @@ async def create_battery(
         if existing.scalar_one_or_none():
             raise HTTPException(status_code=400, detail=f"Serial number '{serial_str}' already exists in the system.")
 
-        battery_id = await generate_sequential_id(db, Battery, "BAT")
+        battery_id = await generate_sequential_id(
+            db, Battery, "BAT", model_name=body.battery_model
+        )
         total_cost = body.acquisition_cost if (body.acquisition_cost and body.acquisition_cost > 0) else unit_cost
 
         battery = Battery(
@@ -1185,6 +1270,8 @@ async def create_battery(
         )
         db.add(battery)
         await db.commit()
+        from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+        invalidate_route_analysis_cache()
         await db.refresh(battery)
 
         try:
@@ -1244,8 +1331,25 @@ async def create_battery(
         created_batteries = []
         battery_ids = []
 
-        for sn in serials:
-            b_id = await generate_sequential_id(db, Battery, "BAT")
+        # Sinh mã {ModelCode}-BATXXXX 1 lần rồi tăng tuần tự trong RAM thay vì N câu SELECT MAX
+        first_bid = await generate_sequential_id(
+            db, Battery, "BAT", model_name=body.battery_model
+        )
+        m_bat = re.match(r"^(.*BAT-?)(\d+)$", first_bid)
+        if m_bat:
+            prefix, num_part = m_bat.group(1), m_bat.group(2)
+            base_num = int(num_part)
+            pad_len = len(num_part)
+        else:
+            prefix, base_num, pad_len = "GEN-BAT", None, 4
+
+        for idx, sn in enumerate(serials):
+            if base_num is not None:
+                b_id = f"{prefix}{(base_num + idx):0{pad_len}d}"
+            else:
+                b_id = await generate_sequential_id(
+                    db, Battery, "BAT", model_name=body.battery_model
+                )
             b_obj = Battery(
                 id=b_id,
                 serial_number=sn,
@@ -1263,8 +1367,8 @@ async def create_battery(
             battery_ids.append(b_id)
 
         await db.commit()
-        for b in created_batteries:
-            await db.refresh(b)
+        from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+        invalidate_route_analysis_cache()
 
         try:
             hub_info = f"at Hub #{body.current_hub_id}" if body.current_hub_id else "into Admin central warehouse"
@@ -1334,7 +1438,8 @@ async def update_battery(
     battery.update_at = datetime.now(_tz.utc)
 
     await db.commit()
-    await db.refresh(battery)
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
     catalog_map = await _get_catalog_map(db)
     return _battery_to_response(battery, catalog_map)
 
@@ -1350,6 +1455,8 @@ async def delete_battery(
         raise HTTPException(status_code=404, detail="Battery not found")
     await db.delete(battery)
     await db.commit()
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
 
 
 @router.post("/batteries/supply", response_model=BatterySupplyResponse, summary="Phân bổ pin từ kho Admin về Hub & Gửi thông báo cho Technician")
@@ -1419,6 +1526,8 @@ async def supply_batteries(
         ))
 
     await db.commit()
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
 
     # Ghi log activity
     try:
@@ -1493,6 +1602,8 @@ async def create_battery_model(
     db.add(cat)
     await db.commit()
     await db.refresh(cat)
+    from app.modules.missions.bundle_service import invalidate_planning_metadata_caches
+    invalidate_planning_metadata_caches()
     return cat
 
 
@@ -1523,4 +1634,65 @@ async def update_battery_model(
 
     await db.commit()
     await db.refresh(cat)
+    from app.modules.missions.bundle_service import invalidate_planning_metadata_caches
+    invalidate_planning_metadata_caches()
     return cat
+
+
+# ── Drone Daily Stats ─────────────────────────────────────────────────────────
+
+@router.get(
+    "/drones/daily-stats",
+    summary="Thống kê hoạt động drone theo ngày",
+)
+async def get_drone_daily_stats(
+    drone_id: Optional[str] = Query(None, description="Filter theo drone_id cụ thể"),
+    days: int = Query(30, ge=1, le=365, description="Số ngày gần nhất"),
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    **[Admin] Lịch sử hoạt động drone theo ngày.**
+
+    Trả về dữ liệu `{stat_date, drone_id, drone_name, mission_count, completed_count,
+    incident_count, total_distance_km, total_flight_min, total_energy_wh}`.
+
+    Dùng để vẽ trend chart utilization per drone.
+    """
+    from datetime import timedelta
+    from app.modules.fleet.models import DroneDailyStat
+
+    cutoff = datetime.now() - timedelta(days=days)
+
+    q = select(DroneDailyStat).where(DroneDailyStat.stat_date >= cutoff)
+    if drone_id:
+        q = q.where(DroneDailyStat.drone_id == drone_id)
+    q = q.order_by(DroneDailyStat.stat_date.desc(), DroneDailyStat.drone_id)
+
+    stats = (await db.execute(q)).scalars().all()
+
+    # Drone names
+    drone_ids = {s.drone_id for s in stats}
+    drone_name_map: dict[str, str] = {}
+    if drone_ids:
+        drones = (await db.execute(select(Drone).where(Drone.id.in_(drone_ids)))).scalars().all()
+        drone_name_map = {d.id: d.name for d in drones}
+
+    return {
+        "days": days,
+        "total_records": len(stats),
+        "data": [
+            {
+                "stat_date": s.stat_date.strftime("%Y-%m-%d") if s.stat_date else None,
+                "drone_id": s.drone_id,
+                "drone_name": drone_name_map.get(s.drone_id, s.drone_id),
+                "mission_count": s.mission_count,
+                "completed_count": s.completed_count,
+                "incident_count": s.incident_count,
+                "total_distance_km": s.total_distance_km,
+                "total_flight_min": s.total_flight_min,
+                "total_energy_wh": s.total_energy_wh,
+            }
+            for s in stats
+        ],
+    }

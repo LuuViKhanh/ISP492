@@ -1,13 +1,18 @@
-"""
-[Technician] Supplies — Xem và đề xuất linh kiện tại Hub của mình
+﻿"""
+[Technician] Supplies â€” Xem vÃ  quáº£n lÃ½ linh kiá»‡n táº¡i Hub cá»§a mÃ¬nh
 
 Endpoints:
-  GET  /technician/supplies                       — vật tư tại Hub mình
-  GET  /technician/supplies/categories            — danh mục linh kiện
-  POST /technician/supplies/parts-requests        — tạo đề xuất thay linh kiện
-  GET  /technician/supplies/parts-requests        — danh sách đề xuất của mình
-  GET  /technician/supplies/parts-requests/{id}   — chi tiết đề xuất
-  PATCH /technician/supplies/parts-requests/{id}/fulfill — xác nhận đã thay xong
+  GET  /technician/supplies                       â€” váº­t tÆ° táº¡i Hub mÃ¬nh
+  GET  /technician/supplies/categories            â€” danh má»¥c linh kiá»‡n
+  POST /technician/supplies/parts-requests        â€” táº¡o Ä‘á» xuáº¥t thay linh kiá»‡n
+  GET  /technician/supplies/parts-requests        â€” danh sÃ¡ch Ä‘á» xuáº¥t cá»§a mÃ¬nh
+  GET  /technician/supplies/parts-requests/{id}   â€” chi tiáº¿t Ä‘á» xuáº¥t
+  PATCH /technician/supplies/parts-requests/{id}/fulfill â€” xÃ¡c nháº­n Ä‘Ã£ thay xong
+  GET  /technician/supplies/hub-detail            â€” chi tiáº¿t tá»“n kho táº¡i Hub
+  POST /technician/supplies/adjust                â€” Ä‘iá»u chá»‰nh sá»‘ lÆ°á»£ng kiá»ƒm kÃª
+  POST /technician/supplies/discard               â€” ghi nháº­n linh kiá»‡n há»ng
+  PATCH /technician/supplies/threshold            â€” Ä‘áº·t ngÆ°á»¡ng cáº£nh bÃ¡o
+  GET  /technician/supplies/transactions          â€” lá»‹ch sá»­ biáº¿n Ä‘á»™ng váº­t tÆ°
 """
 
 from datetime import datetime, timezone
@@ -29,7 +34,7 @@ router = APIRouter(prefix="/technician/supplies", tags=["Technician - Supplies"]
 allow_tech = RoleChecker([UserRole.TECHNICIAN, UserRole.ADMIN])
 
 
-# ── Schemas ────────────────────────────────────────────────────────
+# â”€â”€ Schemas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class PartCategoryOut(BaseModel):
     id: int
@@ -86,10 +91,10 @@ def _get_tech_hub(user: CurrentUser) -> int:
     return user.hub_id
 
 
-# ── Endpoints ──────────────────────────────────────────────────────
+# â”€â”€ Endpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.get("/categories", response_model=List[PartCategoryOut],
-            summary="Danh mục linh kiện / vật tư có thể đề xuất")
+            summary="Danh má»¥c linh kiá»‡n / váº­t tÆ° cÃ³ thá»ƒ Ä‘á» xuáº¥t")
 async def list_categories(
     db: AsyncSession = Depends(get_async_db),
     user: CurrentUser = Depends(allow_tech),
@@ -109,7 +114,7 @@ async def list_categories(
 
 
 @router.get("", response_model=List[HubSupplyOut],
-            summary="Vật tư / linh kiện hiện có tại Hub của Technician")
+            summary="Váº­t tÆ° / linh kiá»‡n hiá»‡n cÃ³ táº¡i Hub cá»§a Technician")
 async def get_hub_supplies(
     db: AsyncSession = Depends(get_async_db),
     user: CurrentUser = Depends(allow_tech),
@@ -135,16 +140,16 @@ async def get_hub_supplies(
 
 
 @router.post("/parts-requests", response_model=PartsRequestOut,
-             summary="Tạo đề xuất sử dụng linh kiện để sửa chữa")
+             summary="Táº¡o Ä‘á» xuáº¥t sá»­ dá»¥ng linh kiá»‡n Ä‘á»ƒ sá»­a chá»¯a")
 async def create_parts_request(
     body: PartsRequestCreate,
     db: AsyncSession = Depends(get_async_db),
     user: CurrentUser = Depends(allow_tech),
 ):
     """
-    Technician tạo đề xuất.
-    - Hub đủ hàng → AUTO_APPROVED, trừ ngay.
-    - Không đủ → PENDING, chờ Admin duyệt / điều phối.
+    Technician táº¡o Ä‘á» xuáº¥t.
+    - Hub Ä‘á»§ hÃ ng â†’ AUTO_APPROVED, trá»« ngay.
+    - KhÃ´ng Ä‘á»§ â†’ PENDING, chá» Admin duyá»‡t / Ä‘iá»u phá»‘i.
     """
     hub_id = _get_tech_hub(user)
     now = datetime.now(timezone.utc)
@@ -173,7 +178,7 @@ async def create_parts_request(
     )
     if has_stock:
         req.reviewed_at = now
-        req.admin_note = "Auto-approved — sufficient supplies at hub."
+        req.admin_note = "Auto-approved â€” sufficient supplies at hub."
 
     db.add(req)
     await db.flush()
@@ -189,12 +194,9 @@ async def create_parts_request(
             created_at=now,
         ))
 
-    await db.commit()
-    await db.refresh(req)
-    out = PartsRequestOut.model_validate(req)
-    out.part_name = cat.name
+    await db.flush()
 
-    # Notify Admin khi có đề xuất mới chờ duyệt
+    # Notify Admin khi cÃ³ Ä‘á» xuáº¥t má»›i chá» duyá»‡t (trong cÃ¹ng 1 transaction)
     if not has_stock:
         try:
             from app.modules.system.models import Notification, NotificationType
@@ -208,25 +210,27 @@ async def create_parts_request(
                 for _uid in _admin_ids:
                     db.add(Notification(
                         user_id=_uid,
-                        title=f"🔧 New Parts Request — Hub #{hub_id}",
+                        title=f"New Parts Request â€” Hub #{hub_id}",
                         message=(
                             f"Technician requested {body.quantity_needed}x {cat.name}"
                             f"{' for drone ' + body.drone_id if body.drone_id else ''}. "
-                            f"Hub #{hub_id} has insufficient stock — Admin approval required."
+                            f"Hub #{hub_id} has insufficient stock â€” Admin approval required."
                         ),
                         notifications_type=NotificationType.MAINTENANCE,
                         reference_id=f"PARTS_REQUEST_{req.id}",
                         created_at=now,
                     ))
-                await db.commit()
         except Exception as _e:
             print(f"[NOTIF] Parts request notify error: {_e}")
 
+    await db.commit()
+    out = PartsRequestOut.model_validate(req)
+    out.part_name = cat.name
     return out
 
 
 @router.get("/parts-requests", response_model=List[PartsRequestOut],
-            summary="Đề xuất linh kiện của Technician hiện tại")
+            summary="Äá» xuáº¥t linh kiá»‡n cá»§a Technician hiá»‡n táº¡i")
 async def list_my_requests(
     status: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_async_db),
@@ -255,7 +259,7 @@ async def list_my_requests(
 
 
 @router.get("/parts-requests/{request_id}", response_model=PartsRequestOut,
-            summary="Chi tiết đề xuất linh kiện")
+            summary="Chi tiáº¿t Ä‘á» xuáº¥t linh kiá»‡n")
 async def get_request_detail(
     request_id: int,
     db: AsyncSession = Depends(get_async_db),
@@ -273,10 +277,10 @@ async def get_request_detail(
 
 
 @router.patch("/parts-requests/{request_id}/fulfill",
-              summary="Xác nhận đã thay linh kiện xong")
+              summary="XÃ¡c nháº­n Ä‘Ã£ thay linh kiá»‡n xong")
 async def mark_fulfilled(
     request_id: int,
-    actual_cost: Optional[float] = Query(None, description="Chi phí thực tế (VNĐ)"),
+    actual_cost: Optional[float] = Query(None, description="Chi phÃ­ thá»±c táº¿ (VNÄ)"),
     db: AsyncSession = Depends(get_async_db),
     user: CurrentUser = Depends(allow_tech),
 ):
@@ -297,20 +301,20 @@ async def mark_fulfilled(
             "status": PartsRequestStatus.FULFILLED.value}
 
 
-# ══════════════════════════════════════════════════════════════════
-# HUB-LEVEL SUPPLY MANAGEMENT (Technician tại Hub mình)
-# ══════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# HUB-LEVEL SUPPLY MANAGEMENT (Technician táº¡i Hub mÃ¬nh)
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class AdjustBody(BaseModel):
     part_category_id: int
-    quantity_delta: int          # dương = tìm thêm, âm = mất / sai số
+    quantity_delta: int          # dÆ°Æ¡ng = tÃ¬m thÃªm, Ã¢m = máº¥t / sai sá»‘
     note: Optional[str] = None
 
 
 class DiscardBody(BaseModel):
     part_category_id: int
     quantity: int
-    note: Optional[str] = None   # lý do: vỡ, han gỉ, hết hạn...
+    note: Optional[str] = None   # lÃ½ do: vá»¡, han gá»‰, háº¿t háº¡n...
 
 
 class ThresholdBody(BaseModel):
@@ -318,7 +322,7 @@ class ThresholdBody(BaseModel):
     min_stock_threshold: int
 
 
-@router.get("/hub-detail", summary="Chi tiết tồn kho spare part tại Hub của Technician")
+@router.get("/hub-detail", summary="Chi tiáº¿t tá»“n kho spare part táº¡i Hub cá»§a Technician")
 async def get_my_hub_detail(
     low_stock_only: bool = Query(False),
     category_type: Optional[str] = Query(None),
@@ -326,8 +330,8 @@ async def get_my_hub_detail(
     user: CurrentUser = Depends(allow_tech),
 ):
     """
-    Xem toàn bộ spare part tại Hub của mình — số lượng, ngưỡng cảnh báo,
-    giá tham chiếu, trạng thái low_stock.
+    Xem toÃ n bá»™ spare part táº¡i Hub cá»§a mÃ¬nh â€” sá»‘ lÆ°á»£ng, ngÆ°á»¡ng cáº£nh bÃ¡o,
+    giÃ¡ tham chiáº¿u, tráº¡ng thÃ¡i low_stock.
     """
     from app.modules.system.models import Hub
     hub_id = _get_tech_hub(user)
@@ -371,15 +375,15 @@ async def get_my_hub_detail(
     }
 
 
-@router.post("/adjust", summary="Điều chỉnh số lượng sau kiểm kê thực tế")
+@router.post("/adjust", summary="Äiá»u chá»‰nh sá»‘ lÆ°á»£ng sau kiá»ƒm kÃª thá»±c táº¿")
 async def adjust_supply(
     body: AdjustBody,
     db: AsyncSession = Depends(get_async_db),
     user: CurrentUser = Depends(allow_tech),
 ):
     """
-    Technician điều chỉnh số lượng thực tế tại Hub của mình sau khi kiểm kê.
-    Sinh SupplyTransaction với reason=Adjust để ghi log.
+    Technician Ä‘iá»u chá»‰nh sá»‘ lÆ°á»£ng thá»±c táº¿ táº¡i Hub cá»§a mÃ¬nh sau khi kiá»ƒm kÃª.
+    Sinh SupplyTransaction vá»›i reason=Adjust Ä‘á»ƒ ghi log.
     """
     hub_id = _get_tech_hub(user)
     cat = await db.get(PartCategory, body.part_category_id)
@@ -428,15 +432,15 @@ async def adjust_supply(
     }
 
 
-@router.post("/discard", summary="Ghi nhận linh kiện hỏng / hết hạn tại Hub")
+@router.post("/discard", summary="Ghi nháº­n linh kiá»‡n há»ng / háº¿t háº¡n táº¡i Hub")
 async def discard_supply(
     body: DiscardBody,
     db: AsyncSession = Depends(get_async_db),
     user: CurrentUser = Depends(allow_tech),
 ):
     """
-    Technician ghi nhận linh kiện không còn sử dụng được (vỡ, hỏng, hết hạn)
-    → trừ tồn kho, log lý do.
+    Technician ghi nháº­n linh kiá»‡n khÃ´ng cÃ²n sá»­ dá»¥ng Ä‘Æ°á»£c (vá»¡, há»ng, háº¿t háº¡n)
+    â†’ trá»« tá»“n kho, log lÃ½ do.
     """
     if body.quantity < 1:
         raise HTTPException(status_code=400, detail="Minimum discard quantity is 1.")
@@ -478,15 +482,15 @@ async def discard_supply(
     }
 
 
-@router.patch("/threshold", summary="Đặt ngưỡng cảnh báo tồn kho tại Hub")
+@router.patch("/threshold", summary="Äáº·t ngÆ°á»¡ng cáº£nh bÃ¡o tá»“n kho táº¡i Hub")
 async def set_threshold(
     body: ThresholdBody,
     db: AsyncSession = Depends(get_async_db),
     user: CurrentUser = Depends(allow_tech),
 ):
     """
-    Technician tự thiết lập ngưỡng cảnh báo cho từng loại linh kiện tại Hub mình.
-    Khi quantity <= min_stock_threshold → hệ thống đánh dấu low_stock.
+    Technician tá»± thiáº¿t láº­p ngÆ°á»¡ng cáº£nh bÃ¡o cho tá»«ng loáº¡i linh kiá»‡n táº¡i Hub mÃ¬nh.
+    Khi quantity <= min_stock_threshold â†’ há»‡ thá»‘ng Ä‘Ã¡nh dáº¥u low_stock.
     """
     if body.min_stock_threshold < 0:
         raise HTTPException(status_code=400, detail="Threshold must be >= 0.")
@@ -520,7 +524,7 @@ async def set_threshold(
     }
 
 
-@router.get("/transactions", summary="Lịch sử biến động vật tư tại Hub của Technician")
+@router.get("/transactions", summary="Lá»‹ch sá»­ biáº¿n Ä‘á»™ng váº­t tÆ° táº¡i Hub cá»§a Technician")
 async def get_my_hub_transactions(
     part_category_id: Optional[int] = Query(None),
     reason: Optional[str] = Query(None),
@@ -528,7 +532,7 @@ async def get_my_hub_transactions(
     db: AsyncSession = Depends(get_async_db),
     user: CurrentUser = Depends(allow_tech),
 ):
-    """Xem log tất cả biến động vật tư tại Hub của mình (nhập, xuất, hủy, điều chỉnh)."""
+    """Xem log táº¥t cáº£ biáº¿n Ä‘á»™ng váº­t tÆ° táº¡i Hub cá»§a mÃ¬nh (nháº­p, xuáº¥t, há»§y, Ä‘iá»u chá»‰nh)."""
     hub_id = _get_tech_hub(user)
     q = select(SupplyTransaction).where(
         SupplyTransaction.hub_id == hub_id
@@ -558,173 +562,3 @@ async def get_my_hub_transactions(
     ]
 
 
-# ══════════════════════════════════════════════════════════════════
-# REPLACEMENT REQUESTS (Technician)
-# Yêu cầu thay thế pin hoặc linh kiện
-# ══════════════════════════════════════════════════════════════════
-
-from app.modules.supplies.models import (
-    ReplacementRequest, ReplacementType, ReplacementStatus,
-)
-
-
-class ReplacementRequestCreate(BaseModel):
-    type: ReplacementType                        # BATTERY hoặc PART
-    damaged_item_id: Optional[str] = None        # battery_id / drone_id bị hỏng
-    part_category_id: Optional[int] = None       # bắt buộc nếu type=PART
-    quantity: int = 1
-    reason: str
-    photo_urls: Optional[List[str]] = None
-
-
-class ReplacementRequestOut(BaseModel):
-    request_id: int
-    type: str
-    damaged_item_id: Optional[str] = None
-    part_category_id: Optional[int] = None
-    part_name: Optional[str] = None
-    quantity: int
-    reason: str
-    status: str
-    hub_id: int
-    requested_by: str
-    photo_urls: Optional[List[str]] = None
-    supplied_item_id: Optional[str] = None
-    supplied_at: Optional[datetime] = None
-    rejection_reason: Optional[str] = None
-    created_at: datetime
-
-    class Config: from_attributes = True
-
-
-@router.post("/replacement-requests", response_model=ReplacementRequestOut,
-             summary="Tạo yêu cầu thay thế pin hoặc linh kiện")
-async def create_replacement_request(
-    body: ReplacementRequestCreate,
-    db: AsyncSession = Depends(get_async_db),
-    user: CurrentUser = Depends(allow_tech),
-):
-    hub_id = _get_tech_hub(user)
-
-    if body.type == ReplacementType.PART and not body.part_category_id:
-        raise HTTPException(status_code=400, detail="part_category_id là bắt buộc khi type=PART.")
-    if body.quantity < 1:
-        raise HTTPException(status_code=400, detail="Số lượng tối thiểu là 1.")
-
-    now = datetime.now(timezone.utc)
-    req = ReplacementRequest(
-        requested_by=user.id,
-        hub_id=hub_id,
-        type=body.type,
-        damaged_item_id=body.damaged_item_id,
-        part_category_id=body.part_category_id,
-        quantity=body.quantity,
-        reason=body.reason,
-        photo_urls=body.photo_urls,
-        status=ReplacementStatus.AWAITING_SUPPLY,
-        created_at=now,
-    )
-    db.add(req)
-    await db.commit()
-    await db.refresh(req)
-
-    # Notify Admin
-    try:
-        from app.modules.system.models import Notification, NotificationType
-        from app.modules.auth.models import User as _User, ROLE_NAME_TO_ID as _ROLE_MAP
-        from app.shared.roles import UserRole as _Role
-        _admin_role = _ROLE_MAP.get(_Role.ADMIN)
-        if _admin_role:
-            _admin_ids = (await db.execute(
-                select(_User.id).where(_User.role_id == _admin_role)
-            )).scalars().all()
-            type_label = "pin" if body.type == ReplacementType.BATTERY else "linh kiện"
-            for _uid in _admin_ids:
-                db.add(Notification(
-                    user_id=_uid,
-                    title=f"🔄 Yêu cầu thay {type_label} mới — Hub #{hub_id}",
-                    message=(
-                        f"Technician yêu cầu thay {body.quantity}x {type_label}. "
-                        f"Lý do: {body.reason[:80]}. Cần Admin cấp phát."
-                    ),
-                    notifications_type=NotificationType.MAINTENANCE,
-                    reference_id=f"REPLACEMENT_{req.id}",
-                    created_at=now,
-                ))
-            await db.commit()
-    except Exception:
-        pass
-
-    part_name = None
-    if req.part_category_id:
-        cat = await db.get(PartCategory, req.part_category_id)
-        part_name = cat.name if cat else None
-
-    return ReplacementRequestOut(
-        request_id=req.id, type=req.type.value, damaged_item_id=req.damaged_item_id,
-        part_category_id=req.part_category_id, part_name=part_name,
-        quantity=req.quantity, reason=req.reason, status=req.status.value,
-        hub_id=req.hub_id, requested_by=req.requested_by,
-        photo_urls=req.photo_urls, created_at=req.created_at,
-    )
-
-
-@router.get("/replacement-requests", response_model=List[ReplacementRequestOut],
-            summary="Danh sách yêu cầu thay thế của Technician")
-async def list_my_replacement_requests(
-    status: Optional[str] = Query(None),
-    type: Optional[str] = Query(None),
-    db: AsyncSession = Depends(get_async_db),
-    user: CurrentUser = Depends(allow_tech),
-):
-    hub_id = _get_tech_hub(user)
-    q = select(ReplacementRequest).where(
-        and_(ReplacementRequest.requested_by == user.id,
-             ReplacementRequest.hub_id == hub_id)
-    ).order_by(ReplacementRequest.created_at.desc())
-    if status: q = q.where(ReplacementRequest.status == status)
-    if type: q = q.where(ReplacementRequest.type == type)
-
-    rows = (await db.execute(q)).scalars().all()
-    cat_ids = list({r.part_category_id for r in rows if r.part_category_id})
-    cats = {}
-    if cat_ids:
-        cats = {c.id: c.name for c in (await db.execute(
-            select(PartCategory).where(PartCategory.id.in_(cat_ids))
-        )).scalars().all()}
-
-    return [
-        ReplacementRequestOut(
-            request_id=r.id, type=r.type.value, damaged_item_id=r.damaged_item_id,
-            part_category_id=r.part_category_id, part_name=cats.get(r.part_category_id),
-            quantity=r.quantity, reason=r.reason, status=r.status.value,
-            hub_id=r.hub_id, requested_by=r.requested_by,
-            photo_urls=r.photo_urls, supplied_item_id=r.supplied_item_id,
-            supplied_at=r.supplied_at, rejection_reason=r.rejection_reason,
-            created_at=r.created_at,
-        ) for r in rows
-    ]
-
-
-@router.get("/replacement-requests/{request_id}", response_model=ReplacementRequestOut,
-            summary="Chi tiết yêu cầu thay thế")
-async def get_my_replacement_request(
-    request_id: int,
-    db: AsyncSession = Depends(get_async_db),
-    user: CurrentUser = Depends(allow_tech),
-):
-    req = await db.get(ReplacementRequest, request_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Yêu cầu không tồn tại.")
-    if req.requested_by != user.id and user.role != UserRole.ADMIN:
-        raise HTTPException(status_code=403, detail="Không có quyền xem yêu cầu này.")
-    cat = await db.get(PartCategory, req.part_category_id) if req.part_category_id else None
-    return ReplacementRequestOut(
-        request_id=req.id, type=req.type.value, damaged_item_id=req.damaged_item_id,
-        part_category_id=req.part_category_id, part_name=cat.name if cat else None,
-        quantity=req.quantity, reason=req.reason, status=req.status.value,
-        hub_id=req.hub_id, requested_by=req.requested_by,
-        photo_urls=req.photo_urls, supplied_item_id=req.supplied_item_id,
-        supplied_at=req.supplied_at, rejection_reason=req.rejection_reason,
-        created_at=req.created_at,
-    )

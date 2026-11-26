@@ -25,31 +25,40 @@ async def customer_dashboard(
     Tổng hợp số đơn đang giao / đã giao / đã hủy, tổng chi tiêu (từ phí giao của các
     chuyến đã hoàn tất) và vài chỉ số giao hàng.
     """
-    orders = (await db.execute(
-        select(Order).where(
+    orders_rows = (await db.execute(
+        select(Order.id, Order.status, Order.payment_status, Order.payload_kg).where(
             Order.customer_id == user.id,
             Order.status != OrderStatus.CANCELLED,
         )
-    )).scalars().all()
-    order_ids = [o.id for o in orders]
+    )).all()
+    order_ids = [o.id for o in orders_rows]
 
-    # Mission mới nhất cho mỗi order (loại trừ mission đã CANCELLED)
-    mission_by_order: dict[str, Mission] = {}
+    # Mission mới nhất cho mỗi order (DISTINCT ON trực tiếp từ SQL, chỉ lấy 6 cột cần thiết)
+    mission_by_order: dict = {}
     if order_ids:
-        missions = (await db.execute(
-            select(Mission).where(
+        m_rows = (await db.execute(
+            select(
+                Mission.id,
+                Mission.order_id,
+                Mission.status,
+                Mission.arrival_confirmed_at,
+                Mission.arrived_at,
+                Mission.delivery_fee,
+                Mission.distance_m,
+            )
+            .distinct(Mission.order_id)
+            .where(
                 Mission.order_id.in_(order_ids),
                 Mission.status != MissionStatus.CANCELLED,
             )
-        )).scalars().all()
-        for m in missions:
-            cur = mission_by_order.get(m.order_id)
-            if cur is None or (m.id or 0) > (cur.id or 0):
-                mission_by_order[m.order_id] = m
+            .order_by(Mission.order_id, Mission.id.desc())
+        )).all()
+        for m in m_rows:
+            mission_by_order[m.order_id] = m
 
     active = completed = cancelled = 0
     breakdown: dict[str, int] = {}
-    for o in orders:
+    for o in orders_rows:
         code, _ = compute_delivery_status(o, mission_by_order.get(o.id))
         if code == "CANCELLED":
             continue
@@ -64,14 +73,14 @@ async def customer_dashboard(
         (m.delivery_fee or 0.0) for m in cust_missions if m.status in COMPLETED_STATUSES
     ), 2)
     total_distance = round(sum((m.distance_m or 0.0) for m in cust_missions), 2)
-    payloads = [o.payload_kg for o in orders if o.payload_kg]
+    payloads = [o.payload_kg for o in orders_rows if o.payload_kg]
     avg_payload = round(sum(payloads) / len(payloads), 2) if payloads else 0.0
 
     return CustomerDashboardResponse(
         active_deliveries=active,
         completed_deliveries=completed,
         cancelled_deliveries=cancelled,
-        total_deliveries=len(orders),
+        total_deliveries=len(orders_rows),
         total_spent=total_spent,
         avg_payload_kg=avg_payload,
         total_distance_m=total_distance,

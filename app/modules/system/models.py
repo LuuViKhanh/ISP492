@@ -1,6 +1,6 @@
 import enum
 from datetime import datetime, timezone
-from sqlalchemy import BigInteger, Integer, Float, String, Boolean, DateTime, Text, Enum as SAEnum, JSON
+from sqlalchemy import BigInteger, Integer, Float, String, Boolean, DateTime, Text, Enum as SAEnum, JSON, Index, text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database.db import Base
 
@@ -15,6 +15,11 @@ class NotificationType(str, enum.Enum):
 
 class Notification(Base):
     __tablename__ = "notifications"
+    __table_args__ = (
+        Index("idx_notifications_user_created", "user_id", "created_at"),
+        Index("idx_notifications_user_unread", "user_id", postgresql_where=text("is_read = false")),
+        Index("idx_notifications_ref_created", "reference_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String, nullable=False)

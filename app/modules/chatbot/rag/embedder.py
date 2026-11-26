@@ -12,6 +12,16 @@ from typing import Optional
 logger = logging.getLogger("rag.embedder")
 
 _EMBEDDING_MODEL = "text-embedding-004"
+_EMBED_CLIENTS: dict[str, object] = {}
+
+
+def _get_embed_client(key: str):
+    from google import genai
+    client = _EMBED_CLIENTS.get(key)
+    if client is None:
+        client = genai.Client(api_key=key)
+        _EMBED_CLIENTS[key] = client
+    return client
 
 
 async def embed_text(text: str, api_key: Optional[str] = None) -> list[float]:
@@ -27,7 +37,7 @@ async def embed_text(text: str, api_key: Optional[str] = None) -> list[float]:
         list[float] với 768 phần tử.
     """
     try:
-        from google import genai
+        from google import genai  # noqa: F401
     except ImportError:
         raise ImportError("Required package missing: pip install google-genai")
 
@@ -39,7 +49,7 @@ async def embed_text(text: str, api_key: Optional[str] = None) -> list[float]:
     if not text:
         return [0.0] * 768
 
-    client = genai.Client(api_key=key)
+    client = _get_embed_client(key)
     response = await client.aio.models.embed_content(
         model=_EMBEDDING_MODEL,
         contents=text,

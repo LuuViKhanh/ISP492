@@ -1,0 +1,75 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="SD 3.1.2 - Register Customer Account" id="sd312">
+    <mxGraphModel dx="900" dy="400" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/><mxCell id="1" parent="0"/>
+
+        <!-- Title -->
+        <mxCell id="title" value="Sequence Diagram - Register Customer Account&#xa;UC-01 | POST /api/v1/auth/register | Actor: :Guest" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=14;fontStyle=1;" vertex="1"><mxGeometry x="300" y="15" width="1100" height="40" as="geometry"/></mxCell>
+
+        <!-- LIFELINE HEADERS TOP -->
+        <mxCell id="hdr_guest" value=":Guest" parent="1" style="shape=umlActor;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=12;fontStyle=1;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1"><mxGeometry x="55" y="75" width="40" height="60" as="geometry"/></mxCell>
+        <mxCell id="hdr_page" value=":RegisterAccountPage" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="195" y="80" width="175" height="45" as="geometry"/></mxCell>
+        <mxCell id="hdr_router" value=":AuthRouter" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="460" y="80" width="145" height="45" as="geometry"/></mxCell>
+        <mxCell id="hdr_service" value=":AuthService" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="700" y="80" width="145" height="45" as="geometry"/></mxCell>
+        <mxCell id="hdr_account" value=":Account (DB)" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="940" y="80" width="145" height="45" as="geometry"/></mxCell>
+        <mxCell id="hdr_syslog" value=":SystemLogService" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="1180" y="80" width="155" height="45" as="geometry"/></mxCell>
+
+        <!-- LIFELINES -->
+        <mxCell id="ll_guest" edge="1" parent="1" style="endArrow=none;dashed=1;strokeColor=#000000;strokeWidth=1;" value=""><mxGeometry relative="1" as="geometry"><mxPoint x="75" y="150" as="sourcePoint"/><mxPoint x="75" y="1100" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="ll_page" edge="1" parent="1" style="endArrow=none;dashed=1;strokeColor=#000000;strokeWidth=1;" value=""><mxGeometry relative="1" as="geometry"><mxPoint x="283" y="125" as="sourcePoint"/><mxPoint x="283" y="1100" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="ll_router" edge="1" parent="1" style="endArrow=none;dashed=1;strokeColor=#000000;strokeWidth=1;" value=""><mxGeometry relative="1" as="geometry"><mxPoint x="533" y="125" as="sourcePoint"/><mxPoint x="533" y="1100" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="ll_service" edge="1" parent="1" style="endArrow=none;dashed=1;strokeColor=#000000;strokeWidth=1;" value=""><mxGeometry relative="1" as="geometry"><mxPoint x="773" y="125" as="sourcePoint"/><mxPoint x="773" y="1100" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="ll_account" edge="1" parent="1" style="endArrow=none;dashed=1;strokeColor=#000000;strokeWidth=1;" value=""><mxGeometry relative="1" as="geometry"><mxPoint x="1013" y="125" as="sourcePoint"/><mxPoint x="1013" y="1100" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="ll_syslog" edge="1" parent="1" style="endArrow=none;dashed=1;strokeColor=#000000;strokeWidth=1;" value=""><mxGeometry relative="1" as="geometry"><mxPoint x="1258" y="125" as="sourcePoint"/><mxPoint x="1258" y="1100" as="targetPoint"/></mxGeometry></mxCell>
+
+        <!-- ACTIVATION BARS -->
+        <mxCell id="act_page" value="" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;" vertex="1"><mxGeometry x="277" y="195" width="12" height="800" as="geometry"/></mxCell>
+        <mxCell id="act_router" value="" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;" vertex="1"><mxGeometry x="527" y="235" width="12" height="720" as="geometry"/></mxCell>
+        <mxCell id="act_service" value="" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;" vertex="1"><mxGeometry x="767" y="275" width="12" height="610" as="geometry"/></mxCell>
+        <mxCell id="act_account" value="" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;" vertex="1"><mxGeometry x="1007" y="310" width="12" height="300" as="geometry"/></mxCell>
+        <mxCell id="act_syslog" value="" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;" vertex="1"><mxGeometry x="1252" y="720" width="12" height="40" as="geometry"/></mxCell>
+
+        <!-- MESSAGES -->
+        <mxCell id="m1" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="1. Enter registration info (email, full_name, password)"><mxGeometry relative="1" y="10" as="geometry"><mxPoint as="offset"/><mxPoint x="75" y="200" as="sourcePoint"/><mxPoint x="277" y="200" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="m2" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="2. POST /api/v1/auth/register (RegisterRequest)"><mxGeometry relative="1" y="15" as="geometry"><mxPoint as="offset"/><mxPoint x="289" y="238" as="sourcePoint"/><mxPoint x="527" y="238" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="m3" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="3. register(body, db)"><mxGeometry relative="1" y="15" as="geometry"><mxPoint as="offset"/><mxPoint x="539" y="278" as="sourcePoint"/><mxPoint x="767" y="278" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="m4" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="4. get_user_by_email(db, email)"><mxGeometry relative="1" y="15" as="geometry"><mxPoint as="offset"/><mxPoint x="779" y="315" as="sourcePoint"/><mxPoint x="1007" y="315" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="m5" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="5. Return existing_user (or None)"><mxGeometry relative="1" as="geometry"><mxPoint x="1007" y="355" as="sourcePoint"/><mxPoint x="779" y="355" as="targetPoint"/></mxGeometry></mxCell>
+
+        <!-- ALT FRAME -->
+        <mxCell id="alt_frame" value="" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=2;" vertex="1"><mxGeometry x="40" y="375" width="1380" height="540" as="geometry"/></mxCell>
+        <mxCell id="alt_lbl" value="alt" parent="1" style="text;html=1;strokeColor=#000000;fillColor=#FFFFFF;align=center;verticalAlign=middle;fontSize=12;fontStyle=1;" vertex="1"><mxGeometry x="40" y="375" width="45" height="24" as="geometry"/></mxCell>
+
+        <!-- Lane failed -->
+        <mxCell id="failed_lbl" value="[Email already registered]" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontStyle=2;" vertex="1"><mxGeometry x="90" y="376" width="260" height="22" as="geometry"/></mxCell>
+        <mxCell id="f6" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="6. raise HTTPException 400"><mxGeometry relative="1" y="-15" as="geometry"><mxPoint as="offset"/><mxPoint x="779" y="430" as="sourcePoint"/><mxPoint x="539" y="430" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="f7" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="7. 400 Bad Request — Email already registered"><mxGeometry relative="1" y="-15" as="geometry"><mxPoint as="offset"/><mxPoint x="527" y="468" as="sourcePoint"/><mxPoint x="289" y="468" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="f8" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="8. Show error message"><mxGeometry relative="1" as="geometry"><mxPoint x="277" y="503" as="sourcePoint"/><mxPoint x="75" y="503" as="targetPoint"/></mxGeometry></mxCell>
+
+        <!-- Divider -->
+        <mxCell id="div1" edge="1" parent="1" style="endArrow=none;strokeColor=#000000;dashed=1;" value=""><mxGeometry relative="1" as="geometry"><mxPoint x="40" y="525" as="sourcePoint"/><mxPoint x="1420" y="525" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="success_lbl" value="[else: Email available]" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontStyle=2;fontColor=#2d6a2d;" vertex="1"><mxGeometry x="90" y="526" width="200" height="22" as="geometry"/></mxCell>
+
+        <!-- Success lane -->
+        <mxCell id="s9" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="9. hash_password(plain_password)  [bcrypt]"><mxGeometry relative="1" y="15" as="geometry"><mxPoint as="offset"/><mxPoint x="779" y="560" as="sourcePoint"/><mxPoint x="1007" y="560" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="s9r" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="9b. hashed_password"><mxGeometry relative="1" as="geometry"><mxPoint x="1007" y="593" as="sourcePoint"/><mxPoint x="779" y="593" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="s10" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="10. INSERT Account(email, hashed_pw, full_name, role_id=CUSTOMER)"><mxGeometry relative="1" y="15" as="geometry"><mxPoint as="offset"/><mxPoint x="779" y="625" as="sourcePoint"/><mxPoint x="1007" y="625" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="s10r" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="10b. new_user (committed)"><mxGeometry relative="1" as="geometry"><mxPoint x="1007" y="658" as="sourcePoint"/><mxPoint x="779" y="658" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="s11" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="11. log_activity(REGISTER, user_id, email)"><mxGeometry relative="1" y="15" as="geometry"><mxPoint as="offset"/><mxPoint x="779" y="720" as="sourcePoint"/><mxPoint x="1252" y="720" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="s11r" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="11b. logged"><mxGeometry relative="1" as="geometry"><mxPoint x="1252" y="755" as="sourcePoint"/><mxPoint x="779" y="755" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="s12" edge="1" parent="1" style="endArrow=block;endFill=1;strokeColor=#000000;fontSize=11;" value="12. Map to UserResponse"><mxGeometry relative="1" as="geometry"><mxPoint x="779" y="800" as="sourcePoint"/><mxPoint x="539" y="800" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="s13" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="13. Return 201 Created — UserResponse"><mxGeometry relative="1" y="-15" as="geometry"><mxPoint as="offset"/><mxPoint x="527" y="845" as="sourcePoint"/><mxPoint x="289" y="845" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="s14" edge="1" parent="1" style="endArrow=open;endFill=0;dashed=1;strokeColor=#000000;fontSize=11;" value="14. Show success — Account created"><mxGeometry relative="1" as="geometry"><mxPoint x="277" y="880" as="sourcePoint"/><mxPoint x="75" y="880" as="targetPoint"/></mxGeometry></mxCell>
+
+        <!-- LIFELINE HEADERS BOTTOM -->
+        <mxCell id="bot_guest" value=":Guest" parent="1" style="shape=umlActor;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=12;fontStyle=1;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1"><mxGeometry x="55" y="1050" width="40" height="60" as="geometry"/></mxCell>
+        <mxCell id="bot_page" value=":RegisterAccountPage" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="195" y="1055" width="175" height="45" as="geometry"/></mxCell>
+        <mxCell id="bot_router" value=":AuthRouter" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="460" y="1055" width="145" height="45" as="geometry"/></mxCell>
+        <mxCell id="bot_service" value=":AuthService" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="700" y="1055" width="145" height="45" as="geometry"/></mxCell>
+        <mxCell id="bot_account" value=":Account (DB)" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="940" y="1055" width="145" height="45" as="geometry"/></mxCell>
+        <mxCell id="bot_syslog" value=":SystemLogService" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=11;fontStyle=1;" vertex="1"><mxGeometry x="1180" y="1055" width="155" height="45" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

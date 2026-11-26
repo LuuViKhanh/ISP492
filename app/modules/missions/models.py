@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import BigInteger, Float, String, DateTime, Integer, Boolean, Enum as SAEnum, ForeignKey, JSON
+from sqlalchemy import BigInteger, Float, String, DateTime, Integer, Boolean, Enum as SAEnum, ForeignKey, JSON, Index
 from sqlalchemy.orm import Mapped, mapped_column
 from datetime import datetime
 from typing import Optional
@@ -51,23 +51,13 @@ class LegDestinationType(str, enum.Enum):
 
 
 class MissionStatus(str, enum.Enum):
-    # FE Operator Spec VI Statuses — viết thường khớp với DB
-    SCHEDULED    = "Scheduled"
-    IN_PROGRESS  = "In Progress"
-    COMPLETED    = "Completed"
-    CANCELLED    = "Cancelled"
-    FAILED       = "Failed"
-    # Legacy Statuses (Kept for backwards compatibility)
-    PENDING_APPROVAL = "Pending Approval"
-    APPROVED         = "Approved"
-    FLYING           = "Flying"
-    REJECTED         = "Rejected"
-    ACTIVE_MISSION   = "Active mission"
-    ARRIVAL_COMPLETED = "Arrival completed"  # Drone tới hub (confirm-arrival)
-    MISSION_COMPLETED = "Mission completed"  # Khách lấy hàng xong (confirm-pickup)
-    INCIDENT_RETURN  = "Incident return"
-    # Awaiting Payment
-    AWAITING_PAYMENT = "Awaiting Payment"
+    SCHEDULED         = "Scheduled"
+    FLYING            = "Flying"
+    ARRIVAL_COMPLETED = "Arrival completed"
+    MISSION_COMPLETED = "Mission completed"
+    INCIDENT_RETURN   = "Incident return"
+    FAILED            = "Failed"
+    CANCELLED         = "Cancelled"
 
 
 class HandlingStatus(str, enum.Enum):
@@ -91,6 +81,12 @@ class IncidentSeverity(str, enum.Enum):
 
 class Mission(Base):
     __tablename__ = "missions"
+    __table_args__ = (
+        Index("idx_missions_order_id_desc", "order_id", "id"),
+        Index("idx_missions_status", "status"),
+        Index("idx_missions_drone_id", "drone_id"),
+        Index("idx_missions_origin_hub", "origin_hub_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True)
     order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -119,6 +115,10 @@ class Mission(Base):
 
 class TelemetryLog(Base):
     __tablename__ = "telemetry_logs"
+    __table_args__ = (
+        Index("idx_telemetry_logs_mission_ts", "mission_id", "timestamp"),
+        Index("idx_telemetry_logs_mission_id_desc", "mission_id", "id"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     mission_id: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -146,6 +146,9 @@ class TelemetryLog(Base):
 
 class Incident(Base):
     __tablename__ = "incidents"
+    __table_args__ = (
+        Index("idx_incidents_mission_status", "mission_id", "status"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     mission_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -164,6 +167,12 @@ class Incident(Base):
 
 class Order(Base):
     __tablename__ = "orders"
+    __table_args__ = (
+        Index("idx_orders_customer_created", "customer_id", "created_at"),
+        Index("idx_orders_status_created", "status", "created_at"),
+        Index("idx_orders_origin_hub_status", "origin_hub_id", "status"),
+        Index("idx_orders_payment_status", "payment_status"),
+    )
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True)
     customer_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -215,10 +224,16 @@ class Order(Base):
     # ── Aging Priority fields (NORMAL mode) ──────────────────────────────────
     is_aging_priority: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     aging_deadline: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # ── Cancellation ──────────────────────────────────────────────────────────
+    cancellation_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 
 class MissionLeg(Base):
     __tablename__ = "mission_legs"
+    __table_args__ = (
+        Index("idx_mission_legs_mission_seq", "mission_id", "sequence_no"),
+        Index("idx_mission_legs_to_hub_status", "to_hub_id", "status"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     mission_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -231,3 +246,47 @@ class MissionLeg(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+# ── Delivery Rating ───────────────────────────────────────────────────────────
+
+class DeliveryRating(Base):
+    """
+    Đánh giá trải nghiệm giao hàng của Customer sau khi đơn DELIVERED_TO_HUB.
+    Mỗi đơn chỉ được đánh giá 1 lần (unique constraint: order_id).
+    """
+    __tablename__ = "delivery_ratings"
+    __table_args__ = (
+        Index("idx_delivery_ratings_order", "order_id"),
+        Index("idx_delivery_ratings_customer", "customer_id"),
+        Index("idx_delivery_ratings_rating", "rating"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    order_id: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    customer_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)   # 1-5
+    comment: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+# ── Saved Address (Customer Address Book) ────────────────────────────────────
+
+class SavedAddress(Base):
+    """
+    Danh bạ địa chỉ giao hàng của Customer — lưu thông tin người nhận thường dùng.
+    """
+    __tablename__ = "saved_addresses"
+    __table_args__ = (
+        Index("idx_saved_addresses_customer", "customer_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    customer_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    label: Mapped[str] = mapped_column(String(100), nullable=False)        # e.g. "Home", "Office"
+    recipient_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    recipient_phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    recipient_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    hub_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # destination hub
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

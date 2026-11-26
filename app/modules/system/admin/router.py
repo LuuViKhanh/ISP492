@@ -140,16 +140,20 @@ async def get_system_logs(
 @router.get("/admin/fleet/hubs/summary", response_model=HubSummaryResponse, dependencies=[Depends(require_admin)], include_in_schema=False)
 async def get_hubs_summary(db: AsyncSession = Depends(get_async_db)):
     """Trả về 4 KPI tổng quan đầu trang Hub network map."""
-    total_hubs = (await db.execute(select(func.count(Hub.id)))).scalar() or 0
-    active_hubs = (await db.execute(select(func.count(Hub.id)).where(func.lower(Hub.status) == "active"))).scalar() or 0
-    total_drones = (await db.execute(select(func.count(Drone.id)))).scalar() or 0
-    total_batteries = (await db.execute(select(func.count(Battery.id)))).scalar() or 0
+    row = (await db.execute(
+        select(
+            select(func.count(Hub.id)).scalar_subquery(),
+            select(func.count(Hub.id)).where(func.lower(Hub.status) == "active").scalar_subquery(),
+            select(func.count(Drone.id)).scalar_subquery(),
+            select(func.count(Battery.id)).scalar_subquery(),
+        )
+    )).one()
 
     return HubSummaryResponse(
-        total_hubs=int(total_hubs),
-        active_hubs=int(active_hubs),
-        total_drones=int(total_drones),
-        total_batteries=int(total_batteries),
+        total_hubs=int(row[0] or 0),
+        active_hubs=int(row[1] or 0),
+        total_drones=int(row[2] or 0),
+        total_batteries=int(row[3] or 0),
     )
 
 
@@ -182,23 +186,13 @@ async def get_admin_hubs(
 
     hub_ids = [h.id for h in hubs]
 
-    # Đếm Drones theo hub
-    drone_counts_res = await db.execute(
-        select(Drone.current_hub_id, func.count(Drone.id))
-        .where(Drone.current_hub_id.in_(hub_ids))
-        .group_by(Drone.current_hub_id)
-    )
-    drone_count_map = {row[0]: row[1] for row in drone_counts_res.all()}
-
-    # Lấy danh sách drones chi tiết cho từng hub
+    # Lấy danh sách drones chi tiết cho từng hub (tính luôn drone_count_map trong RAM, bỏ 1 query GROUP BY dư)
     drones_res = await db.execute(
         select(Drone).where(Drone.current_hub_id.in_(hub_ids)).order_by(Drone.id.asc())
     )
     drones_by_hub: dict[int, list[HubAssignedDroneItem]] = {}
     for d in drones_res.scalars().all():
-        if d.current_hub_id not in drones_by_hub:
-            drones_by_hub[d.current_hub_id] = []
-        drones_by_hub[d.current_hub_id].append(
+        drones_by_hub.setdefault(d.current_hub_id, []).append(
             HubAssignedDroneItem(
                 id=d.id,
                 name=d.name,
@@ -209,6 +203,7 @@ async def get_admin_hubs(
                 payload_capacity_kg=d.payload_capacity_kg,
             )
         )
+    drone_count_map = {hid: len(lst) for hid, lst in drones_by_hub.items()}
 
     # Đếm Batteries theo hub
     bat_counts_res = await db.execute(
@@ -356,6 +351,8 @@ async def create_hub(body: HubCreate, db: AsyncSession = Depends(get_async_db)):
     db.add(hub)
     await db.commit()
     await db.refresh(hub)
+    from app.modules.missions.bundle_service import invalidate_planning_metadata_caches
+    invalidate_planning_metadata_caches()
     res = HubResponse.model_validate(hub)
     res.area = extract_area(hub.address)
     res.capacity = body.capacity or 24
@@ -382,6 +379,8 @@ async def update_hub(hub_id: int, body: HubUpdate, db: AsyncSession = Depends(ge
     
     await db.commit()
     await db.refresh(hub)
+    from app.modules.missions.bundle_service import invalidate_planning_metadata_caches
+    invalidate_planning_metadata_caches()
     res = HubResponse.model_validate(hub)
     res.area = extract_area(hub.address)
     res.capacity = body.capacity or 24
@@ -395,6 +394,8 @@ async def delete_hub(hub_id: int, db: AsyncSession = Depends(get_async_db)):
         raise HTTPException(status_code=404, detail="Hub not found")
     await db.delete(hub)
     await db.commit()
+    from app.modules.missions.bundle_service import invalidate_planning_metadata_caches
+    invalidate_planning_metadata_caches()
 
 
 # ── Hub Technician Assignment APIs ────────────────────────────────────────────
@@ -636,44 +637,35 @@ async def transfer_technician_hub(
 
 @router.get("/admin/dashboard/kpi", response_model=KPIDashboardResponse, dependencies=[Depends(require_admin)])
 async def get_dashboard_kpi(db: AsyncSession = Depends(get_async_db)):
-    # Total Drones
-    drones_res = await db.execute(select(func.count(Drone.id)))
-    total_drones = drones_res.scalar() or 0
-    
-    # Total Batteries
-    batt_res = await db.execute(select(func.count(Battery.id)))
-    total_batteries = batt_res.scalar() or 0
-    
-    # Successful flights (MISSION_COMPLETED hoặc COMPLETED)
-    succ_res = await db.execute(
-        select(func.count(Mission.id)).where(
-            Mission.status.in_([MissionStatus.MISSION_COMPLETED, MissionStatus.ARRIVAL_COMPLETED])
+    from sqlalchemy import case
+    comp_statuses = [MissionStatus.MISSION_COMPLETED, MissionStatus.ARRIVAL_COMPLETED]
+    # Gộp toàn bộ scalar KPIs + tổng doanh thu vào 1 câu SQL
+    kpi_row = (await db.execute(
+        select(
+            select(func.count(Drone.id)).scalar_subquery(),
+            select(func.count(Battery.id)).scalar_subquery(),
+            select(func.count(Mission.id)).where(Mission.status.in_(comp_statuses)).scalar_subquery(),
+            select(func.count(Mission.id)).where(Mission.status == MissionStatus.INCIDENT_RETURN).scalar_subquery(),
+            select(func.coalesce(func.sum(Mission.delivery_fee), 0.0)).where(Mission.status.in_(comp_statuses)).scalar_subquery(),
         )
-    )
-    successful_flights = succ_res.scalar() or 0
-    
-    # Failed flights (INCIDENT_RETURN)
-    fail_res = await db.execute(select(func.count(Mission.id)).where(Mission.status == MissionStatus.INCIDENT_RETURN))
-    failed_flights = fail_res.scalar() or 0
-    
-    # Total Revenue (sum of delivery_fee where status is completed)
-    rev_res = await db.execute(
-        select(func.coalesce(func.sum(Mission.delivery_fee), 0.0)).where(
-            Mission.status.in_([MissionStatus.MISSION_COMPLETED, MissionStatus.ARRIVAL_COMPLETED])
-        )
-    )
-    gross_revenue = float(rev_res.scalar() or 0.0)
+    )).one()
+    total_drones = int(kpi_row[0] or 0)
+    total_batteries = int(kpi_row[1] or 0)
+    successful_flights = int(kpi_row[2] or 0)
+    failed_flights = int(kpi_row[3] or 0)
+    gross_revenue = float(kpi_row[4] or 0.0)
+
     from app.modules.system.service import compute_total_procurement_expenses
     procurement_expenses = await compute_total_procurement_expenses(db)
     total_revenue = round(gross_revenue - procurement_expenses, 2)
-    
+
     # Revenue Chart (group by date)
     chart_res = await db.execute(
         select(
             cast(func.coalesce(Mission.arrived_at, Mission.departed_at), Date).label("date"),
             func.sum(Mission.delivery_fee).label("revenue")
         )
-        .where(Mission.status.in_([MissionStatus.MISSION_COMPLETED, MissionStatus.ARRIVAL_COMPLETED]))
+        .where(Mission.status.in_(comp_statuses))
         .where(or_(Mission.arrived_at.isnot(None), Mission.departed_at.isnot(None)))
         .group_by(cast(func.coalesce(Mission.arrived_at, Mission.departed_at), Date))
         .order_by(cast(func.coalesce(Mission.arrived_at, Mission.departed_at), Date))

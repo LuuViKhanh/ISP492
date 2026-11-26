@@ -1,13 +1,36 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+import secrets
+import json
 
 from app.core.config import settings
-from app.database.db import get_async_db
+from app.database.db import get_async_db, AsyncSessionLocal
 from app.modules.auth import service
 from app.modules.auth.schemas import LoginRequest, RegisterRequest, TokenResponse, UserResponse, ForgotPasswordRequest, ResetPasswordRequest, ChangePasswordRequest
 from app.modules.system.service import log_activity
 from app.shared.dependencies import get_current_user, CurrentUser
+
+# ── Lưu trữ state tạm thời (OAuth state) ──
+# Trong production, dùng Redis thay vì dict
+oauth_state_store = {}
+
+
+async def _log_login_activity_bg(user_id: str, user_email: str, role_value: str) -> None:
+    try:
+        async with AsyncSessionLocal() as bg_db:
+            await log_activity(
+                bg_db,
+                action="LOGIN",
+                user_id=user_id,
+                user_email=user_email,
+                role=role_value,
+                resource_type="users",
+                resource_id=user_id,
+                description=f"Logged in successfully: {user_email}",
+            )
+    except Exception:
+        pass
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -17,6 +40,7 @@ GOOGLE_AUTH_URL = (
     "&scope=openid%20email%20profile"
     "&client_id={client_id}"
     "&redirect_uri={redirect_uri}"
+    "&state={state}"
 )
 
 
@@ -66,22 +90,24 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_async_d
 # ── Login (email + password) ──────────────────────────────────────────────────
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, db: AsyncSession = Depends(get_async_db)):
+async def login(
+    body: LoginRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_async_db),
+):
     """
     Đăng nhập bằng email và mật khẩu.
     Kiểm tra thông tin đăng nhập, nếu hợp lệ sẽ trả về access token và refresh token.
     """
     user = await service.get_user_by_email(db, body.email)
-    if not user or not user.hashed_password or not service.verify_password(body.password, user.hashed_password):
+    if not user or not user.hashed_password or not await service.verify_password_async(body.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not user.is_active:
         raise HTTPException(
             status_code=403, 
             detail="This account has been deleted or suspended. Please contact an administrator for assistance."
         )
-    await log_activity(db, action="LOGIN", user_id=user.id, user_email=user.email,
-                       role=user.role.value, resource_type="users", resource_id=user.id,
-                       description=f"Logged in successfully: {user.email}")
+    background_tasks.add_task(_log_login_activity_bg, user.id, user.email, user.role.value)
     return TokenResponse(
         access_token=service.create_access_token(user.id, user.role.value),
         refresh_token=service.create_refresh_token(user.id),
@@ -93,7 +119,11 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_async_db)):
 # ── Forgot / Reset Password ──────────────────────────────────────────────────
 
 @router.post("/forgot-password")
-async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depends(get_async_db)):
+async def forgot_password(
+    body: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_async_db),
+):
     """
     Yêu cầu đặt lại mật khẩu.
     Tạo token đặt lại mật khẩu và gửi liên kết đặt lại qua email của người dùng.
@@ -102,7 +132,7 @@ async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depend
     token = await service.create_reset_token(db, body.email)
     if token:
         reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
-        send_reset_email(body.email, reset_link)
+        background_tasks.add_task(send_reset_email, body.email, reset_link)
     return {"message": "If this email exists, a reset link has been sent."}
 
 
@@ -187,40 +217,90 @@ async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_async
 # ── Google OAuth ─────────────────────────────────────────────────────────────
 
 @router.get("/google")
-async def google_login():
+async def google_login(client_type: str = "web"):
     """
     Bắt đầu quá trình đăng nhập qua Google.
-    Chuyển hướng người dùng đến trang xác thực của Google.
+    
+    Query params:
+    - client_type: "web" (default) hoặc "mobile"
+    
+    Chuyển hướng người dùng đến trang xác thực của Google kèm state parameter.
     """
+    # Xác thực client_type
+    if client_type not in ("web", "mobile"):
+        client_type = "web"
+    
+    # Tạo state token để bảo vệ CSRF
+    state = secrets.token_urlsafe(32)
+    oauth_state_store[state] = {
+        "client_type": client_type,
+        "timestamp": __import__("time").time()
+    }
+    
+    # Backend URL để callback
+    backend_url = settings.BACKEND_URL.rstrip("/")
+    redirect_uri = f"{backend_url}/api/v1/auth/google/callback"
+    
     url = GOOGLE_AUTH_URL.format(
         client_id=settings.GOOGLE_CLIENT_ID,
-        redirect_uri=settings.GOOGLE_REDIRECT_URI,
+        redirect_uri=redirect_uri,
+        state=state,
     )
     return RedirectResponse(url)
 
 
 @router.get("/google/callback")
-async def google_callback(code: str, db: AsyncSession = Depends(get_async_db)):
+async def google_callback(code: str, state: str, db: AsyncSession = Depends(get_async_db)):
     """
     Xử lý callback từ Google sau khi xác thực thành công.
-    Redirect về FE kèm access_token trong URL params.
+    Redirect về Deep Link (mobile) hoặc Web URL (web) kèm access_token.
+    
+    Query params:
+    - code: Authorization code từ Google
+    - state: State parameter để xác định client type (web/mobile)
     """
+    # Kiểm tra state để xác định client type
+    state_info = oauth_state_store.get(state)
+    if not state_info:
+        return RedirectResponse(url=f"{settings.GOOGLE_CALLBACK_WEB}?error=invalid_state")
+    
+    # Xóa state sau khi sử dụng (one-time use)
+    del oauth_state_store[state]
+    
+    client_type = state_info.get("client_type", "web")
+    
     try:
         google_info = await service.exchange_google_code(code)
-    except Exception:
-        frontend_url = settings.FRONTEND_URL.rstrip("/")
-        return RedirectResponse(url=f"{frontend_url}/login?error=google_failed")
+    except Exception as e:
+        print(f"[AUTH] Google exchange code failed: {e}")
+        if client_type == "mobile":
+            return RedirectResponse(url=f"{settings.GOOGLE_CALLBACK_MOBILE}?error=google_failed")
+        else:
+            return RedirectResponse(url=f"{settings.GOOGLE_CALLBACK_WEB}?error=google_failed")
 
     user = await service.get_or_create_google_user(db, google_info)
     
     access_token = service.create_access_token(user.id, user.role.value)
     refresh_token = service.create_refresh_token(user.id)
     
-    frontend_url = settings.FRONTEND_URL.rstrip("/")
-    redirect_url = (
-        f"{frontend_url}/auth/google/callback"
-        f"?access_token={access_token}"
-        f"&refresh_token={refresh_token}"
-        f"&token_type=bearer"
-    )
+    # Redirect đến URL phù hợp với client type
+    if client_type == "mobile":
+        # Deep Link cho Mobile
+        redirect_url = (
+            f"{settings.GOOGLE_CALLBACK_MOBILE}"
+            f"?access_token={access_token}"
+            f"&refresh_token={refresh_token}"
+            f"&token_type=bearer"
+            f"&role={user.role.value.lower()}"
+        )
+    else:
+        # Web URL
+        redirect_url = (
+            f"{settings.GOOGLE_CALLBACK_WEB}"
+            f"?access_token={access_token}"
+            f"&refresh_token={refresh_token}"
+            f"&token_type=bearer"
+            f"&role={user.role.value.lower()}"
+        )
+    
     return RedirectResponse(url=redirect_url)

@@ -1,19 +1,21 @@
 # Database Schema Documentation
 Đây là tài liệu Single Source of Truth cho cấu trúc cơ sở dữ liệu của dự án Drone-backend, được tự động cập nhật và đồng bộ theo models và các bản migration mới nhất (tuân thủ quy định `GEMINI.md`).
 
-> **Kiến trúc Cơ sở dữ liệu Chuẩn hóa (Database Schema - 22 Bảng)**:
-> Hệ thống gồm **22 bảng chính thức** lưu trữ và điều phối toàn bộ chu trình vận hành bay, phân phối trạm, bảo trì, quản lý pin, vật tư linh kiện, yêu cầu thay thế, đơn hàng và nhật ký hệ thống.
+> **Kiến trúc Cơ sở dữ liệu Chuẩn hóa (Database Schema - 25 Bảng)**:
+> Hệ thống gồm **25 bảng chính thức** lưu trữ và điều phối toàn bộ chu trình vận hành bay, phân phối trạm, bảo trì, quản lý pin, vật tư linh kiện, yêu cầu thay thế, đơn hàng, đánh giá giao hàng, sổ địa chỉ, thống kê hoạt động drone theo ngày và nhật ký hệ thống.
 > *(Các bảng cũ `audit_logs`, `hub_inventories`, `inventory_transactions` đã được thay thế/đổi tên hoàn toàn sang `activity_logs`, `system_logs`, `hub_supplies`, `supply_transactions` và xóa khỏi Database).*
 
 > **Lưu ý về Múi giờ (Timezone)**: 
 > Toàn bộ các trường kiểu thời gian (`DATETIME`, `TIMESTAMP`, `TIMESTAMPTZ`) trong hệ thống được quản lý, khởi tạo và ghi nhận đồng bộ theo múi giờ chuẩn Việt Nam (GMT+7 / `Asia/Ho_Chi_Minh`) thông qua module `app.core.timezone`.
 
-> **Lưu ý về Định dạng Mã Drone (Drone ID Format)**:
-> Hệ thống sử dụng định dạng mã chuỗi chuẩn `DRN-XXXX` (ví dụ `DRN-0001`, `DRN-0002`). Toàn bộ khóa chính `drones.id` và các khóa ngoại/tham chiếu `drone_id` ở các bảng liên quan đều sử dụng kiểu `VARCHAR(50)`.
+> **Lưu ý về Định dạng Mã Drone & Pin (Drone & Battery ID Format)**:
+> - **Drone (`drones.id`)**: `{ModelCode}-DRNXXXX` (`M100-DRN0001` cho DJI Matrice 100, `X6P-DRN0002` cho Aurelia X6 Pro, `FC15-DRN0005` cho DJI FlyCart 15 Heavy).
+> - **Battery (`batteries.id`)**: `{BatteryCode}-BATXXXX` (`TB48-BAT0001` cho DJI TB48D, `UP12-BAT0002` cho Aurelia UltraPower 12S, `DB20-BAT0005` cho DJI DB2000).
+> - Toàn bộ khóa chính và các cột tham chiếu `drone_id` / `battery_id` ở các bảng liên quan đều sử dụng kiểu `VARCHAR(50)`.
 
 ---
 
-## I. Cấu trúc 22 Bảng Hệ Thống (Database Tables)
+## I. Cấu trúc 25 Bảng Hệ Thống (Database Tables)
 
 ### 1. Bảng accounts (trước đây là users)
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
@@ -59,16 +61,16 @@
 ### 4. Bảng batteries
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
 | :--- | :--- | :--- |
-| id | VARCHAR(50) | **PK**, Non-nullable |
-| drone_id | VARCHAR(50) | **FK** (`drones.id`), Nullable |
-| serial_number | VARCHAR(100) | Unique, Non-nullable |
+| id | VARCHAR(50) | **PK**, Non-nullable (Chuẩn `{BatteryCode}-BATXXXX`: `TB48-BAT0001`, `UP12-BAT0002`, `DB20-BAT0005`) |
+| drone_id | VARCHAR(50) | **FK** (`drones.id`), Nullable (`ON UPDATE CASCADE`) |
+| serial_number | VARCHAR(100) | Unique, Non-nullable (`SN-BAT-XXXX`) |
 | capacity_wh | FLOAT | Non-nullable |
 | status | VARCHAR(20) | Non-nullable (`batteries_status`) |
 | current_hub_id | INTEGER | **FK** (`hubs.id`), Nullable |
 | charge_level_pct | BIGINT | Nullable |
 | create_at | TIMESTAMPTZ | Nullable |
 | update_at | TIMESTAMPTZ | Nullable |
-| battery_model | VARCHAR(100) | Nullable |
+| battery_model | VARCHAR(100) | Nullable (`DJI TB48D` / `Aurelia UltraPower 12S` / `DJI DB2000`) |
 | last_charged_at | TIMESTAMP | Nullable |
 | work_order_id | INTEGER | **FK** (`work_orders.id`), Nullable |
 
@@ -89,21 +91,23 @@ Catalog model pin chuẩn với giá nhập và danh sách dòng drone tương t
 ### 6. Bảng drones
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
 | :--- | :--- | :--- |
-| id | VARCHAR(50) | **PK**, Non-nullable (Chuẩn `DRN-XXXX`) |
+| id | VARCHAR(50) | **PK**, Non-nullable (Chuẩn `{ModelCode}-DRNXXXX`: `M100-DRN0001`, `X6P-DRN0002`, `FC15-DRN0005`) |
 | name | VARCHAR(100) | Non-nullable |
 | model | VARCHAR(100) | Non-nullable |
-| serial_number | VARCHAR(100) | Unique, Non-nullable |
+| serial_number | VARCHAR(100) | Unique, Non-nullable (`SN-DRN-XXXX`) |
 | payload_capacity_kg | FLOAT | Non-nullable |
 | max_speed | FLOAT | Non-nullable |
 | operational_status | VARCHAR(20) | Non-nullable (`drone_status`) |
 | current_hub_id | BIGINT | Nullable |
 | battery_level_pct | BIGINT | Nullable |
 | utilization_pct | FLOAT | Nullable |
+| total_flight_hours | FLOAT | Non-nullable, Default `0.0` (Backfill từ giờ bay của các mission đã hoàn thành) |
+| last_maintenance_at | TIMESTAMP | Nullable |
 
 > **Quy tắc chuẩn hóa tên hiển thị Drone (drones.name):**
-> - **Light (<= 1.0kg - DJI Matrice 100)**: Swift XX (Swift 01 - Swift 40)
-> - **Medium (<= 5.0kg - Aurelia X6 Pro)**: Falcon XX (Falcon 01 - Falcon 33)
-> - **Heavy (> 5.0kg - DJI FlyCart 15 Heavy)**: Eagle XX (Eagle 01 - Eagle 32)
+> - **Light (<= 1.0kg - DJI Matrice 100 / Mã ID `M100`)**: Swift XX (Swift 01 - Swift 72)
+> - **Medium (<= 5.0kg - Aurelia X6 Pro / Mã ID `X6P`)**: Falcon XX (Falcon 01 - Falcon 57)
+> - **Heavy (> 5.0kg - DJI FlyCart 15 Heavy / Mã ID `FC15`)**: Eagle XX (Eagle 01 - Eagle 56)
 
 ### 7. Bảng hubs
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
@@ -203,7 +207,7 @@ Số lượng linh kiện / vật tư tại từng Hub. Không có kho trung tâ
 | payload_weight | FLOAT | Nullable |
 | distance_m | FLOAT | Nullable |
 | delivery_fee | FLOAT | Nullable |
-| status | VARCHAR(50) | Non-nullable (`missions_status`) |
+| status | VARCHAR(50) | Non-nullable (`missions_status`: `Scheduled`, `Flying`, `Arrival completed`, `Mission completed`, `Incident return`, `Failed`, `Cancelled`) |
 | handling_status | VARCHAR(50) | Nullable (`missions_handling_status`) |
 | scheduled_time | TIMESTAMP | Nullable |
 | start_time | TIMESTAMP | Nullable |
@@ -239,6 +243,7 @@ Số lượng linh kiện / vật tư tại từng Hub. Không có kho trung tâ
 | id | VARCHAR(50) | **PK**, Non-nullable |
 | customer_id | VARCHAR(50) | Nullable |
 | sender_phone | VARCHAR(20) | Nullable |
+| sender_email | VARCHAR(255) | Nullable |
 | receiver_name | VARCHAR(100) | Nullable |
 | receiver_phone | VARCHAR(20) | Nullable |
 | package_label | VARCHAR(255) | Nullable |
@@ -277,6 +282,7 @@ Số lượng linh kiện / vật tư tại từng Hub. Không có kho trung tâ
 | refund_amount | FLOAT | Nullable |
 | refund_reason | VARCHAR(255) | Nullable |
 | refund_status | VARCHAR(50) | Nullable (`refund_status_enum`), Default `'PENDING'` |
+| cancellation_reason | VARCHAR(500) | Nullable |
 
 ### 16. Bảng part_categories
 Danh mục loại linh kiện / vật tư — dùng chung toàn hệ thống.
@@ -414,6 +420,55 @@ Yêu cầu thay thế pin hoặc linh kiện từ Technician (được Admin c�
 | supplied_at | TIMESTAMPTZ | Nullable |
 | created_at | TIMESTAMPTZ | Non-nullable |
 
+### 23. Bảng delivery_ratings
+Đánh giá trải nghiệm giao hàng của Customer sau khi đơn hàng hoàn tất. Mỗi đơn hàng chỉ được đánh giá 1 lần.
+
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGSERIAL | **PK**, Non-nullable |
+| order_id | VARCHAR(50) | **FK** (`orders.id`), Unique, Non-nullable |
+| customer_id | VARCHAR(50) | **FK** (`accounts.id`), Non-nullable |
+| rating | INTEGER | Non-nullable (`CHECK (rating BETWEEN 1 AND 5)`) |
+| comment | VARCHAR(1000) | Nullable |
+| created_at | TIMESTAMP | Non-nullable |
+
+> Indexes: `idx_delivery_ratings_order (order_id)`, `idx_delivery_ratings_customer (customer_id)`, `idx_delivery_ratings_rating (rating)`.
+
+### 24. Bảng saved_addresses
+Danh bạ địa chỉ giao hàng của Customer — lưu thông tin người nhận thường dùng.
+
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGSERIAL | **PK**, Non-nullable |
+| customer_id | VARCHAR(50) | **FK** (`accounts.id`), Non-nullable |
+| label | VARCHAR(100) | Non-nullable |
+| recipient_name | VARCHAR(100) | Non-nullable |
+| recipient_phone | VARCHAR(20) | Non-nullable |
+| recipient_email | VARCHAR(255) | Nullable |
+| hub_id | BIGINT | **FK** (`hubs.id`), Nullable |
+| is_default | BOOLEAN | Non-nullable, Default `false` |
+| created_at | TIMESTAMP | Non-nullable |
+
+> Index: `idx_saved_addresses_customer (customer_id)`.
+
+### 25. Bảng drone_daily_stats
+Thống kê hoạt động drone theo ngày — được tổng hợp cuối mỗi ngày bởi worker.
+
+| Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
+| :--- | :--- | :--- |
+| id | BIGSERIAL | **PK**, Non-nullable |
+| drone_id | VARCHAR(50) | **FK** (`drones.id`), Non-nullable |
+| stat_date | TIMESTAMP | Non-nullable |
+| mission_count | INTEGER | Non-nullable, Default `0` |
+| completed_count | INTEGER | Non-nullable, Default `0` |
+| incident_count | INTEGER | Non-nullable, Default `0` |
+| total_distance_km | FLOAT | Non-nullable, Default `0.0` |
+| total_flight_min | FLOAT | Non-nullable, Default `0.0` |
+| total_energy_wh | FLOAT | Non-nullable, Default `0.0` |
+| created_at | TIMESTAMP | Non-nullable |
+
+> Index: `idx_drone_daily_drone_date (drone_id, stat_date)`.
+
 ---
 
 ## II. Lịch sử Migration & Quản lý Backup
@@ -431,3 +486,19 @@ Yêu cầu thay thế pin hoặc linh kiện từ Technician (được Admin c�
   - `app/shared/database/migrate_logs_schema.py`: Tách `audit_logs` thành `activity_logs` (user actions) và `system_logs` (cron/background events).
   - `app/shared/database/migrate_battery_catalog.py`: Thêm bảng `battery_model_catalog` (seed 3 model pin chuẩn: `TB48D` 130Wh, `Aurelia UltraPower` 444Wh, `DJI DB2000` 980Wh).
   - `app/shared/database/migrate_replacement_requests.py`: Thêm bảng `replacement_requests` và đồng bộ `orders.refund_status` (Chuẩn hóa **22 bảng chính thức**, không còn cột `orders.sender_email`).
+  - Chuẩn hóa ID & Model Pin toàn hệ thống: `drones.id` → `{M100|X6P|FC15}-DRNXXXX`, `batteries.id` → `{TB48|UP12|DB20}-BATXXXX`, chuẩn hóa `drones.name` (`Swift/Falcon/Eagle`), `serial_number` (`SN-DRN-XXXX`/`SN-BAT-XXXX`), đồng bộ `battery_model` & `battery_model_catalog` (`DJI TB48D`, `Aurelia UltraPower 12S`, `DJI DB2000`), bật `ON UPDATE CASCADE` cho `missions_battery_id_fkey` và `mission_legs_battery_id_fkey`, và đồng bộ toàn bộ cột tham chiếu/nhật ký liên quan.
+
+### 3. Performance Indexes (Done-Backend-v8)
+- Đã tạo 25 non-blocking indexes (`CREATE INDEX CONCURRENTLY IF NOT EXISTS`) trên các bảng nóng và đồng bộ vào SQLAlchemy models:
+  - `telemetry_logs`: `idx_telemetry_logs_mission_ts (mission_id, timestamp DESC)`, `idx_telemetry_logs_mission_id_desc (mission_id, id DESC)`
+  - `notifications`: `idx_notifications_user_created (user_id, created_at DESC)`, `idx_notifications_user_unread (user_id) WHERE is_read = false`, `idx_notifications_ref_created (reference_id, created_at DESC)`
+  - `missions`: `idx_missions_order_id_desc (order_id, id DESC)`, `idx_missions_status (status)`, `idx_missions_drone_id (drone_id)`, `idx_missions_origin_hub (origin_hub_id)`
+  - `mission_legs`: `idx_mission_legs_mission_seq (mission_id, sequence_no)`, `idx_mission_legs_to_hub_status (to_hub_id, status)`
+  - `orders`: `idx_orders_customer_created (customer_id, created_at DESC)`, `idx_orders_status_created (status, created_at DESC)`, `idx_orders_origin_hub_status (origin_hub_id, status)`, `idx_orders_payment_status (payment_status)`
+  - `ai_predictions`: `idx_ai_predictions_mission_id_desc (mission_id, id DESC)`
+  - `batteries`: `idx_batteries_hub_status (current_hub_id, status)`, `idx_batteries_drone_id (drone_id)`
+  - `drones`: `idx_drones_status_hub (operational_status, current_hub_id)`
+  - `work_orders`: `idx_work_orders_drone_status (drone_id, status)`, `idx_work_orders_tech_status (technician_id, status)`
+  - `maintenance_alerts`: `idx_maint_alerts_drone_status (drone_id, status)`, `idx_maint_alerts_mission_id (mission_id)`
+  - `incidents`: `idx_incidents_mission_status (mission_id, status)`
+  - `accounts`: `idx_accounts_role_id (role_id)`

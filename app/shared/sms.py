@@ -9,9 +9,22 @@ Sau khi đăng ký lấy: API_KEY, SECRET_KEY, Brandname (tên hiển thị)
 API Docs: https://esms.vn/api-sms
 """
 
+import asyncio
+import weakref
 import httpx
 from typing import Optional
 from app.core.config import settings
+
+_SMS_CLIENTS_BY_LOOP: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, httpx.AsyncClient] = weakref.WeakKeyDictionary()
+
+
+def _get_sms_async_client() -> httpx.AsyncClient:
+    loop = asyncio.get_running_loop()
+    client = _SMS_CLIENTS_BY_LOOP.get(loop)
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(timeout=5.0)
+        _SMS_CLIENTS_BY_LOOP[loop] = client
+    return client
 
 
 async def send_sms(phone: str, message: str) -> bool:
@@ -41,22 +54,21 @@ async def send_sms(phone: str, message: str) -> bool:
         "IsUnicode":  0,  # 0 = không dấu (an toàn hơn với SMS type 2)
         "Brandname":  "",  # ESMS yêu cầu field này ngay cả SmsType=2, set empty để dùng số random
     }
-    print(f"[SMS] DEBUG payload: {payload}")  # DEBUG
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(
-                "https://rest.esms.vn/MainService.svc/json/SendMultipleMessage_V4_post_json/",
-                json=payload,
-            )
-            data = resp.json()
-            code = data.get("CodeResult") or data.get("code")
-            if str(code) == "100":
-                print(f"[SMS] Gửi thành công đến {phone}")
-                return True
-            else:
-                print(f"[SMS] Lỗi ESMS: {data}")
-                return False
+        client = _get_sms_async_client()
+        resp = await client.post(
+            "https://rest.esms.vn/MainService.svc/json/SendMultipleMessage_V4_post_json/",
+            json=payload,
+        )
+        data = resp.json()
+        code = data.get("CodeResult") or data.get("code")
+        if str(code) == "100":
+            print(f"[SMS] Gửi thành công đến {phone}")
+            return True
+        else:
+            print(f"[SMS] Lỗi ESMS: {data}")
+            return False
     except Exception as e:
         print(f"[SMS] Exception khi gửi SMS: {e}")
         return False

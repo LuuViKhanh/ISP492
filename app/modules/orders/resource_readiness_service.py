@@ -52,10 +52,7 @@ async def evaluate_hub_resource_readiness(
     # 2. Đánh giá hàng chờ đơn tại Trạm gửi (T_queue) bằng 1 câu SQL COUNT duy nhất
     active_mission_statuses = [
         MissionStatus.SCHEDULED,
-        MissionStatus.IN_PROGRESS,
-        MissionStatus.APPROVED,
         MissionStatus.FLYING,
-        MissionStatus.ACTIVE_MISSION,
     ]
     has_active_mission = exists(
         select(Mission.id).where(

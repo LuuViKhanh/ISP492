@@ -42,7 +42,7 @@ from app.modules.fleet.models import Battery
 router = APIRouter(prefix="/admin/supplies", tags=["Admin - Supplies"])
 allow_admin = RoleChecker([UserRole.ADMIN])
 
-_COMPLETED_MS = (MissionStatus.COMPLETED, MissionStatus.MISSION_COMPLETED)
+_COMPLETED_MS = (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED)
 
 
 # ── Schemas ────────────────────────────────────────────────────────
@@ -152,29 +152,20 @@ async def get_supplies_summary(
     user: CurrentUser = Depends(allow_admin),
 ):
     """Trả về 4 chỉ số KPI đầu trang Supplies."""
-    total_items = (await db.execute(
-        select(func.coalesce(func.sum(HubSupply.quantity), 0))
-    )).scalar() or 0
-
-    low_stock = (await db.execute(
-        select(func.count()).select_from(HubSupply)
-        .where(HubSupply.quantity <= HubSupply.min_stock_threshold)
-    )).scalar() or 0
-
-    pending_requests = (await db.execute(
-        select(func.count()).select_from(PartsRequest)
-        .where(PartsRequest.status == PartsRequestStatus.PENDING)
-    )).scalar() or 0
-
-    total_categories = (await db.execute(
-        select(func.count()).select_from(PartCategory).where(PartCategory.is_active == True)
-    )).scalar() or 0
+    row = (await db.execute(
+        select(
+            select(func.coalesce(func.sum(HubSupply.quantity), 0)).scalar_subquery(),
+            select(func.count()).select_from(HubSupply).where(HubSupply.quantity <= HubSupply.min_stock_threshold).scalar_subquery(),
+            select(func.count()).select_from(PartsRequest).where(PartsRequest.status == PartsRequestStatus.PENDING).scalar_subquery(),
+            select(func.count()).select_from(PartCategory).where(PartCategory.is_active == True).scalar_subquery(),
+        )
+    )).one()
 
     return {
-        "total_items_in_stock": int(total_items),
-        "low_stock_alerts": int(low_stock),
-        "pending_requests": int(pending_requests),
-        "total_categories": int(total_categories),
+        "total_items_in_stock": int(row[0] or 0),
+        "low_stock_alerts": int(row[1] or 0),
+        "pending_requests": int(row[2] or 0),
+        "total_categories": int(row[3] or 0),
     }
 
 
@@ -547,25 +538,8 @@ async def approve_request(
                  f"{cat.name if cat else '?'} for drone {req.drone_id or 'N/A'}",
             created_at=now,
         ))
-        await db.commit()
-
-        # Notify Technician: đề xuất được duyệt
-        try:
-            from app.modules.system.models import Notification, NotificationType
-            db.add(Notification(
-                user_id=req.requested_by,
-                title=f"✅ Request #{request_id} Approved",
-                message=(
-                    f"Your request to use {req.quantity_needed}x {cat.name if cat else 'parts'} "
-                    f"has been approved by Admin. Please proceed with the repair and confirm completion."
-                ),
-                notifications_type=NotificationType.MAINTENANCE,
-                reference_id=f"PARTS_REQUEST_{request_id}",
-                created_at=now,
-            ))
-            await db.commit()
-        except Exception:
-            pass
+        # NOTE: Parts request approval — no in-app notification to Tech.
+        # Tech is notified via maintenance alerts and mission scheduling events.
 
         return {"message": "Approved; parts have been deducted from hub stock.",
                 "request_id": request_id, "status": PartsRequestStatus.APPROVED.value,
@@ -600,24 +574,7 @@ async def reject_request(
     req.admin_note = body.admin_note or "Rejected by Admin."
     await db.commit()
 
-    # Notify Technician: bị từ chối
-    try:
-        from app.modules.system.models import Notification, NotificationType
-        db.add(Notification(
-            user_id=req.requested_by,
-            title=f"❌ Request #{request_id} Rejected",
-            message=(
-                f"Your parts request has been rejected by Admin. "
-                f"Reason: {req.admin_note}"
-            ),
-            notifications_type=NotificationType.MAINTENANCE,
-            reference_id=f"PARTS_REQUEST_{request_id}",
-            created_at=now,
-        ))
-        await db.commit()
-    except Exception:
-        pass
-
+    # NOTE: No in-app notification for reject — Tech sees status change in app.
     return {"message": "Parts request rejected.", "request_id": request_id}
 
 
@@ -655,36 +612,9 @@ async def finance_report(
         ))
     )).scalar() or 0.0)
 
-    # Chi: sửa chữa (parts fulfilled)
-    repair_cost = float((await db.execute(
-        select(func.coalesce(func.sum(PartsRequest.actual_cost), 0.0))
-        .where(and_(
-            PartsRequest.status == PartsRequestStatus.FULFILLED,
-            PartsRequest.fulfilled_at >= p_start,
-            PartsRequest.fulfilled_at <= p_end,
-            PartsRequest.actual_cost.isnot(None),
-        ))
-    )).scalar() or 0.0)
-
-    # Chi: nhập kho từ nhà cung cấp
-    receive_txns = (await db.execute(
-        select(SupplyTransaction, PartCategory)
-        .join(PartCategory, SupplyTransaction.part_category_id == PartCategory.id)
-        .where(and_(
-            SupplyTransaction.reason == SupplyTxnReason.RECEIVE,
-            SupplyTransaction.created_at >= p_start,
-            SupplyTransaction.created_at <= p_end,
-        ))
-    )).all()
-    receive_cost = sum((cat.unit_cost or 0) * txn.quantity_delta for txn, cat in receive_txns)
-
-    # Chi tiết theo category
-    cat_expense: dict[str, float] = {}
-    for txn, cat in receive_txns:
-        cat_expense[cat.name] = cat_expense.get(cat.name, 0) + (cat.unit_cost or 0) * txn.quantity_delta
-
-    fulfilled_reqs = (await db.execute(
-        select(PartsRequest, PartCategory)
+    # Chi: sửa chữa + nhập kho tổng hợp theo category trực tiếp bằng SQL GROUP BY
+    repair_rows = (await db.execute(
+        select(PartCategory.name, func.coalesce(func.sum(PartsRequest.actual_cost), 0.0))
         .join(PartCategory, PartsRequest.part_category_id == PartCategory.id)
         .where(and_(
             PartsRequest.status == PartsRequestStatus.FULFILLED,
@@ -692,24 +622,47 @@ async def finance_report(
             PartsRequest.fulfilled_at <= p_end,
             PartsRequest.actual_cost.isnot(None),
         ))
+        .group_by(PartCategory.name)
     )).all()
-    for req, cat in fulfilled_reqs:
-        cat_expense[cat.name] = cat_expense.get(cat.name, 0) + (req.actual_cost or 0)
+    repair_cost = sum(float(cost or 0.0) for _, cost in repair_rows)
+
+    receive_rows = (await db.execute(
+        select(
+            PartCategory.name,
+            func.coalesce(func.sum(func.coalesce(PartCategory.unit_cost, 0.0) * SupplyTransaction.quantity_delta), 0.0),
+        )
+        .join(PartCategory, SupplyTransaction.part_category_id == PartCategory.id)
+        .where(and_(
+            SupplyTransaction.reason == SupplyTxnReason.RECEIVE,
+            SupplyTransaction.created_at >= p_start,
+            SupplyTransaction.created_at <= p_end,
+        ))
+        .group_by(PartCategory.name)
+    )).all()
+    receive_cost = sum(float(cost or 0.0) for _, cost in receive_rows)
+
+    cat_expense: dict[str, float] = {}
+    for cat_name, cost in receive_rows:
+        cat_expense[cat_name] = cat_expense.get(cat_name, 0.0) + float(cost or 0.0)
+    for cat_name, cost in repair_rows:
+        cat_expense[cat_name] = cat_expense.get(cat_name, 0.0) + float(cost or 0.0)
 
     total_expense = repair_cost + receive_cost
     net = total_revenue - total_expense
 
-    total_requests = int((await db.execute(
-        select(func.count()).select_from(PartsRequest).where(and_(
-            PartsRequest.created_at >= p_start, PartsRequest.created_at <= p_end,
-        ))
-    )).scalar() or 0)
-    fulfilled_count = int((await db.execute(
-        select(func.count()).select_from(PartsRequest).where(and_(
-            PartsRequest.status == PartsRequestStatus.FULFILLED,
-            PartsRequest.fulfilled_at >= p_start, PartsRequest.fulfilled_at <= p_end,
-        ))
-    )).scalar() or 0)
+    counts_row = (await db.execute(
+        select(
+            select(func.count()).select_from(PartsRequest).where(and_(
+                PartsRequest.created_at >= p_start, PartsRequest.created_at <= p_end,
+            )).scalar_subquery(),
+            select(func.count()).select_from(PartsRequest).where(and_(
+                PartsRequest.status == PartsRequestStatus.FULFILLED,
+                PartsRequest.fulfilled_at >= p_start, PartsRequest.fulfilled_at <= p_end,
+            )).scalar_subquery(),
+        )
+    )).one()
+    total_requests = int(counts_row[0] or 0)
+    fulfilled_count = int(counts_row[1] or 0)
 
     return {
         "period": label,
@@ -1289,24 +1242,8 @@ async def confirm_supply(
 
     await db.commit()
 
-    # Notify Technician
-    try:
-        from app.modules.system.models import Notification, NotificationType
-        type_label = "pin" if req.type == ReplacementType.BATTERY else "linh kiện"
-        db.add(Notification(
-            user_id=req.requested_by,
-            title=f"✅ Yêu cầu #{request_id} — {type_label} đã được cấp phát",
-            message=(
-                f"Admin đã cấp phát {req.quantity}x {type_label} cho yêu cầu của bạn. "
-                f"Item ID: {req.supplied_item_id}."
-            ),
-            notifications_type=NotificationType.MAINTENANCE,
-            reference_id=f"REPLACEMENT_{req.id}",
-            created_at=now,
-        ))
-        await db.commit()
-    except Exception:
-        pass
+    # NOTE: Replacement supply/reject — no in-app notification.
+    # Tech is notified via maintenance alerts and mission scheduling events.
 
     return {
         "message": f"Đã cấp phát thành công.",
@@ -1341,22 +1278,7 @@ async def reject_replacement_request(
     req.rejection_reason = body.rejection_reason
     await db.commit()
 
-    # Notify Technician
-    try:
-        from app.modules.system.models import Notification, NotificationType
-        type_label = "pin" if req.type == ReplacementType.BATTERY else "linh kiện"
-        db.add(Notification(
-            user_id=req.requested_by,
-            title=f"❌ Yêu cầu #{request_id} bị từ chối",
-            message=f"Yêu cầu thay {type_label} của bạn đã bị từ chối. Lý do: {body.rejection_reason}",
-            notifications_type=NotificationType.MAINTENANCE,
-            reference_id=f"REPLACEMENT_{req.id}",
-            created_at=now,
-        ))
-        await db.commit()
-    except Exception:
-        pass
-
+    # NOTE: No in-app notification for replacement reject.
     return {
         "message": "Đã từ chối yêu cầu.",
         "request_id": request_id,

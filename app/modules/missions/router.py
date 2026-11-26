@@ -1,7 +1,7 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, case, and_
 
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser, get_current_user
@@ -29,18 +29,29 @@ async def get_mission_kpi(
     tỷ lệ thành công, khoảng cách trung bình, tải trọng trung bình và tổng doanh thu.
     Dành cho Operator hoặc Admin.
     """
-    result = await db.execute(select(Mission).where(Mission.status != MissionStatus.CANCELLED))
-    missions = result.scalars().all()
+    comp_cond = Mission.status.in_((MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED))
+    dist_cond = and_(Mission.distance_m.isnot(None), Mission.distance_m != 0)
+    pay_cond = and_(Mission.payload_weight.isnot(None), Mission.payload_weight != 0)
+    row = (await db.execute(
+        select(
+            func.count(),
+            func.count(case((comp_cond, 1))),
+            func.coalesce(func.sum(case((dist_cond, Mission.distance_m), else_=0.0)), 0.0),
+            func.count(case((dist_cond, 1))),
+            func.coalesce(func.sum(case((pay_cond, Mission.payload_weight), else_=0.0)), 0.0),
+            func.count(case((pay_cond, 1))),
+            func.coalesce(func.sum(case((and_(comp_cond, Mission.delivery_fee.isnot(None)), Mission.delivery_fee), else_=0.0)), 0.0),
+        ).where(Mission.status != MissionStatus.CANCELLED)
+    )).one()
 
-    total = len(missions)
-    completed = sum(1 for m in missions if m.status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED))
+    total = int(row[0] or 0)
+    completed = int(row[1] or 0)
     cancelled = 0
-    rejected = sum(1 for m in missions if m.status == MissionStatus.REJECTED)
+    rejected = 0
     finished = completed + cancelled + rejected
-
-    distances = [m.distance_m for m in missions if m.distance_m]
-    payloads = [m.payload_weight for m in missions if m.payload_weight]
-    revenues = [m.delivery_fee for m in missions if m.delivery_fee and m.status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED)]
+    dist_sum, dist_cnt = float(row[2] or 0.0), int(row[3] or 0)
+    pay_sum, pay_cnt = float(row[4] or 0.0), int(row[5] or 0)
+    total_rev = float(row[6] or 0.0)
 
     return MissionKPIResponse(
         total_missions=total,
@@ -48,9 +59,9 @@ async def get_mission_kpi(
         cancelled=cancelled,
         rejected=rejected,
         success_rate=round(completed / finished * 100, 2) if finished else 0.0,
-        avg_distance_m=round(sum(distances) / len(distances), 2) if distances else 0.0,
-        avg_payload_kg=round(sum(payloads) / len(payloads), 2) if payloads else 0.0,
-        total_revenue=round(sum(revenues), 2),
+        avg_distance_m=round(dist_sum / dist_cnt, 2) if dist_cnt else 0.0,
+        avg_payload_kg=round(pay_sum / pay_cnt, 2) if pay_cnt else 0.0,
+        total_revenue=round(total_rev, 2),
     )
 
 
@@ -92,11 +103,7 @@ async def get_active_flights(
     """
     result = await db.execute(
         select(Mission).where(
-            Mission.status.in_([
-                MissionStatus.FLYING,
-                MissionStatus.IN_PROGRESS,
-                MissionStatus.ACTIVE_MISSION,
-            ])
+            Mission.status == MissionStatus.FLYING
         )
     )
     missions = result.scalars().all()

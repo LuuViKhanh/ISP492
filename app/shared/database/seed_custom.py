@@ -74,43 +74,50 @@ async def seed():
             """), {"uid": uid, "rid": rid, "pw": pw_hash, "name": name, "email": email, "hid": hid})
 
         print("Tạo Drones & Batteries mới...")
-        # 3 dòng drone:
-        # 1. DJI Matrice 100 (Max payload 1kg). Pin: TB48D (5700mAh)
-        # 2. DJI Inspire 2 (Max payload 0.8kg). Pin: TB50 (4280mAh)
-        # 3. DJI Matrice 200 V2 (Max payload 1.45kg). Pin: TB55 (7660mAh)
+        # Quy tắc: drone name = "{model}-DRN{X:03d}", battery serial = "{bat_model}-BAT{X:03d}"
+        # 3 dòng drone theo catalog model mới:
+        # 1. DJI Mavic 3 (Max payload 1.5kg). Pin: DJI-BAT-130W (480Wh)
+        # 2. DJI Matrice 300 (Max payload 5kg). Pin: AUR-BAT-444W (1308Wh)
+        # 3. DJI FlyCart 30 (Max payload 15kg). Pin: DJI-BAT-980W (3850Wh)
         drones_config = [
-            ("DJI Matrice 100", 1.0, 15.0, "TB48D", 5700.0, 2), # 2 drones
-            ("DJI Inspire 2", 0.8, 20.0, "TB50", 4280.0, 2), # 2 drones
-            ("DJI Matrice 200 V2", 1.45, 18.0, "TB55", 7660.0, 2) # 2 drones
+            ("DJI Mavic 3",     1.5,  15.0, "DJI-BAT-130W",  480.0, 2),
+            ("DJI Matrice 300", 5.0,  23.0, "AUR-BAT-444W", 1308.0, 2),
+            ("DJI FlyCart 30",  15.0, 25.0, "DJI-BAT-980W", 3850.0, 2),
         ]
-        
-        bat_counter = 1
+
+        drn_model_seq: dict[str, int] = {}
+        bat_model_seq: dict[str, int] = {}
+
         for model, cap, speed, bat_model, bat_cap, count in drones_config:
-            for i in range(count):
-                dname = f"{model} - Unit {i+1}"
+            for _ in range(count):
+                drn_model_seq[model] = drn_model_seq.get(model, 0) + 1
+                dname = f"{model}-DRN{drn_model_seq[model]:03d}"
                 res = await conn.execute(text("""
-                    INSERT INTO drones (name, model, payload_capacity_kg, max_speed, operational_status, current_hub_id, battery_level_pct, utilization_pct)
-                    VALUES (:name, :model, :cap, :speed, 'Available', 1, 100, 0.0)
+                    INSERT INTO drones (name, serial_number, model, payload_capacity_kg, max_speed,
+                        operational_status, current_hub_id, battery_level_pct, utilization_pct)
+                    VALUES (:name, :name, :model, :cap, :speed, 'Available', 1, 100, 0.0)
                     RETURNING id
                 """), {"name": dname, "model": model, "cap": cap, "speed": speed})
                 did = res.scalar()
-                
-                # Tạo Pin tương ứng cho drone
-                bat_id = f"BAT-{bat_counter:04d}"
+
+                # Tạo pin gắn drone
+                bat_model_seq[bat_model] = bat_model_seq.get(bat_model, 0) + 1
+                bat_sn = f"{bat_model}-BAT{bat_model_seq[bat_model]:03d}"
                 await conn.execute(text("""
-                    INSERT INTO batteries (id, serial_number, capacity_wh, status, drone_id, current_hub_id, charge_level_pct, create_at, battery_model)
+                    INSERT INTO batteries (id, serial_number, capacity_wh, status, drone_id,
+                        current_hub_id, charge_level_pct, create_at, battery_model)
                     VALUES (:id, :id, :cap, 'Active', :did, NULL, 100, NOW(), :bmodel)
-                """), {"id": bat_id, "cap": bat_cap, "did": did, "bmodel": bat_model})
-                bat_counter += 1
-                
-        # Tạo thêm 5 viên pin dự phòng trong kho (Trạm 1)
+                """), {"id": bat_sn, "cap": bat_cap, "did": did, "bmodel": bat_model})
+
+        # Pin dự phòng tại Hub 1
         for i in range(5):
-            bat_id = f"BAT-{bat_counter:04d}"
+            bat_model_seq["DJI-BAT-130W"] = bat_model_seq.get("DJI-BAT-130W", 0) + 1
+            bat_sn = f"DJI-BAT-130W-BAT{bat_model_seq['DJI-BAT-130W']:03d}"
             await conn.execute(text("""
-                INSERT INTO batteries (id, serial_number, capacity_wh, status, drone_id, current_hub_id, charge_level_pct, create_at, battery_model)
-                VALUES (:id, :id, 5700.0, 'Active', NULL, 1, 100, NOW(), 'TB48D')
-            """), {"id": bat_id})
-            bat_counter += 1
+                INSERT INTO batteries (id, serial_number, capacity_wh, status, drone_id,
+                    current_hub_id, charge_level_pct, create_at, battery_model)
+                VALUES (:id, :id, 480.0, 'Active', NULL, 1, 100, NOW(), 'DJI-BAT-130W')
+            """), {"id": bat_sn})
 
         print("Hoàn tất thiết lập cơ sở dữ liệu mẫu!")
 

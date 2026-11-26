@@ -125,6 +125,13 @@ class AdminAlerts(BaseModel):
     total_audit_logs: int
 
 
+class AdminRatings(BaseModel):
+    total_ratings: int
+    avg_rating: float          # Điểm trung bình 1-5 sao
+    five_star_pct: float       # % đánh giá 5 sao
+    low_rating_count: int      # Số đánh giá <= 2 sao (cần xem xét)
+
+
 class AdminDashboardResponse(BaseModel):
     revenue: AdminRevenue
     users: AdminUsers
@@ -133,3 +140,4 @@ class AdminDashboardResponse(BaseModel):
     batteries: AdminBatteries
     ai: AdminAI
     alerts: AdminAlerts
+    ratings: Optional[AdminRatings] = None

@@ -1,8 +1,8 @@
 import asyncio
 from datetime import datetime, timezone, timedelta
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text, cast, String, and_, func
+from sqlalchemy import select, text, cast, String, and_, or_, func
 
 from app.core.timezone import get_vn_naive_datetime, get_vn_datetime
 
@@ -107,8 +107,6 @@ async def get_incoming_drones(
             .where(
                 Mission.status.in_([
                     MissionStatus.FLYING,
-                    MissionStatus.IN_PROGRESS,
-                    MissionStatus.ACTIVE_MISSION,
                     MissionStatus.INCIDENT_RETURN,
                     MissionStatus.FAILED,
                     MissionStatus.ARRIVAL_COMPLETED,
@@ -167,8 +165,45 @@ async def get_incoming_drones(
         result = await db.execute(query)
         rows = result.all()
         
+        # Batch-fetch toàn bộ MissionLeg cho tất cả incoming missions (diệt N+1)
+        unique_m_ids = list(dict.fromkeys(row[0] for row in rows if row[0] is not None))
+        legs_by_mid: dict = {}
+        if unique_m_ids:
+            all_legs_res = await db.execute(
+                select(MissionLeg)
+                .where(MissionLeg.mission_id.in_(unique_m_ids))
+                .order_by(MissionLeg.mission_id, MissionLeg.sequence_no)
+            )
+            for lg in all_legs_res.scalars().all():
+                legs_by_mid.setdefault(lg.mission_id, []).append(lg)
+
         response = []
         seen_ids = set()
+        
+        # Batch-fetch all batteries needed for next_leg display
+        all_next_leg_bat_ids = set()
+        legs_map_by_mid: dict[str, list] = {}
+        for row in rows:
+            m_id = row[0]
+            if m_id in seen_ids:
+                continue
+            legs = legs_by_mid.get(m_id, [])
+            if legs:
+                for i, leg in enumerate(legs):
+                    if leg.status in [MissionLegStatus.IN_PROGRESS, MissionLegStatus.COMPLETED]:
+                        if i + 1 < len(legs) and legs[i + 1].battery_id:
+                            all_next_leg_bat_ids.add(legs[i + 1].battery_id)
+                        break
+        
+        # Fetch all next_leg batteries in bulk
+        next_leg_bats: dict[str, Battery] = {}
+        if all_next_leg_bat_ids:
+            bat_res = await db.execute(
+                select(Battery).where(Battery.id.in_(list(all_next_leg_bat_ids)))
+            )
+            for bat in bat_res.scalars().all():
+                next_leg_bats[bat.id] = bat
+        
         for row in rows:
             (
                 m_id,
@@ -197,18 +232,13 @@ async def get_incoming_drones(
                 mission_state = "Incident"
             elif m_status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED):
                 mission_state = "Completed"
-            elif m_status in (MissionStatus.FLYING, MissionStatus.IN_PROGRESS, MissionStatus.ACTIVE_MISSION):
+            elif m_status == MissionStatus.FLYING:
                 mission_state = "Flying"
             else:
                 mission_state = None
 
-            # Lấy thông tin legs để show current_leg và next_leg
-            legs_res = await db.execute(
-                select(MissionLeg)
-                .where(MissionLeg.mission_id == m_id)
-                .order_by(MissionLeg.sequence_no)
-            )
-            legs = legs_res.scalars().all()
+            # Lấy thông tin legs từ map đã batch-fetch
+            legs = legs_by_mid.get(m_id, [])
             
             current_leg_info = None
             next_leg_info = None
@@ -225,7 +255,7 @@ async def get_incoming_drones(
                             "battery_id": leg.battery_id,
                             "status": leg.status.value if hasattr(leg.status, "value") else leg.status,
                         }
-                        # Next leg info (battery_id = null - technician chọn qua swap-battery)
+                        # Next leg info (may have battery_id assigned during mission planning)
                         if i + 1 < len(legs):
                             next_leg = legs[i + 1]
                             next_leg_info = {
@@ -233,9 +263,14 @@ async def get_incoming_drones(
                                 "sequence_no": next_leg.sequence_no,
                                 "from_hub_id": next_leg.from_hub_id,
                                 "to_hub_id": next_leg.to_hub_id,
-                                "battery_id": None,
+                                "battery_id": next_leg.battery_id,  # Use actual battery_id from leg (may be None if not planned yet)
                                 "status": next_leg.status.value if hasattr(next_leg.status, "value") else next_leg.status,
                             }
+                            # Add battery details if battery was pre-selected during mission planning
+                            if next_leg.battery_id and next_leg.battery_id in next_leg_bats:
+                                bat = next_leg_bats[next_leg.battery_id]
+                                next_leg_info["battery_code"] = bat.serial_number
+                                next_leg_info["battery_percent"] = bat.charge_level_pct
                         break
 
             response.append({
@@ -393,6 +428,7 @@ async def get_transit_history(
 @router.post("/missions/{mission_id}/confirm-arrival")
 async def confirm_arrival(
     mission_id: str,
+    background_tasks: BackgroundTasks,
     body: Optional[ConfirmArrivalRequest] = None,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
@@ -416,6 +452,7 @@ async def confirm_arrival(
     from app.modules.system.models import Hub as HubModel
 
     mission = await _resolve_mission(db, mission_id)
+    pending_bg_emails: list[tuple] = []
 
     # Nếu mission đã xử lý hoàn tất trước đó (handling_status đã được xóa và drone đã được tiếp nhận)
     if (
@@ -503,6 +540,14 @@ async def confirm_arrival(
     # Ghi nhận arrival_confirmed_at khi drone đáp hub (bình thường hay incident)
     mission.arrival_confirmed_at = now
     mission.arrival_confirmed_by = user.id
+
+    # ── Tích lũy giờ bay thực tế vào drone.total_flight_hours ────────────────
+    if drone and mission.departed_at:
+        _dep = mission.departed_at.replace(tzinfo=None) if mission.departed_at.tzinfo else mission.departed_at
+        _arr = now.replace(tzinfo=None) if hasattr(now, "tzinfo") and now.tzinfo else now
+        _flight_secs = max(0.0, (_arr - _dep).total_seconds())
+        _flight_hours = round(_flight_secs / 3600.0, 4)
+        drone.total_flight_hours = round(float(drone.total_flight_hours or 0.0) + _flight_hours, 4)
     
     # Lưu battery percent lúc đáp hub
     if mission.battery_id:
@@ -653,7 +698,7 @@ async def confirm_arrival(
                     if order_obj.customer_id:
                         db.add(_Notif(
                             user_id=order_obj.customer_id,
-                            title="⚠️ Order Cancelled After Flight Crash — Refund Initiated",
+                            title="Order Cancelled After Flight Crash — Refund Initiated",
                             message=(
                                 f"Unfortunately, your package for order #{order_obj.id} was lost/damaged during an "
                                 f"in-flight crash on Mission #{mission.id}. Our support team has cancelled the order and initiated refund handling."
@@ -667,7 +712,7 @@ async def confirm_arrival(
                     for op_adm_id in await get_operator_and_admin_ids(db):
                         db.add(_Notif(
                             user_id=op_adm_id,
-                            title=f"🚨 Crash Recovery: Package Lost for Order #{order_obj.id}",
+                            title=f"Crash Recovery: Package Lost for Order #{order_obj.id}",
                             message=(
                                 f"Technician confirmed drone #{mission.drone_id} recovery at {hub_name or f'Hub #{receiving_hub_id}'}, "
                                 f"but package #{order_obj.id} was lost/damaged. Order marked CANCELLED — please process PayOS refund if PAID."
@@ -709,20 +754,26 @@ async def confirm_arrival(
 
                     if sender_email_addr:
                         from app.core.email import send_incident_notification_email
-                        await send_incident_notification_email(
-                            to_email=sender_email_addr,
-                            order_id=order_obj.id,
-                            incident_detail=incident_detail,
-                            role="sender",
-                        )
+                        pending_bg_emails.append((
+                            send_incident_notification_email,
+                            dict(
+                                to_email=sender_email_addr,
+                                order_id=order_obj.id,
+                                incident_detail=incident_detail,
+                                role="sender",
+                            ),
+                        ))
                     if order_obj.receiver_email:
                         from app.core.email import send_incident_notification_email
-                        await send_incident_notification_email(
-                            to_email=order_obj.receiver_email,
-                            order_id=order_obj.id,
-                            incident_detail=incident_detail,
-                            role="receiver",
-                        )
+                        pending_bg_emails.append((
+                            send_incident_notification_email,
+                            dict(
+                                to_email=order_obj.receiver_email,
+                                order_id=order_obj.id,
+                                incident_detail=incident_detail,
+                                role="receiver",
+                            ),
+                        ))
 
                     from app.modules.system.models import Notification as _Notif, NotificationType as _NT
                     # Thông báo cho Customer: đơn hàng tạm hoãn do sự cố kỹ thuật và đang được sắp xếp lại
@@ -745,7 +796,7 @@ async def confirm_arrival(
                         for op_id in await get_operator_ids(db):
                             db.add(_Notif(
                                 user_id=op_id,
-                                title=f"📦 Package Recovered at {hub_name or f'Hub #{receiving_hub_id}'} — Ready to Replan",
+                                title=f"Package Recovered at {hub_name or f'Hub #{receiving_hub_id}'} — Ready to Replan",
                                 message=(
                                     f"Technician recovered Drone #{mission.drone_id} and Order #{order_obj.id} back to "
                                     f"{hub_name or f'Hub #{receiving_hub_id}'}. Order is now ready for replacement mission planning."
@@ -764,19 +815,22 @@ async def confirm_arrival(
                     order_obj.updated_at = now
 
                     if order_obj.receiver_email:
-                        await send_hub_arrival_email(
-                            to_email=order_obj.receiver_email,
-                            order_id=order_obj.id,
-                            hub_name=hub_name,
-                            frontend_url=settings.FRONTEND_URL,
-                        )
+                        pending_bg_emails.append((
+                            send_hub_arrival_email,
+                            dict(
+                                to_email=order_obj.receiver_email,
+                                order_id=order_obj.id,
+                                hub_name=hub_name,
+                                frontend_url=settings.FRONTEND_URL,
+                            ),
+                        ))
 
                     # ── Notify Customer: drone đã tới Hub đích ───────────────────
                     if order_obj.customer_id:
                         from app.modules.system.models import Notification as _Notif, NotificationType as _NT
                         db.add(_Notif(
                             user_id=order_obj.customer_id,
-                            title="🚁 Drone Arrived at Hub — Your Package Is Ready!",
+                            title="Drone Arrived at Hub — Your Package Is Ready!",
                             message=(
                                 f"Your order #{order_obj.id} has been delivered by drone to "
                                 f"{hub_name or 'the destination hub'}. "
@@ -788,10 +842,47 @@ async def confirm_arrival(
                             mission_id=str(mission.id),
                             created_at=now,
                         ))
+
+                    # ── Notify Technicians at receiving hub: drone arrived ─────────
+                    try:
+                        from app.modules.system.models import Notification as _ANotif, NotificationType as _ANT
+                        from app.modules.auth.models import User as _AUser, ROLE_NAME_TO_ID as _AROLE_MAP
+                        from app.shared.roles import UserRole as _ARole
+                        _a_tech_role_id = _AROLE_MAP.get(_ARole.TECHNICIAN)
+                        if receiving_hub_id and _a_tech_role_id:
+                            _a_hub_name = hub_name or f"Hub #{receiving_hub_id}"
+                            _a_tech_res = await db.execute(
+                                select(_AUser.id).where(
+                                    _AUser.role_id == _a_tech_role_id,
+                                    _AUser.hub_id == str(receiving_hub_id),
+                                )
+                            )
+                            for _atid in _a_tech_res.scalars().all():
+                                db.add(_ANotif(
+                                    user_id=_atid,
+                                    title=f"Drone Arrived at {_a_hub_name} — Ready for Inspection",
+                                    message=(
+                                        f"Drone #{mission.drone_id} has landed at {_a_hub_name} "
+                                        f"(Mission #{mission.id}). Please proceed with post-flight inspection."
+                                    ),
+                                    notifications_type=_ANT.MAINTENANCE,
+                                    reference_id=f"DRONE_ARRIVED_TECH_{mission.id}",
+                                    mission_id=str(mission.id),
+                                    drone_id=str(mission.drone_id) if mission.drone_id else None,
+                                    created_at=now,
+                                ))
+                    except Exception as _ae:
+                        print(f"[ARRIVAL] Failed to notify hub technicians: {_ae}")
     except Exception as e:
         print(f"[ORDER_CONFIRM] Lỗi cập nhật đơn hàng: {e}")
 
     await db.commit()
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
+
+    # Gửi email ở nền sau khi đã commit DB để giải phóng row locks ngay lập tức
+    for email_fn, email_kwargs in pending_bg_emails:
+        background_tasks.add_task(email_fn, **email_kwargs)
 
     return {
         "message": confirm_msg,
@@ -1065,7 +1156,8 @@ async def update_drone_status(
     
     drone.status = body.status
     await db.commit()
-    await db.refresh(drone)
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
     return drone
 
 
@@ -1145,6 +1237,8 @@ async def use_battery_for_mission(
     mission.battery_id = battery.id
     battery.status = batteries_status.ACTIVE
     await db.commit()
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
     
     return {"message": "Battery assigned successfully"}
 
@@ -1174,7 +1268,8 @@ async def mark_battery_charged(
     battery.charge_level_pct = 100
     battery.last_charged_at = get_vn_naive_datetime()
     await db.commit()
-    await db.refresh(battery)
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
     
     return {
         "message": "Battery marked as 100% charged",
@@ -1186,18 +1281,6 @@ async def mark_battery_charged(
             "last_charged_at": battery.last_charged_at.isoformat() if battery.last_charged_at else None,
         }
     }
-
-
-@router.get("/drones/{drone_id}/maintenance-history", response_model=list[MaintenanceHistoryItem])
-async def get_drone_maintenance_history(
-    drone_id: str,
-    user: CurrentUser = Depends(allow_technician),
-    db: AsyncSession = Depends(get_async_db),
-):
-    result = await db.execute(
-        select(WorkOrder).where(WorkOrder.drone_id == drone_id).order_by(WorkOrder.id.desc())
-    )
-    return result.scalars().all()
 
 
 # ── Maintenance Records ───────────────────────────────────────────────────────
@@ -1363,14 +1446,19 @@ async def list_maintenance_alerts(
         .alias("latest_alerts")
     )
     
+    _closed_statuses = ["Dismissed", "DISMISSED", "Resolved", "RESOLVED"]
     query = (
         select(MaintenanceAlert)
         .outerjoin(Drone, MaintenanceAlert.drone_id == Drone.id)
         .where(
             MaintenanceAlert.work_order_id == None,
+            or_(MaintenanceAlert.status.is_(None), MaintenanceAlert.status.notin_(_closed_statuses)),
             MaintenanceAlert.id.in_(
                 select(func.max(MaintenanceAlert.id))
-                .where(MaintenanceAlert.work_order_id == None)
+                .where(
+                    MaintenanceAlert.work_order_id == None,
+                    or_(MaintenanceAlert.status.is_(None), MaintenanceAlert.status.notin_(_closed_statuses)),
+                )
                 .group_by(MaintenanceAlert.drone_id)
             ),
             Drone.status.in_([DroneStatus.MAINTENANCE, DroneStatus.AVAILABLE])  # ← Hiện cả 2
@@ -1391,11 +1479,14 @@ async def list_maintenance_alerts_history(
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Trả alerts đã được xử lý (đã có work order) tại hub của technician."""
+    """Trả alerts đã được xử lý (đã có work order hoặc đã Dismissed) tại hub của technician."""
     query = (
         select(MaintenanceAlert)
         .outerjoin(Drone, MaintenanceAlert.drone_id == Drone.id)
-        .where(MaintenanceAlert.work_order_id != None)
+        .where(or_(
+            MaintenanceAlert.work_order_id != None,
+            MaintenanceAlert.status.in_(["Dismissed", "DISMISSED"]),
+        ))
         .order_by(MaintenanceAlert.id.desc())
     )
     
@@ -1662,7 +1753,8 @@ async def create_work_order(
         wo.parts_replaced_json = body.parts_replaced or []
 
     await db.commit()
-    await db.refresh(wo)
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
     return wo
 
 
@@ -1681,7 +1773,8 @@ async def update_work_order(
     if body.action_taken is not None:
         wo.action_taken = body.action_taken
     await db.commit()
-    await db.refresh(wo)
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
     return wo
 
 
@@ -1694,14 +1787,33 @@ async def delete_work_order(
     wo = await db.get(WorkOrder, work_order_id)
     if not wo:
         raise HTTPException(status_code=404, detail="Work order not found")
-    
-    # Nếu work order đang được dùng bởi battery/drone, không thể xóa
-    if wo.battery_id:
-        battery = await db.get(Battery, wo.battery_id)
-        if battery and battery.work_order_id == wo.id:
-            raise HTTPException(status_code=400, detail="Cannot delete a work order that is currently in use. Please complete it first.")
-    
-    db.delete(wo)
+
+    # Không xóa work order đang In Progress
+    if wo.status == WorkOrderStatus.IN_PROGRESS:
+        raise HTTPException(status_code=400, detail="Cannot delete a work order that is In Progress. Please complete or cancel it first.")
+
+    # ── 1. Unlink Battery.work_order_id → tránh FK violation khi xóa WO ──────
+    # Check cả chiều thuận (wo.battery_id) và chiều ngược (Battery.work_order_id == wo.id)
+    batteries_to_unlink = (await db.execute(
+        select(Battery).where(Battery.work_order_id == work_order_id)
+    )).scalars().all()
+    for bat in batteries_to_unlink:
+        bat.work_order_id = None
+
+    # ── 2. Alert gắn với WO bị xóa → đánh dấu Dismissed (không quay lại danh sách Active) ──
+    alerts_to_unlink = (await db.execute(
+        select(MaintenanceAlert).where(MaintenanceAlert.work_order_id == work_order_id)
+    )).scalars().all()
+    for alert in alerts_to_unlink:
+        alert.work_order_id = None
+        alert.status = "Dismissed"
+        alert.handled_by = str(user.id)
+
+    # ── 3. Xóa WO ─────────────────────────────────────────────────────────────
+    await db.flush()   # Apply unlink trước
+    await db.delete(wo)
+    await db.flush()   # Verify delete staged OK
+
     await db.commit()
 
 
@@ -1805,7 +1917,7 @@ async def update_inspection(
             for _uid in set(_notif_ids):
                 db.add(Notification(
                     user_id=_uid,
-                    title=f"✅ Work Order #{wo.id} Completed",
+                    title=f"Work Order #{wo.id} Completed",
                     message=(
                         f"{_drone_label} repair has been completed. "
                         f"Technician: {user.id}. "
@@ -1822,7 +1934,8 @@ async def update_inspection(
     cur_logs.append(new_log)
     wo.status_logs_json = cur_logs
     await db.commit()
-    await db.refresh(wo)
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
     return wo
 
 
@@ -1850,17 +1963,15 @@ async def confirm_relay_arrival(
     from app.modules.fleet.models import DroneStatus, batteries_status
 
     mission = await _resolve_mission(db, mission_id)
+    pending_bg_emails: list[tuple] = []
     if mission.handling_status == HandlingStatus.INCOMING:
         raise HTTPException(
             status_code=400,
             detail="Drone is still in transit on the incoming leg and has not landed at the Relay Hub yet. Please wait for the drone to land before confirming!"
         )
     if mission.status not in [
-        MissionStatus.IN_PROGRESS,
         MissionStatus.FLYING,
-        MissionStatus.ACTIVE_MISSION,
         MissionStatus.SCHEDULED,
-        MissionStatus.APPROVED,
     ]:
         raise HTTPException(
             status_code=400,
@@ -1907,7 +2018,7 @@ async def confirm_relay_arrival(
         )
 
     # Đảm bảo mission đang ở FLYING (khớp với bảng flow FE và live-tracking/telemetry)
-    if mission.status in [MissionStatus.SCHEDULED, MissionStatus.APPROVED, MissionStatus.IN_PROGRESS]:
+    if mission.status == MissionStatus.SCHEDULED:
         mission.status = MissionStatus.FLYING
         mission.start_time = mission.start_time or now
         mission.departed_at = mission.departed_at or now
@@ -2010,6 +2121,7 @@ async def swap_battery_at_relay(
     from app.modules.missions.technician.router import get_compatible_battery_models
 
     mission = await _resolve_mission(db, mission_id)
+    pending_bg_emails: list[tuple] = []
     if mission.handling_status not in [HandlingStatus.AT_HUB, HandlingStatus.READY]:
         raise HTTPException(
             status_code=400,
@@ -2042,10 +2154,7 @@ async def swap_battery_at_relay(
 
     active_statuses = [
         MissionStatus.SCHEDULED,
-        MissionStatus.IN_PROGRESS,
-        MissionStatus.APPROVED,
         MissionStatus.FLYING,
-        MissionStatus.ACTIVE_MISSION,
     ]
     # Tập các mã pin đã được giữ bởi các Mission active KHÁC (gồm cả Mission.battery_id và MissionLeg.battery_id)
     other_mission_bats_res = await db.execute(
@@ -2209,6 +2318,7 @@ async def mark_mission_ready(
     - mission.handling_status → READY.
     """
     mission = await _resolve_mission(db, mission_id)
+    pending_bg_emails: list[tuple] = []
 
     if mission.handling_status != HandlingStatus.AT_HUB:
         raise HTTPException(
@@ -2265,6 +2375,7 @@ async def dispatch_drone(
     from app.shared.workers import get_operator_ids
 
     mission = await _resolve_mission(db, mission_id)
+    pending_bg_emails: list[tuple] = []
     if mission.handling_status != HandlingStatus.READY:
         raise HTTPException(
             status_code=400,
@@ -2273,49 +2384,31 @@ async def dispatch_drone(
 
     now = get_vn_naive_datetime()
 
-    # Tìm leg tiếp theo cần bay (PENDING)
-    next_leg_result = await db.execute(
+    # Fetch toàn bộ legs của mission trong 1 query duy nhất (thay vì 5 queries rời rạc)
+    all_legs = (await db.execute(
         select(MissionLeg)
-        .where(
-            MissionLeg.mission_id == mission.id,
-            MissionLeg.status == MissionLegStatus.PENDING,
-        )
+        .where(MissionLeg.mission_id == mission.id)
         .order_by(MissionLeg.sequence_no)
-        .limit(1)
-    )
-    next_leg = next_leg_result.scalars().first()
+    )).scalars().all()
 
-    # Nếu chưa có leg PENDING nhưng có leg đang IN_PROGRESS (trường hợp re-dispatch), dùng leg đó
+    next_leg = next((lg for lg in all_legs if lg.status == MissionLegStatus.PENDING), None)
     if not next_leg:
-        inprog_leg_res = await db.execute(
-            select(MissionLeg)
-            .where(
-                MissionLeg.mission_id == mission.id,
-                MissionLeg.status == MissionLegStatus.IN_PROGRESS,
-            )
-            .order_by(MissionLeg.sequence_no)
-            .limit(1)
-        )
-        next_leg = inprog_leg_res.scalars().first()
+        next_leg = next((lg for lg in all_legs if lg.status == MissionLegStatus.IN_PROGRESS), None)
 
-    # Nếu mission legacy chưa có bản ghi MissionLeg nào thì tự khởi tạo leg 1
-    if not next_leg:
-        all_legs_res = await db.execute(
-            select(MissionLeg).where(MissionLeg.mission_id == mission.id)
+    if not next_leg and not all_legs and mission.origin_hub_id and mission.destination_hub_id:
+        next_leg = MissionLeg(
+            mission_id=mission.id,
+            sequence_no=1,
+            from_hub_id=mission.origin_hub_id,
+            to_hub_id=mission.destination_hub_id,
+            battery_id=mission.battery_id,
+            status=MissionLegStatus.PENDING,
+            created_at=now,
+            updated_at=now,
         )
-        if not all_legs_res.scalars().all() and mission.origin_hub_id and mission.destination_hub_id:
-            next_leg = MissionLeg(
-                mission_id=mission.id,
-                sequence_no=1,
-                from_hub_id=mission.origin_hub_id,
-                to_hub_id=mission.destination_hub_id,
-                battery_id=mission.battery_id,
-                status=MissionLegStatus.PENDING,
-                created_at=now,
-                updated_at=now,
-            )
-            db.add(next_leg)
-            await db.flush()
+        db.add(next_leg)
+        await db.flush()
+        all_legs = [next_leg]
 
     if not next_leg:
         raise HTTPException(
@@ -2335,14 +2428,9 @@ async def dispatch_drone(
         mission.start_time = now
     if not mission.departed_at:
         mission.departed_at = now
-    
+
     # ── Set leg_destination_type: destination vs connection ──
-    # Nếu leg tiếp theo không phải leg cuối cùng → connection (relay hub)
-    # Nếu leg tiếp theo là leg cuối cùng → destination (đích cuối)
-    total_legs_res = await db.execute(
-        select(MissionLeg).where(MissionLeg.mission_id == mission.id)
-    )
-    total_legs = len(total_legs_res.scalars().all())
+    total_legs = len(all_legs)
     
     if next_leg.sequence_no < total_legs:
         mission.leg_destination_type = "connection"  # Bay đến relay hub
@@ -2970,7 +3058,10 @@ async def get_outbound_history(
         
         result = await db.execute(query)
         rows = result.all()
-        
+
+        from app.modules.missions.bundle_service import get_all_hubs_cached
+        hub_name_map = {h.id: h.name for h in await get_all_hubs_cached(db)}
+
         response = []
         for row in rows:
             (
@@ -2978,10 +3069,9 @@ async def get_outbound_history(
                 start_time, m_status, origin_received_at, receiver_name,
                 drone_id, drone_code, battery_id, battery_code, origin_hub_name,
             ) = row
-            
-            # Lấy tên hub đích từ DB
-            dest_hub = await db.get(Hub, dest_hub_id) if dest_hub_id else None
-            dest_hub_name = dest_hub.name if dest_hub else None
+
+            # Lấy tên hub đích từ RAM cache (diệt N+1 db.get(Hub))
+            dest_hub_name = hub_name_map.get(dest_hub_id) if dest_hub_id else None
             
             response.append({
                 "mission_id": str(m_id) if m_id else None,

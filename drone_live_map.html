@@ -86,7 +86,7 @@
 
 <div id="sidebar">
   <div id="sidebar-header">
-    <h1>🚁 DroneOptAI Live Map</h1>
+    <h1>DroneOptAI Live Map</h1>
     <p>Operator Dashboard · Real-time tracking</p>
   </div>
 
@@ -94,7 +94,7 @@
     <input id="inp-url"    type="text"     placeholder="API URL · https://arrive-metals-widely-drawings.trycloudflare.com/api/v1" value="https://arrive-metals-widely-drawings.trycloudflare.com/api/v1"/>
     <input id="inp-token"  type="password" placeholder="Bearer token (operator / admin)"/>
     <input id="inp-mapbox" type="password" placeholder="Mapbox token · pk.eyJ1..."/>
-    <button id="connect-btn" onclick="toggleConnect()">▶ Kết nối</button>
+    <button id="connect-btn" onclick="toggleConnect()">Kết nối</button>
   </div>
 
   <div id="status-bar">
@@ -103,11 +103,11 @@
   </div>
 
   <div id="drone-list">
-    <div id="empty"><div class="ico">📡</div>Nhập token và nhấn <strong>Kết nối</strong></div>
+    <div id="empty"><div class="ico"></div>Nhập token và nhấn <strong>Kết nối</strong></div>
   </div>
 
   <div id="detail" style="display:none">
-    <h3>📍 Hành trình · Mission #<span id="det-id">-</span></h3>
+    <h3>Hành trình · Mission #<span id="det-id">-</span></h3>
     <div id="cp-list"></div>
   </div>
 </div>
@@ -159,7 +159,7 @@ function loadTiles(tok){
   // Nút chuyển theme
   if(window._tsCtrl) map.removeControl(window._tsCtrl);
   const order=['dark','streets','sat'];
-  const labels={'dark':'☀️ Streets','streets':'🛰️ Satellite','sat':'🌙 Dark'};
+  const labels={'dark':'Streets','streets':'Satellite','sat':'Dark'};
   let idx=0;
   L.Control.TS=L.Control.extend({onAdd:function(){
     const d=L.DomUtil.create('div','leaflet-bar leaflet-control');
@@ -191,10 +191,10 @@ async function loadHubs(){
       list.forEach(h=>{
         if(!h.latitude||!h.longitude) return;
         const m=L.marker([h.latitude,h.longitude],{
-          icon:L.divIcon({className:'',html:`<div class="hm">🏠</div>`,iconSize:[20,20],iconAnchor:[10,10]}),
+          icon:L.divIcon({className:'',html:`<div class="hm">H</div>`,iconSize:[20,20],iconAnchor:[10,10]}),
           zIndexOffset:500,
         }).addTo(map).bindPopup(`
-          <div class="pu-title">🏠 ${h.name||h.code||'Hub'}</div>
+          <div class="pu-title">${h.name||h.code||'Hub'}</div>
           <div class="pu-row">Tọa độ: <span>${h.latitude?.toFixed(5)}, ${h.longitude?.toFixed(5)}</span></div>
           ${h.address?`<div class="pu-row">Địa chỉ: <span>${h.address}</span></div>`:''}
         `);
@@ -208,7 +208,7 @@ async function loadHubs(){
 function droneIcon(isSel){
   return L.divIcon({
     className:'',
-    html:`<div class="dm"><div class="dm-ring"></div><div class="dm-body${isSel?' sel':''}">🚁</div></div>`,
+    html:`<div class="dm"><div class="dm-ring"></div><div class="dm-body${isSel?' sel':''}">D</div></div>`,
     iconSize:[36,36],iconAnchor:[18,18],
   });
 }
@@ -360,7 +360,7 @@ async function poll(){
 
       // Popup
       drones[mid].marker.bindPopup(`
-        <div class="pu-title">🚁 Drone #${drone_id??'?'} · Mission #${mid}</div>
+        <div class="pu-title">Drone #${drone_id??'?'} · Mission #${mid}</div>
         <div class="pu-row">Tọa độ <span>${lat?.toFixed(5)}, ${lng?.toFixed(5)}</span></div>
         <div class="pu-row">Độ cao <span>${alt?.toFixed(1)??'—'} m</span></div>
         <div class="pu-row">Tốc độ <span>${spd?.toFixed(1)??'—'} m/s</span></div>
@@ -380,7 +380,7 @@ function renderSidebar(list){
   const el=document.getElementById('drone-list');
 
   if(!list.length){
-    el.innerHTML='<div id="empty"><div class="ico">🛬</div>Không có drone đang bay</div>';
+    el.innerHTML='<div id="empty"><div class="ico"></div>Không có drone đang bay</div>';
     return;
   }
 
@@ -396,8 +396,8 @@ function renderSidebar(list){
 
     const inner=`
       <div class="card-top">
-        <div class="card-id">🚁 Drone #${drone_id??'?'} <span style="color:#334155;font-size:10px">Mission #${mid}</span></div>
-        <div class="badge ${lostSig?'lost':'fly'}">${lostSig?'⚠ Lost':'● Flying'}</div>
+        <div class="card-id">Drone #${drone_id??'?'} <span style="color:#334155;font-size:10px">Mission #${mid}</span></div>
+        <div class="badge ${lostSig?'lost':'fly'}">${lostSig?'Lost':'Flying'}</div>
       </div>
       <div class="stats">
         <div class="st">Lat <span>${lat?.toFixed(4)??'—'}</span></div>
@@ -405,7 +405,7 @@ function renderSidebar(list){
         <div class="st">Cao <span>${alt?.toFixed(0)??'—'} m</span></div>
         <div class="st">Tốc <span>${spd?.toFixed(1)??'—'} m/s</span></div>
         <div class="st">Pin <span>${bat?.toFixed(1)??'—'} V</span></div>
-        <div class="st">Hubs <span>${cps??0} ✅</span></div>
+        <div class="st">Hubs <span>${cps??0}</span></div>
       </div>
       <div class="bat-bar"><div class="bat-fill" style="width:${pct}%;background:${batColor(bat)}"></div></div>
       <div class="upd">Cập nhật ${fmtT(last_updated)}</div>
@@ -450,7 +450,7 @@ async function toggleConnect(){
   if(connected){
     clearInterval(pollTimer);
     connected=false;
-    btn.textContent='▶ Kết nối';
+    btn.textContent='Kết nối';
     btn.classList.remove('on');
     setStatus('','Đã ngắt kết nối');
     return;
@@ -460,7 +460,7 @@ async function toggleConnect(){
   const mb=mbTok();
   if(!mb){alert('Nhập Mapbox token');return}
 
-  btn.textContent='⏳...';
+  btn.textContent='...';
   btn.disabled=true;
 
   loadTiles(mb);
@@ -468,7 +468,7 @@ async function toggleConnect(){
   await poll();
 
   connected=true;
-  btn.textContent='⏹ Ngắt';
+  btn.textContent='Ngắt';
   btn.classList.add('on');
   btn.disabled=false;
 

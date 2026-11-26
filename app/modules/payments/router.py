@@ -10,13 +10,14 @@ Endpoints:
   POST /payments/orders/{order_id}/cancel     → Huỷ payment link
 """
 
+import asyncio
 import hmac
 import hashlib
 import json
 import time
 import random
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -156,7 +157,7 @@ async def create_checkout(
             returnUrl=return_url,
             cancelUrl=cancel_url,
         )
-        response = payos.createPaymentLink(payment_data)
+        response = await asyncio.to_thread(payos.createPaymentLink, payment_data)
     except Exception as e:
         import traceback
         print(f"[PayOS ERROR] {traceback.format_exc()}")
@@ -174,7 +175,6 @@ async def create_checkout(
     order.payment_account_name  = res_data.get("accountName")
     order.updated_at            = now
     await db.commit()
-    await db.refresh(order)
 
     return CheckoutResponse(
         order_id=order_id,
@@ -194,7 +194,7 @@ async def create_checkout(
 # ── Helper Notification ───────────────────────────────────────────────────────
 
 async def _notify_customer_payment_confirmed(db: AsyncSession, order: Order, paid_time: datetime) -> None:
-    """Gửi Notification xác nhận thanh toán kèm thời gian về cho Customer (chống gửi trùng)."""
+    """Gửi Notification + Email xác nhận thanh toán cho Customer (chống gửi trùng)."""
     if not order.customer_id:
         return
     try:
@@ -211,7 +211,7 @@ async def _notify_customer_payment_confirmed(db: AsyncSession, order: Order, pai
         fee_str = f"{int(round(order.delivery_fee or 0)):,} VND"
         db.add(Notification(
             user_id=str(order.customer_id),
-            title=f"💳 Payment confirmed for Order #{order.id}",
+            title=f"Payment confirmed for Order #{order.id}",
             message=(
                 f"Payment of {fee_str} for Order #{order.id} was confirmed at {time_str}. "
                 f"Please drop off your package at the origin Hub so our staff can receive it and dispatch a Drone."
@@ -220,6 +220,23 @@ async def _notify_customer_payment_confirmed(db: AsyncSession, order: Order, pai
             reference_id=ref_id,
             created_at=vn_now,
         ))
+
+        # Gửi email xác nhận thanh toán (non-blocking)
+        _sender_email = (order.sender_email or "").strip()
+        if _sender_email:
+            import asyncio as _ao
+            from app.core.email import send_payment_confirmation_email as _send_pay_email
+            from app.core.config import settings as _s
+            _asyncio_task = _ao.create_task(
+                _send_pay_email(
+                    to_email=_sender_email,
+                    order_id=order.id,
+                    amount=order.delivery_fee,
+                    paid_at=time_str,
+                    frontend_url=_s.FRONTEND_URL,
+                )
+            )
+            del _asyncio_task  # Không cần await
     except Exception as e:
         print(f"[NOTIFY PAYMENT ERROR] {e}")
 
@@ -247,7 +264,7 @@ async def get_payment_status(
     if order.payment_status == PaymentStatus.PENDING and order.payment_order_code:
         try:
             payos = get_payos()
-            payment_info = payos.getPaymentLinkInformation(order.payment_order_code)
+            payment_info = await asyncio.to_thread(payos.getPaymentLinkInformation, order.payment_order_code)
             info_data = payment_info.to_json() if hasattr(payment_info, "to_json") else {}
             remote_status = str(info_data.get("status", "")).upper()
             if remote_status == "PAID":
@@ -262,12 +279,10 @@ async def get_payment_status(
                     order.payment_transaction_id = str(transaction_list[0].get("reference", ""))
                 await _notify_customer_payment_confirmed(db, order, now)
                 await db.commit()
-                await db.refresh(order)
             elif remote_status in ("CANCELLED", "EXPIRED"):
                 order.payment_status = PaymentStatus.FAILED
                 order.updated_at = get_vn_naive_datetime()
                 await db.commit()
-                await db.refresh(order)
         except Exception:
             pass  # Nếu PayOS lỗi thì trả về status hiện tại trong DB
 
@@ -407,6 +422,7 @@ async def register_webhook(
 async def refund_order(
     order_id: str,
     body: RefundRequest,
+    background_tasks: BackgroundTasks,
     user: CurrentUser = Depends(allow_admin),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -442,8 +458,9 @@ async def refund_order(
     
     try:
         payos = get_payos()
-        # Gọi PayOS refund API
-        refund_response = payos.refund(
+        # Gọi PayOS refund API (non-blocking thread pool)
+        refund_response = await asyncio.to_thread(
+            payos.refund,
             orderId=order.payment_order_code,
             amount=int(refund_amount),
             description=body.reason[:255],
@@ -459,7 +476,7 @@ async def refund_order(
         
         await db.commit()
         
-        # Gửi email hoàn tiền cho khách hàng gửi hàng qua tài khoản customer (bảng orders không dùng cột sender_email)
+        # Gửi email hoàn tiền ở nền sau khi commit
         sender_email_addr = None
         if order.customer_id:
             from app.modules.auth.models import Account
@@ -468,7 +485,8 @@ async def refund_order(
 
         if sender_email_addr:
             from app.core.email import send_refund_email
-            await send_refund_email(
+            background_tasks.add_task(
+                send_refund_email,
                 to_email=sender_email_addr,
                 order_id=order_id,
                 refund_amount=refund_amount,
@@ -514,7 +532,7 @@ async def cancel_payment(
 
     try:
         payos = get_payos()
-        payos.cancelPaymentLink(order.payment_order_code)
+        await asyncio.to_thread(payos.cancelPaymentLink, order.payment_order_code)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"PayOS error: {str(e)}")
 
@@ -541,23 +559,35 @@ async def get_transactions(
     """
     from app.modules.payments.schemas import TransactionResponse
 
-    result = await db.execute(select(Order))
-    orders = result.scalars().all()
+    result = await db.execute(
+        select(
+            Order.id,
+            Order.customer_id,
+            Order.delivery_fee,
+            Order.payment_status,
+            Order.paid_at,
+            Order.refund_at,
+            Order.refund_amount,
+            Order.refund_reason,
+            Order.created_at,
+        )
+    )
+    rows = result.all()
 
     transactions = [
         TransactionResponse(
-            payment_id=order.id,
-            order_id=order.id,
-            customer_id=order.customer_id,
-            amount=order.delivery_fee or 0,
-            payment_status=order.payment_status.value if order.payment_status else "UNPAID",
-            paid_at=order.paid_at,
-            refund_at=order.refund_at,
-            refund_amount=order.refund_amount,
-            refund_reason=order.refund_reason,
-            created_at=order.created_at,
+            payment_id=r.id,
+            order_id=r.id,
+            customer_id=r.customer_id,
+            amount=r.delivery_fee or 0,
+            payment_status=r.payment_status.value if r.payment_status else "UNPAID",
+            paid_at=r.paid_at,
+            refund_at=r.refund_at,
+            refund_amount=r.refund_amount,
+            refund_reason=r.refund_reason,
+            created_at=r.created_at,
         )
-        for order in orders
+        for r in rows
     ]
 
     return transactions
@@ -580,20 +610,26 @@ async def get_refunds(
     from app.modules.payments.schemas import RefundListResponse
 
     result = await db.execute(
-        select(Order).where(Order.refund_amount > 0)
+        select(
+            Order.id,
+            Order.refund_amount,
+            Order.refund_reason,
+            Order.refund_status,
+            Order.refund_at,
+        ).where(Order.refund_amount > 0)
     )
-    orders = result.scalars().all()
+    rows = result.all()
 
     refunds = [
         RefundListResponse(
-            refund_id=order.id,
-            order_id=order.id,
-            refund_amount=order.refund_amount or 0,
-            reason=order.refund_reason or "N/A",
-            status=order.refund_status.value if hasattr(order.refund_status, "value") else (order.refund_status or "PENDING"),
-            processed_at=order.refund_at,
+            refund_id=r.id,
+            order_id=r.id,
+            refund_amount=r.refund_amount or 0,
+            reason=r.refund_reason or "N/A",
+            status=r.refund_status.value if hasattr(r.refund_status, "value") else (r.refund_status or "PENDING"),
+            processed_at=r.refund_at,
         )
-        for order in orders
+        for r in rows
     ]
 
     return refunds

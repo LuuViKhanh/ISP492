@@ -1,6 +1,6 @@
 import enum
 from datetime import datetime
-from sqlalchemy import BigInteger, Integer, Float, String, Text, DateTime, Boolean, ForeignKey, Enum as SAEnum, JSON
+from sqlalchemy import BigInteger, Integer, Float, String, Text, DateTime, Boolean, ForeignKey, Enum as SAEnum, JSON, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.db import Base
 
@@ -115,6 +115,9 @@ class WorkOrderStatus(str, enum.Enum):
 # ==================== MODELS ====================
 class Drone(Base):
     __tablename__ = "drones"
+    __table_args__ = (
+        Index("idx_drones_status_hub", "operational_status", "current_hub_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -126,12 +129,19 @@ class Drone(Base):
     current_hub_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     battery_level_pct: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     utilization_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # ── Preventive maintenance tracking ──────────────────────────────
+    total_flight_hours: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0.0")
+    last_maintenance_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     batteries = relationship("Battery", back_populates="drone")
 
 
 class Battery(Base):
     __tablename__ = "batteries"
+    __table_args__ = (
+        Index("idx_batteries_hub_status", "current_hub_id", "status"),
+        Index("idx_batteries_drone_id", "drone_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True)
     drone_id: Mapped[str | None] = mapped_column(String(50), ForeignKey("drones.id"), nullable=True)
@@ -152,6 +162,10 @@ class Battery(Base):
 
 class WorkOrder(Base):
     __tablename__ = "work_orders"
+    __table_args__ = (
+        Index("idx_work_orders_drone_status", "drone_id", "status"),
+        Index("idx_work_orders_tech_status", "technician_id", "status"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     drone_id: Mapped[str | None] = mapped_column(String(50), ForeignKey("drones.id"), nullable=True)
@@ -183,6 +197,10 @@ class WorkOrder(Base):
 
 class MaintenanceAlert(Base):
     __tablename__ = "maintenance_alerts"
+    __table_args__ = (
+        Index("idx_maint_alerts_drone_status", "drone_id", "status"),
+        Index("idx_maint_alerts_mission_id", "mission_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     drone_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -260,3 +278,26 @@ class BatteryModelCatalog(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# ── Drone Daily Stats ─────────────────────────────────────────────────────────
+
+class DroneDailyStat(Base):
+    """
+    Thống kê hoạt động drone theo ngày — được tính cuối mỗi ngày bởi worker.
+    """
+    __tablename__ = "drone_daily_stats"
+    __table_args__ = (
+        Index("idx_drone_daily_drone_date", "drone_id", "stat_date"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    drone_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    stat_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)   # date only (store as datetime)
+    mission_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    incident_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_distance_km: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    total_flight_min: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    total_energy_wh: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

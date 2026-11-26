@@ -11,6 +11,7 @@ GHI CHÚ CHO LẬP TRÌNH VIÊN (DEVELOPER NOTES):
 
 import json
 import os
+from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 
@@ -30,6 +31,7 @@ KNOWLEDGE_FILE_PATH = os.path.join(
 )
 
 
+@lru_cache(maxsize=1)
 def _load_knowledge() -> Dict[str, Any]:
     with open(KNOWLEDGE_FILE_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -301,7 +303,7 @@ class CustomerStatusService:
             }
 
         # 2. Mission Failed
-        if mis_status in (MissionStatus.FAILED, MissionStatus.REJECTED, MissionStatus.INCIDENT_RETURN):
+        if mis_status in (MissionStatus.FAILED, MissionStatus.INCIDENT_RETURN):
             return {
                 "customer_status": "delivery_issue",
                 "status_label": "Delivery issue / Needs support",
@@ -335,11 +337,7 @@ class CustomerStatusService:
             }
 
         # 5. Mission in progress OR handoff in transit -> In delivery
-        if ord_status == OrderStatus.IN_DELIVERY or mis_status in (
-            MissionStatus.IN_PROGRESS,
-            MissionStatus.FLYING,
-            MissionStatus.ACTIVE_MISSION,
-        ):
+        if ord_status == OrderStatus.IN_DELIVERY or mis_status == MissionStatus.FLYING:
             return {
                 "customer_status": "in_delivery",
                 "status_label": "In delivery",
@@ -348,11 +346,7 @@ class CustomerStatusService:
             }
 
         # 6. Mission scheduled
-        if mis_status in (
-            MissionStatus.SCHEDULED,
-            MissionStatus.APPROVED,
-            MissionStatus.PENDING_APPROVAL,
-        ):
+        if mis_status == MissionStatus.SCHEDULED:
             return {
                 "customer_status": "scheduled",
                 "status_label": "Scheduled",

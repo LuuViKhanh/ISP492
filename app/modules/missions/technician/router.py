@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, cast, String, and_
+from sqlalchemy import select, cast, String, and_, func
 from datetime import datetime, timezone
 from typing import Optional
 from pydantic import BaseModel
@@ -20,11 +20,13 @@ from app.modules.missions.models import (
 from app.modules.system.models import Hub
 from app.modules.fleet.models import Drone, Battery, batteries_status
 from app.modules.auth.models import User
+from sqlalchemy.orm import aliased as _sa_aliased
+OriginHub = _sa_aliased(Hub, flat=True)
 
 # Bảng tra cứu mặc định (khớp 100% với 3 loại Drone và 3 loại Pin thực tế trong Database)
 DRONE_BATTERY_COMPATIBILITY = {
-    "DJI Matrice 100": ["TB48D"],
-    "Aurelia X6 Pro": ["Aurelia UltraPower"],
+    "DJI Matrice 100": ["DJI TB48D"],
+    "Aurelia X6 Pro": ["Aurelia UltraPower 12S"],
     "DJI FlyCart 15 Heavy": ["DJI DB2000"],
 }
 
@@ -157,11 +159,7 @@ async def get_outbound_deliveries(
                     Mission.order_id == Order.id,
                     Mission.status.in_([
                         MissionStatus.SCHEDULED,
-                        MissionStatus.APPROVED,
-                        MissionStatus.PENDING_APPROVAL,
-                        MissionStatus.IN_PROGRESS,
                         MissionStatus.FLYING,
-                        MissionStatus.ACTIVE_MISSION,
                     ])
                 )
             )
@@ -322,11 +320,7 @@ async def receive_outbound_delivery(
     premature_missions_res = await db.execute(
         select(Mission).where(
             Mission.order_id == order.id,
-            Mission.status.in_([
-                MissionStatus.SCHEDULED,
-                MissionStatus.PENDING_APPROVAL,
-                MissionStatus.APPROVED,
-            ])
+            Mission.status == MissionStatus.SCHEDULED
         )
     )
     for pm in premature_missions_res.scalars().all():
@@ -358,7 +352,7 @@ async def receive_outbound_delivery(
             if not ex_cust:
                 db.add(_Notif(
                     user_id=str(order.customer_id),
-                    title=f"📦 Package Received #{order.id} at {hub_label}",
+                    title=f"Package Received #{order.id} at {hub_label}",
                     message=(
                         f"A technician at {hub_label} has received the package for order #{order.id} at {time_str}. "
                         f"Your order is now awaiting flight scheduling by an Operator."
@@ -374,7 +368,7 @@ async def receive_outbound_delivery(
             for _op_id in _ops:
                 db.add(_Notif(
                     user_id=_op_id,
-                    title=f"📦 Package Ready at Hub — Order #{order.id}",
+                    title=f"Package Ready at Hub — Order #{order.id}",
                     message=(
                         f"Order #{order.id} was received by a Technician at {hub_label} at {time_str}. "
                         f"Ready for Mission Planning."
@@ -440,12 +434,7 @@ async def prepare_battery_for_delivery(
             mission_fallback = await db.execute(
                 select(Mission).where(
                     Mission.order_id == order.id,
-                    Mission.status.in_([
-                        MissionStatus.APPROVED,
-                        MissionStatus.IN_PROGRESS,
-                        MissionStatus.FLYING,
-                        MissionStatus.ACTIVE_MISSION,
-                    ])
+                    Mission.status == MissionStatus.FLYING
                 ).order_by(Mission.id.desc()).limit(1)
             )
             mission = mission_fallback.scalars().first()
@@ -578,10 +567,7 @@ async def prepare_battery_for_delivery(
             Mission.id != mission.id,
             Mission.status.in_([
                 MissionStatus.SCHEDULED,
-                MissionStatus.IN_PROGRESS,
-                MissionStatus.APPROVED,
                 MissionStatus.FLYING,
-                MissionStatus.ACTIVE_MISSION
             ])
         )
     )
@@ -976,34 +962,29 @@ async def get_sla_report(
     except:
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
     
-    # Lấy orders trong khoảng thời gian (loại trừ các đơn CANCELLED)
-    orders_res = await db.execute(
-        select(OrderModel).where(
+    # Tổng hợp SLA trực tiếp trên PostgreSQL (không tải toàn bộ bảng orders về RAM)
+    from sqlalchemy import case
+    dur_hours = func.extract("epoch", OrderModel.destination_received_at - OrderModel.created_at) / 3600.0
+    valid_dur = and_(OrderModel.created_at.isnot(None), OrderModel.destination_received_at.isnot(None))
+    row = (await db.execute(
+        select(
+            func.count(OrderModel.id),
+            func.count(case((OrderModel.destination_received_at.isnot(None), 1))),
+            func.count(case((and_(valid_dur, dur_hours <= 24.0), 1))),
+            func.coalesce(func.avg(case((valid_dur, dur_hours))), 0.0),
+        ).where(
             and_(
                 OrderModel.created_at >= start,
                 OrderModel.created_at <= end,
                 OrderModel.status == OrderStatus.DELIVERED_TO_HUB,
             )
         )
-    )
-    orders = orders_res.scalars().all()
-    
-    # Tính toán metrics
-    total = len(orders)
-    completed = len([o for o in orders if o.status == OrderStatus.DELIVERED_TO_HUB and o.destination_received_at])
-    on_time = 0
-    durations = []
-    
-    for order in orders:
-        if order.created_at and order.destination_received_at:
-            duration = (order.destination_received_at - order.created_at).total_seconds() / 3600
-            durations.append(duration)
-            
-            # Assume SLA = 24 hours
-            if duration <= 24:
-                on_time += 1
-    
-    avg_duration = sum(durations) / len(durations) if durations else 0
+    )).one()
+
+    total = int(row[0] or 0)
+    completed = int(row[1] or 0)
+    on_time = int(row[2] or 0)
+    avg_duration = float(row[3] or 0.0)
     sla_compliance = (on_time / total * 100) if total > 0 else 0
     
     return {

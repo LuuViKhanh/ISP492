@@ -65,57 +65,75 @@ def seed():
                 """), {"uid": username, "fname": f"Tech {name}", "email": email, "hid": h_id, "role_id": tech_role_id})
 
             print("3. Drones (Cập nhật thông số/vị trí nếu drone đã tồn tại)...")
+            # Quy tắc đặt tên: "{model}-DRN{X:03d}" — đánh số thứ tự toàn bộ per model
             drones_config = [
-                ("DJI Mavic 3", 1.5, 15.0, [(3, "Available"), (3, "Available"), (4, "Available"), (4, "In Flight"), (6, "Available")]),
-                ("DJI Matrice 300", 5.0, 23.0, [(12, "Available"), (12, "Available"), (5, "Available"), (5, "Available"), (9, "Available"), (8, "Available"), (8, "Maintenance")]),
-                ("DJI FlyCart 30", 15.0, 25.0, [(7, "Available"), (10, "In Flight"), (11, "Available")])
+                ("DJI Mavic 3",    1.5, 15.0, "DJI-BAT-130W",  480.0,  [(3, "Available"), (3, "Available"), (4, "Available"), (4, "In Flight"), (6, "Available")]),
+                ("DJI Matrice 300", 5.0, 23.0, "AUR-BAT-444W", 1308.0, [(12, "Available"), (12, "Available"), (5, "Available"), (5, "Available"), (9, "Available"), (8, "Available"), (8, "Maintenance")]),
+                ("DJI FlyCart 30", 15.0, 25.0, "DJI-BAT-980W", 3850.0, [(7, "Available"), (10, "In Flight"), (11, "Available")])
             ]
             drone_ids = []
-            for model, cap, speed, assignments in drones_config:
-                for idx, (h_id, status) in enumerate(assignments):
-                    d_name = f"{model} - {h_id} - {idx}"
-                    
-                    exist_id = conn.execute(text("SELECT id FROM drones WHERE name = :name LIMIT 1"), {"name": d_name}).scalar()
+            # Đếm thứ tự per-model để đặt tên
+            model_seq: dict[str, int] = {}
+            for model, cap, speed, bat_model, bat_cap, assignments in drones_config:
+                for h_id, status in assignments:
+                    model_seq[model] = model_seq.get(model, 0) + 1
+                    d_name = f"{model}-DRN{model_seq[model]:03d}"
+                    exist_id = conn.execute(text(
+                        "SELECT id FROM drones WHERE name = :name LIMIT 1"
+                    ), {"name": d_name}).scalar()
                     if exist_id:
                         conn.execute(text("""
-                            UPDATE drones SET model=:model, payload_capacity_kg=:cap, max_speed=:speed, 
+                            UPDATE drones SET model=:model, payload_capacity_kg=:cap, max_speed=:speed,
                             operational_status=:status, current_hub_id=:hid, battery_level_pct=100
                             WHERE id=:id
                         """), {"id": exist_id, "model": model, "cap": cap, "speed": speed, "status": status, "hid": h_id})
-                        drone_ids.append((exist_id, h_id, status))
+                        drone_ids.append((exist_id, h_id, status, bat_model, bat_cap))
                     else:
                         res = conn.execute(text("""
-                            INSERT INTO drones (name, model, payload_capacity_kg, max_speed, operational_status, current_hub_id, battery_level_pct, utilization_pct)
-                            VALUES (:name, :model, :cap, :speed, :status, :hid, 100, 0.0)
+                            INSERT INTO drones (name, serial_number, model, payload_capacity_kg, max_speed,
+                                operational_status, current_hub_id, battery_level_pct, utilization_pct)
+                            VALUES (:name, :name, :model, :cap, :speed, :status, :hid, 100, 0.0)
                             RETURNING id
                         """), {"name": d_name, "model": model, "cap": cap, "speed": speed, "status": status, "hid": h_id})
-                        drone_ids.append((res.scalar(), h_id, status))
+                        drone_ids.append((res.scalar(), h_id, status, bat_model, bat_cap))
 
-            print("4. Batteries (Khôi phục dung lượng pin & gán lại đúng vị trí)...")
-            dummy_batt_id = conn.execute(text("""
-                INSERT INTO batteries (id, serial_number, capacity_wh, status, drone_id, current_hub_id, charge_level_pct, create_at, battery_model)
-                VALUES ('BAT-000', 'BAT-000', 150.0, 'Active', NULL, 3, 100, NOW(), 'Li-Po 6000mAh')
-                ON CONFLICT (id) DO UPDATE SET capacity_wh = 150.0, charge_level_pct=100 RETURNING id
-            """)).scalar()
-            
-            for i, (d_id, h_id, status) in enumerate(drone_ids):
-                sn = f"BAT-1{i:03d}"
+            print("4. Batteries (pin đúng model & đặt tên theo quy tắc {model}-BAT{X:03d})...")
+            # Đếm thứ tự per battery_model
+            bat_model_seq: dict[str, int] = {}
+
+            for i, (d_id, h_id, status, bat_model, bat_cap) in enumerate(drone_ids):
+                bat_model_seq[bat_model] = bat_model_seq.get(bat_model, 0) + 1
+                sn = f"{bat_model}-BAT{bat_model_seq[bat_model]:03d}"
+                charge = random.randint(20, 100) if status != "Available" else 100
                 conn.execute(text("""
-                    INSERT INTO batteries (id, serial_number, capacity_wh, status, drone_id, current_hub_id, charge_level_pct, create_at, battery_model)
-                    VALUES (:sn, :sn, 150.0, 'Active', :did, NULL, :charge, NOW(), 'Li-Po 6000mAh')
-                    ON CONFLICT (id) DO UPDATE SET 
-                        drone_id = EXCLUDED.drone_id, current_hub_id = NULL, capacity_wh = 150.0
-                """), {"sn": sn, "did": d_id, "charge": random.randint(20, 100) if status != "Available" else 100})
-            
+                    INSERT INTO batteries (id, serial_number, capacity_wh, status, drone_id, current_hub_id,
+                        charge_level_pct, create_at, battery_model)
+                    VALUES (:sn, :sn, :cap, 'Active', :did, NULL, :charge, NOW(), :bmodel)
+                    ON CONFLICT (id) DO UPDATE SET
+                        drone_id = EXCLUDED.drone_id, current_hub_id = NULL,
+                        capacity_wh = EXCLUDED.capacity_wh, battery_model = EXCLUDED.battery_model,
+                        serial_number = EXCLUDED.serial_number
+                """), {"sn": sn, "cap": bat_cap, "did": d_id, "charge": charge, "bmodel": bat_model})
+
+            # Pin dự phòng tại hub (không gắn drone)
+            spare_models = [
+                ("DJI-BAT-130W",  480.0),
+                ("AUR-BAT-444W", 1308.0),
+                ("DJI-BAT-980W", 3850.0),
+            ]
             for i in range(25):
-                sn = f"BAT-2{i:03d}"
+                spare_bmodel, spare_cap = spare_models[i % 3]
+                bat_model_seq[spare_bmodel] = bat_model_seq.get(spare_bmodel, 0) + 1
+                sn = f"{spare_bmodel}-BAT{bat_model_seq[spare_bmodel]:03d}"
                 h_id = hubs_data[random.randint(0, 9)][0]
                 conn.execute(text("""
-                    INSERT INTO batteries (id, serial_number, capacity_wh, status, drone_id, current_hub_id, charge_level_pct, create_at, battery_model)
-                    VALUES (:sn, :sn, 150.0, 'Active', NULL, :hid, :charge, NOW(), 'Li-Po 6000mAh')
-                    ON CONFLICT (id) DO UPDATE SET 
-                        drone_id = NULL, current_hub_id = EXCLUDED.current_hub_id
-                """), {"sn": sn, "hid": h_id, "charge": random.randint(15, 100)})
+                    INSERT INTO batteries (id, serial_number, capacity_wh, status, drone_id, current_hub_id,
+                        charge_level_pct, create_at, battery_model)
+                    VALUES (:sn, :sn, :cap, 'Active', NULL, :hid, :charge, NOW(), :bmodel)
+                    ON CONFLICT (id) DO UPDATE SET
+                        drone_id = NULL, current_hub_id = EXCLUDED.current_hub_id,
+                        battery_model = EXCLUDED.battery_model, serial_number = EXCLUDED.serial_number
+                """), {"sn": sn, "cap": spare_cap, "hid": h_id, "charge": random.randint(15, 100), "bmodel": spare_bmodel})
 
             print("5. Orders (Chữa lỗi Missing Data)...")
             for i in range(1, 11):

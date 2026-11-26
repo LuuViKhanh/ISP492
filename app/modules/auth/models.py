@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, Boolean, Integer, ForeignKey
+from sqlalchemy import String, DateTime, Boolean, Integer, ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database.db import Base
 from app.shared.roles import UserRole
@@ -17,6 +17,9 @@ ROLE_NAME_TO_ID = {v: k for k, v in ROLE_ID_MAP.items()}
 
 class Account(Base):
     __tablename__ = "accounts"
+    __table_args__ = (
+        Index("idx_accounts_role_id", "role_id"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     role_id: Mapped[str | None] = mapped_column(String, nullable=True)

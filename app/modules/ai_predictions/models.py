@@ -1,6 +1,6 @@
 import enum
 from datetime import datetime, timezone
-from sqlalchemy import BigInteger, Float, String, DateTime, Boolean, Text
+from sqlalchemy import BigInteger, Float, String, DateTime, Boolean, Text, Index
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database.db import Base
 
@@ -20,6 +20,9 @@ class RecommendationCategory(str, enum.Enum):
 
 class AIPrediction(Base):
     __tablename__ = "ai_predictions"
+    __table_args__ = (
+        Index("idx_ai_predictions_mission_id_desc", "mission_id", id.desc() if False else "id"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     mission_id: Mapped[str] = mapped_column(String(50), nullable=False)

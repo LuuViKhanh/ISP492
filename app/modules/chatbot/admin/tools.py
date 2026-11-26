@@ -4,7 +4,7 @@ Tools dành cho Admin Chatbot.
 
 from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, case, and_
 
 try:
     from google.genai import types
@@ -18,24 +18,24 @@ from app.modules.fleet.models import Drone
 
 async def tool_get_system_executive_summary(db: AsyncSession, **kwargs) -> Dict[str, Any]:
     """Báo cáo tổng quan hoạt động kinh doanh và tài nguyên toàn hệ thống."""
-    # Missions
-    missions_res = await db.execute(select(Mission))
-    missions = missions_res.scalars().all()
-    total_missions = len(missions)
-    completed_missions = sum(1 for m in missions if m.status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED))
-    revenue = sum(m.delivery_fee for m in missions if m.delivery_fee and m.status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED))
+    comp_cond = Mission.status.in_((MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED))
+    row = (await db.execute(
+        select(
+            select(func.count(Mission.id)).scalar_subquery(),
+            select(func.count(Mission.id)).where(comp_cond).scalar_subquery(),
+            select(func.coalesce(func.sum(Mission.delivery_fee), 0.0)).where(comp_cond).scalar_subquery(),
+            select(func.count(Order.id)).scalar_subquery(),
+            select(func.count(User.id)).scalar_subquery(),
+            select(func.count(Drone.id)).scalar_subquery(),
+        )
+    )).one()
 
-    # Orders
-    orders_res = await db.execute(select(func.count(Order.id)))
-    total_orders = orders_res.scalar() or 0
-
-    # Users
-    users_res = await db.execute(select(func.count(User.id)))
-    total_users = users_res.scalar() or 0
-
-    # Drones
-    drones_res = await db.execute(select(func.count(Drone.id)))
-    total_drones = drones_res.scalar() or 0
+    total_missions = int(row[0] or 0)
+    completed_missions = int(row[1] or 0)
+    revenue = float(row[2] or 0.0)
+    total_orders = int(row[3] or 0)
+    total_users = int(row[4] or 0)
+    total_drones = int(row[5] or 0)
 
     return {
         "success": True,

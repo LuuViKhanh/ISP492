@@ -17,7 +17,7 @@ from app.modules.missions.models import Mission, MissionStatus, Incident
 async def tool_get_active_missions(db: AsyncSession, **kwargs) -> Dict[str, Any]:
     """Lấy danh sách các chuyến bay đang hoạt động trên bầu trời."""
     stmt = select(Mission).where(
-        Mission.status.in_([MissionStatus.FLYING, MissionStatus.IN_PROGRESS])
+        Mission.status == MissionStatus.FLYING
     )
     result = await db.execute(stmt)
     missions = result.scalars().all()
@@ -43,15 +43,23 @@ async def tool_get_active_missions(db: AsyncSession, **kwargs) -> Dict[str, Any]
 
 async def tool_get_operator_kpi(db: AsyncSession, **kwargs) -> Dict[str, Any]:
     """Lấy thống kê hiệu suất KPI điều hành bay."""
-    result = await db.execute(select(Mission))
-    missions = result.scalars().all()
+    from sqlalchemy import case, and_
+    comp_cond = Mission.status.in_((MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED))
+    row = (await db.execute(
+        select(
+            func.count(Mission.id),
+            func.count(case((comp_cond, 1))),
+            func.count(case((Mission.status == MissionStatus.CANCELLED, 1))),
+            func.coalesce(func.sum(case((and_(comp_cond, Mission.delivery_fee.isnot(None)), Mission.delivery_fee), else_=0.0)), 0.0),
+        )
+    )).one()
 
-    total = len(missions)
-    completed = sum(1 for m in missions if m.status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED))
-    cancelled = sum(1 for m in missions if m.status == MissionStatus.CANCELLED)
-    rejected = sum(1 for m in missions if m.status == MissionStatus.REJECTED)
+    total = int(row[0] or 0)
+    completed = int(row[1] or 0)
+    cancelled = int(row[2] or 0)
+    rejected = 0
     finished = completed + cancelled + rejected
-    revenue = sum(m.delivery_fee for m in missions if m.delivery_fee and m.status in (MissionStatus.ARRIVAL_COMPLETED, MissionStatus.MISSION_COMPLETED))
+    revenue = float(row[3] or 0.0)
 
     return {
         "success": True,

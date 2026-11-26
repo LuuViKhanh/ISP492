@@ -27,9 +27,8 @@ from app.core.config import settings
 from app.database.db import async_engine, Base
 import app.modules.auth.models  # noqa: F401
 import app.modules.fleet.models  # noqa: F401
-import app.modules.missions.models  # noqa: F401
+import app.modules.missions.models  # noqa: F401 — includes DeliveryRating
 import app.modules.system.models  # noqa: F401
-import app.modules.inventory.models  # noqa: F401 — backward-compat, keeps old tables mapped
 import app.modules.supplies.models   # noqa: F401
 
 # Import routers từ các module
@@ -43,16 +42,17 @@ from app.modules.system.router import router as system_router
 from app.modules.system.admin.router import router as system_admin_router
 from app.modules.system.notifications.router import router as notifications_router
 from app.modules.orders.router import router as orders_router
+from app.modules.orders.customer.addresses import router as addresses_router
 from app.modules.payments.router import router as payments_router
 from app.modules.chatbot.rag.router import router as rag_router
+from app.modules.reports.router import router as reports_router
 
 # Developer Database API (dùng chung server, prefix /dev/db/...)
 from app.database.router import router as db_router
 
 import asyncio
-from app.database.db import async_engine, Base
 from app.database.cron_db import run_with_retry
-from app.modules.fleet.technician.service import run_maintenance_alerts_logic, run_battery_overdue_alerts_logic
+from app.modules.fleet.technician.service import run_maintenance_alerts_logic, run_battery_overdue_alerts_logic, run_preventive_maintenance_scheduler, run_drone_daily_stats
 from app.shared.workers import run_approval_deadline_watcher, run_telemetry_signal_loss_watcher, run_battery_charging_simulation, run_pickup_reminder_watcher, run_aging_priority_watcher, run_critical_order_notifier, run_deadline_alert_watcher
 
 async def run_hourly_cronjobs():
@@ -66,6 +66,8 @@ async def run_hourly_cronjobs():
         await run_with_retry(run_battery_charging_simulation,  "battery_charging_sim")
         await run_with_retry(run_pickup_reminder_watcher,      "pickup_reminder")
         await run_with_retry(run_critical_order_notifier,      "critical_order_notifier")
+        await run_with_retry(run_preventive_maintenance_scheduler, "preventive_maintenance")
+        await run_with_retry(run_drone_daily_stats, "drone_daily_stats")
         await asyncio.sleep(3600)
 
 async def run_quarter_cronjobs():
@@ -81,48 +83,89 @@ async def run_realtime_cronjobs():
     """Vòng lặp chạy ngầm mỗi 3s cho realtime monitoring.
     FDE-193: mỗi worker nhận session độc lập qua run_with_retry.
     FDE-194: retry với max_retries=2 và backoff=1s (realtime cần nhanh hơn).
+    [PERF NOTE] Tắt log_on_success cho vòng lặp 3s để tránh ghi 57,600 dòng system_logs/ngày; lỗi vẫn ghi đầy đủ.
+    run_approval_deadline_watcher chạy mỗi 15s (5 ticks) thay vì mỗi 3s.
     """
+    tick = 0
     while True:
-        await run_with_retry(run_approval_deadline_watcher,    "approval_deadline",    max_retries=2, base_backoff=1.0)
-        await run_with_retry(run_telemetry_signal_loss_watcher, "telemetry_signal_loss", max_retries=2, base_backoff=1.0)
+        if tick % 5 == 0:
+            await run_with_retry(
+                run_approval_deadline_watcher, "approval_deadline",
+                max_retries=2, base_backoff=1.0, log_on_success=False,
+            )
+        await run_with_retry(
+            run_telemetry_signal_loss_watcher, "telemetry_signal_loss",
+            max_retries=2, base_backoff=1.0, log_on_success=False,
+        )
+        tick = (tick + 1) % 5
         await asyncio.sleep(3)
 
 async def _warmup_caches_background():
     """
     [PERF NOTE] Nạp ấm (warm-up) các cache RAM và connection pool DB ngay khi server vừa khởi động
-    ở chế độ nền (non-blocking) để request đầu tiên của Operator không bị chậm (cold start):
-    1. Bắt tay SSL trước với Supabase pool + cache Hubs (30s) & Battery Compatibility (60s).
+    và định kỳ làm mới mỗi 12 phút (720s) ở chế độ nền (non-blocking) để lượt bấm đầu tiên
+    của Operator / Hội đồng luôn đạt tốc độ warm (~1.5s) mà không cần bấm mồi trước:
+    1. Bắt tay SSL trước với Supabase pool + cache Hubs & Battery Compatibility.
     2. Load sẵn model ML predict_flight_energy vào RAM.
-    3. Fetch song song thời tiết Open-Meteo cho tọa độ các Hub để bước Route Analyze đầu tiên chạy nhanh.
+    3. Fetch song song thời tiết Open-Meteo theo lưới 0.05° cho cả tọa độ Hub lẫn midpoint giữa các Hub.
     """
-    try:
-        from app.database.db import AsyncSessionLocal
-        from app.modules.missions.bundle_service import (
-            get_all_hubs_cached,
-            get_compatible_battery_models_map,
-            predict_flight_energy_cached,
-        )
-        from app.shared.weather import fetch_weather
+    from sqlalchemy import text
+    from app.database.db import AsyncSessionLocal
+    from app.modules.missions.bundle_service import (
+        get_all_hubs_cached,
+        get_compatible_battery_models_map,
+        predict_flight_energy_cached,
+    )
+    from app.shared.weather import fetch_weather, _weather_grid_key
 
-        hubs = []
-        async with AsyncSessionLocal() as db:
-            hubs = await get_all_hubs_cached(db)
-            await get_compatible_battery_models_map(db)
+    async def _warm_extra_pool_conn():
+        async with AsyncSessionLocal() as extra_db:
+            await extra_db.execute(text("SELECT 1"))
 
-        await asyncio.to_thread(predict_flight_energy_cached, 10.0, 1.0)
+    first_run = True
+    while True:
+        try:
+            hubs = []
+            async with AsyncSessionLocal() as db:
+                hubs = await get_all_hubs_cached(db)
+                await get_compatible_battery_models_map(db)
 
-        unique_coords = {
-            (round(float(h.latitude), 2), round(float(h.longitude), 2))
-            for h in hubs
-            if h.latitude is not None and h.longitude is not None
-        }
-        if unique_coords:
-            await asyncio.gather(
-                *(fetch_weather(lat, lng) for lat, lng in unique_coords),
-                return_exceptions=True,
-            )
-    except Exception as exc:
-        print(f"⚠️ [STARTUP WARMUP WARNING] Không thể warm-up cache nền: {exc}")
+            if first_run:
+                await asyncio.gather(
+                    _warm_extra_pool_conn(),
+                    _warm_extra_pool_conn(),
+                    asyncio.to_thread(predict_flight_energy_cached, 10.0, 1.0),
+                    return_exceptions=True,
+                )
+                first_run = False
+
+            valid_hubs = [h for h in hubs if h.latitude is not None and h.longitude is not None]
+            unique_cells: set[tuple[float, float]] = set()
+            for h in valid_hubs:
+                unique_cells.add(_weather_grid_key(h.latitude, h.longitude))
+            for i in range(len(valid_hubs)):
+                for j in range(i + 1, len(valid_hubs)):
+                    mlat = (float(valid_hubs[i].latitude) + float(valid_hubs[j].latitude)) / 2.0
+                    mlng = (float(valid_hubs[i].longitude) + float(valid_hubs[j].longitude)) / 2.0
+                    unique_cells.add(_weather_grid_key(mlat, mlng))
+
+            if unique_cells:
+                sem = asyncio.Semaphore(4)
+
+                async def _warm_one(lat: float, lng: float):
+                    async with sem:
+                        await fetch_weather(lat, lng, use_cache=False)
+
+                await asyncio.gather(
+                    *(_warm_one(lat, lng) for lat, lng in unique_cells),
+                    return_exceptions=True,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"[STARTUP WARMUP WARNING] Không thể warm-up cache nền: {exc}")
+
+        await asyncio.sleep(720)
 
 
 @asynccontextmanager
@@ -131,7 +174,7 @@ async def lifespan(app: FastAPI):
         async with async_engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
     except Exception as e:
-        print(f"⚠️ [STARTUP DB WARNING] Không thể chạy create_all lúc khởi động (bỏ qua để giữ Server online): {e}")
+        print(f"[STARTUP DB WARNING] Không thể chạy create_all lúc khởi động (bỏ qua để giữ Server online): {e}")
         
     # [PERF NOTE] Hệ thống dùng in-memory cache (Hubs, Compat, Route, Weather) cho FastAPI 1 worker;
     # không bật nhiều workers (--workers > 1) trừ khi chuyển cache sang Redis.
@@ -182,27 +225,14 @@ def custom_openapi():
                         detected_role = part.upper()
                         break
                 
-                role_icons = {
-                    "ADMIN": "🔴",
-                    "OPERATOR": "🔵",
-                    "CUSTOMER": "🟢",
-                    "TECHNICIAN": "🟠",
-                    "NOTIFICATIONS": "🟣"
-                }
-                
                 # Auto-prefix Summary
                 if detected_role:
-                    icon = role_icons.get(detected_role, "⚪")
-                    prefix = f"{icon} [{detected_role}]"
+                    prefix = f"[{detected_role}]"
                     original_summary = operation.get("summary", "")
-                    
+
                     if original_summary:
-                        # Prevent double prefixing if it somehow runs multiple times
-                        if not original_summary.startswith(icon) and not original_summary.startswith(f"[{detected_role}]"):
+                        if not original_summary.startswith(prefix):
                             operation["summary"] = f"{prefix} {original_summary}"
-                        elif original_summary.startswith(f"[{detected_role}]"):
-                            # If it only has the text prefix, add the icon
-                            operation["summary"] = f"{icon} {original_summary}"
                     else:
                         operation["summary"] = f"{prefix} {operation.get('operationId', '')}"
                         
@@ -253,9 +283,12 @@ app.include_router(system_router, prefix=settings.API_V1_STR)
 app.include_router(system_admin_router, prefix=settings.API_V1_STR)
 app.include_router(notifications_router, prefix=settings.API_V1_STR)
 app.include_router(orders_router, prefix=settings.API_V1_STR)
+app.include_router(addresses_router, prefix=settings.API_V1_STR)
 app.include_router(payments_router, prefix=settings.API_V1_STR)
 app.include_router(rag_router, prefix=settings.API_V1_STR)
-app.include_router(db_router)
+app.include_router(reports_router, prefix=settings.API_V1_STR)
+if os.getenv("ENABLE_DEV_DB_ROUTER", "").lower() == "true":
+    app.include_router(db_router)
 
 # Tự động include các router của các roles
 import importlib
@@ -275,12 +308,12 @@ for mod in ["auth", "users", "missions", "fleet", "ai_predictions", "orders", "c
                 pass
             else:
                 # Nếu file router.py CÓ TỒN TẠI nhưng bị thiếu thư viện bên trong -> Cảnh báo rõ ràng cho dev!
-                print(f"⚠️ [IMPORT ERROR] Không thể nạp '{target_mod}' do lỗi: {e}")
+                print(f"[IMPORT ERROR] Không thể nạp '{target_mod}' do lỗi: {e}")
         except Exception as e:
             print(f"[WARN] Failed to load {target_mod}: {e}")
 
 if loaded_chatbot_roles:
-    print(f"🤖 [CHATBOT] Đã nạp thành công {len(loaded_chatbot_roles)}/4 Chatbot Routers: {', '.join(loaded_chatbot_roles)}")
+    print(f"[CHATBOT] Đã nạp thành công {len(loaded_chatbot_roles)}/4 Chatbot Routers: {', '.join(loaded_chatbot_roles)}")
 
 
 

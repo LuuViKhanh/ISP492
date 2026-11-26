@@ -19,10 +19,10 @@ _FLIGHT_ENERGY_CACHE: dict[tuple, dict] = {}
 _FLIGHT_ENERGY_CACHE_MAX = 4096
 
 _COMPAT_MODELS_CACHE: Optional[tuple[float, dict[str, list[str]]]] = None
-_COMPAT_MODELS_TTL_SEC = 60.0
+_COMPAT_MODELS_TTL_SEC = 300.0
 
 _HUBS_CACHE: Optional[tuple[float, list["_CachedHub"]]] = None
-_HUBS_CACHE_TTL_SEC = 30.0
+_HUBS_CACHE_TTL_SEC = 300.0
 
 
 @dataclass(frozen=True)
@@ -36,14 +36,31 @@ class _CachedHub:
     status: Optional[str]
 
 
+_ROUTE_INVALIDATION_CALLBACKS: list = []
+
+
+def register_route_cache_invalidator(fn) -> None:
+    if fn not in _ROUTE_INVALIDATION_CALLBACKS:
+        _ROUTE_INVALIDATION_CALLBACKS.append(fn)
+
+
+def invalidate_route_analysis_cache() -> None:
+    for fn in _ROUTE_INVALIDATION_CALLBACKS:
+        try:
+            fn()
+        except Exception:
+            pass
+
+
 def invalidate_planning_metadata_caches() -> None:
     global _COMPAT_MODELS_CACHE, _HUBS_CACHE
     _COMPAT_MODELS_CACHE = None
     _HUBS_CACHE = None
+    invalidate_route_analysis_cache()
 
 
 async def get_all_hubs_cached(db: AsyncSession) -> list[_CachedHub]:
-    """Fetch all Hubs with a short 30s TTL cache to avoid repeated remote DB roundtrips."""
+    """Fetch all Hubs with a 300s TTL cache (invalidated on admin Hub changes) to avoid repeated remote DB roundtrips."""
     global _HUBS_CACHE
     now_mono = time.monotonic()
     if _HUBS_CACHE is not None and (now_mono - _HUBS_CACHE[0]) <= _HUBS_CACHE_TTL_SEC:
@@ -84,6 +101,7 @@ def predict_flight_energy_cached(
     speed: float = 10.0,
     altitude: float = 50.0,
     weather_override: Optional[dict] = None,
+    bearing_deg: Optional[float] = None,
 ) -> dict:
     """Memoized wrapper around `predict_flight_energy` returning an isolated copy."""
     key = (
@@ -92,6 +110,7 @@ def predict_flight_energy_cached(
         round(float(speed or 10.0), 2),
         round(float(altitude or 50.0), 1),
         _weather_cache_key(weather_override),
+        round(float(bearing_deg) % 360.0, 1) if bearing_deg is not None else None,
     )
     cached = _FLIGHT_ENERGY_CACHE.get(key)
     if cached is not None:
@@ -103,6 +122,7 @@ def predict_flight_energy_cached(
         speed=speed,
         altitude=altitude,
         weather_override=weather_override,
+        bearing_deg=bearing_deg,
     )
     if len(_FLIGHT_ENERGY_CACHE) >= _FLIGHT_ENERGY_CACHE_MAX:
         _FLIGHT_ENERGY_CACHE.clear()
@@ -152,10 +172,7 @@ def resolve_compatible_models_from_map(
 
 ACTIVE_MISSION_STATUSES = [
     MissionStatus.SCHEDULED,
-    MissionStatus.IN_PROGRESS,
-    MissionStatus.APPROVED,
     MissionStatus.FLYING,
-    MissionStatus.ACTIVE_MISSION,
 ]
 
 async def get_active_mission_order_ids(db: AsyncSession) -> set[str]:
@@ -430,8 +447,14 @@ async def validate_bundle_orders(
         clean_drone_id = str(drone_id).strip()
         drone_obj = await db.get(Drone, clean_drone_id)
         if not drone_obj and clean_drone_id.isdigit():
-            alt_id = f"DRN-{int(clean_drone_id):04d}"
+            num_suffix = f"{int(clean_drone_id):04d}"
+            alt_id = f"DRN-{num_suffix}"
             drone_obj = await db.get(Drone, alt_id)
+            if not drone_obj:
+                d_res = await db.execute(
+                    select(Drone).where(Drone.id.like(f"%-DRN{num_suffix}")).limit(1)
+                )
+                drone_obj = d_res.scalar_one_or_none()
 
         if not drone_obj:
             raise HTTPException(status_code=404, detail=f"Drone '{drone_id}' not found")
@@ -500,8 +523,14 @@ async def get_post_analyze_bundle_candidates(
     clean_drone_id = str(drone_id).strip()
     drone_obj = await db.get(Drone, clean_drone_id)
     if not drone_obj and clean_drone_id.isdigit():
-        alt_id = f"DRN-{int(clean_drone_id):04d}"
+        num_suffix = f"{int(clean_drone_id):04d}"
+        alt_id = f"DRN-{num_suffix}"
         drone_obj = await db.get(Drone, alt_id)
+        if not drone_obj:
+            d_res = await db.execute(
+                select(Drone).where(Drone.id.like(f"%-DRN{num_suffix}")).limit(1)
+            )
+            drone_obj = d_res.scalar_one_or_none()
 
     if not drone_obj:
         raise HTTPException(status_code=404, detail=f"Drone '{drone_id}' not found")

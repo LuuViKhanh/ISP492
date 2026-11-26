@@ -238,7 +238,7 @@ Technician là vai trò chính tại các Hub, chịu trách nhiệm:
 
 ### 2.4 PUT `/technician/drones/{drone_id}/status`
 
-**Mô tả:** Cập nhật trạng thái drone (IDLE, CHARGING, MAINTENANCE).
+**Mô tả:** Cập nhật trạng thái droneZ
 
 **Request:**
 ```json
@@ -420,9 +420,14 @@ Technician là vai trò chính tại các Hub, chịu trách nhiệm:
 }
 ```
 
-### 4.3 GET `/technician/maintenance/alerts`
+### 4.3 GET `/technician/maintenance-alerts`
 
-**Mô tả:** Danh sách cảnh báo bảo trì (tập trung, bảo trì sắp tới, pin hỏng).
+**Mô tả:** Danh sách cảnh báo bảo trì chưa xử lý (tập trung, bảo trì sắp tới, pin hỏng). Technician chỉ thấy alert của drone tại hub mình.
+
+**Endpoint Thêm:**
+- `GET /technician/maintenance-alerts/history` — Alert đã xử lý (đã có work order)
+- `GET /technician/maintenance-alerts/{alert_id}` — Chi tiết alert
+- `PATCH /technician/maintenance-alerts/{alert_id}/acknowledge` — Xác nhận alert
 
 **Response:**
 ```json

@@ -64,20 +64,20 @@ def fetch_mission_route(headers) -> tuple[dict, dict] | None:
     try:
         resp = requests.get(f"{BASE_URL}/operator/missions/{MISSION_ID}", headers=headers, timeout=10)
         if resp.status_code != 200:
-            print(f"❌  Không lấy được mission #{MISSION_ID}: HTTP {resp.status_code}")
+            print(f"Không lấy được mission #{MISSION_ID}: HTTP {resp.status_code}")
             return None
         mission = resp.json()
     except Exception as e:
-        print(f"❌  Lỗi fetch mission: {e}")
+        print(f"Lỗi fetch mission: {e}")
         return None
 
     pickup_id  = mission.get("pickup_location_id")
     dropoff_id = mission.get("dropoff_location_id")
 
-    print(f"📋  Mission #{MISSION_ID}: pickup_location_id={pickup_id}, dropoff_location_id={dropoff_id}")
+    print(f"Mission #{MISSION_ID}: pickup_location_id={pickup_id}, dropoff_location_id={dropoff_id}")
 
     if not pickup_id or not dropoff_id:
-        print("⚠️   Mission không có pickup/dropoff location → dùng lộ trình hub fallback")
+        print("Mission không có pickup/dropoff location → dùng lộ trình hub fallback")
         return None
 
     # pickup_location_id/dropoff_location_id trỏ vào bảng hubs
@@ -97,14 +97,14 @@ def fetch_mission_route(headers) -> tuple[dict, dict] | None:
     dropoff = all_locations.get(dropoff_id)
 
     if not pickup:
-        print(f"❌  Không tìm thấy pickup location id={pickup_id} trong DB")
+        print(f"Không tìm thấy pickup location id={pickup_id} trong DB")
         return None
     if not dropoff:
-        print(f"❌  Không tìm thấy dropoff location id={dropoff_id} trong DB")
+        print(f"Không tìm thấy dropoff location id={dropoff_id} trong DB")
         return None
 
-    print(f"    📍 Pickup  : {pickup.get('name')} ({pickup['latitude']:.5f}, {pickup['longitude']:.5f})")
-    print(f"    🏁 Dropoff : {dropoff.get('name')} ({dropoff['latitude']:.5f}, {dropoff['longitude']:.5f})")
+    print(f"    Pickup  : {pickup.get('name')} ({pickup['latitude']:.5f}, {pickup['longitude']:.5f})")
+    print(f"    Dropoff : {dropoff.get('name')} ({dropoff['latitude']:.5f}, {dropoff['longitude']:.5f})")
     return pickup, dropoff
 
 
@@ -138,15 +138,15 @@ def build_route_pickup_to_dropoff(pickup: dict, dropoff: dict, intermediate_hubs
     # Sắp xếp hub trung gian theo khoảng cách từ pickup (gần nhất đến xa nhất)
     mid_hubs.sort(key=lambda h: haversine_m(p_lat, p_lng, h["latitude"], h["longitude"]))
 
-    waypoints = [(p_lat, p_lng, f"🛫 {pickup.get('name', 'Pickup')}")]
+    waypoints = [(p_lat, p_lng, f"{pickup.get('name', 'Pickup')}")]
     for h in mid_hubs:
-        waypoints.append((h["latitude"], h["longitude"], f"📍 {h['name']}"))
-    waypoints.append((d_lat, d_lng, f"🏁 {dropoff.get('name', 'Dropoff')}"))
+        waypoints.append((h["latitude"], h["longitude"], f"{h['name']}"))
+    waypoints.append((d_lat, d_lng, f"{dropoff.get('name', 'Dropoff')}"))
 
     if mid_hubs:
-        print(f"\n🗺️   Lộ trình: {pickup.get('name')} → {' → '.join(h['name'] for h in mid_hubs)} → {dropoff.get('name')}")
+        print(f"\nLộ trình: {pickup.get('name')} → {' → '.join(h['name'] for h in mid_hubs)} → {dropoff.get('name')}")
     else:
-        print(f"\n🗺️   Lộ trình thẳng: {pickup.get('name')} → {dropoff.get('name')} (không có hub trung gian)")
+        print(f"\nLộ trình thẳng: {pickup.get('name')} → {dropoff.get('name')} (không có hub trung gian)")
 
     return waypoints
 
@@ -160,7 +160,7 @@ def simulate():
     }
 
     # 1. Lấy pickup/dropoff từ mission
-    print(f"🔍  Đang đọc mission #{MISSION_ID}...")
+    print(f"Đang đọc mission #{MISSION_ID}...")
     route_result = fetch_mission_route(headers)
 
     # 2. Fetch hub trung gian từ bảng hubs
@@ -177,7 +177,7 @@ def simulate():
                         "longitude": h["longitude"],
                     })
     except Exception as e:
-        print(f"⚠️  /hubs: {e}")
+        print(f"/hubs: {e}")
 
     # 3. Build lộ trình
     if route_result:
@@ -186,28 +186,28 @@ def simulate():
     else:
         # Fallback: bay qua tất cả hub TP.HCM
         if not all_hubs:
-            print("⚠️  Không có location nào, dùng lộ trình cứng.")
+            print("Không có location nào, dùng lộ trình cứng.")
             waypoints = [
-                (10.7769, 106.7009, "🛫 Start - Quận 1"),
-                (10.7850, 106.6950, "📍 Midpoint"),
-                (10.7980, 106.6850, "🏁 End - Quận 7"),
+                (10.7769, 106.7009, "Start - Quận 1"),
+                (10.7850, 106.6950, "Midpoint"),
+                (10.7980, 106.6850, "End - Quận 7"),
             ]
         else:
-            print(f"\n✅  Tìm thấy {len(all_hubs)} location, bay qua tất cả:")
+            print(f"\nTìm thấy {len(all_hubs)} location, bay qua tất cả:")
             for h in all_hubs:
                 print(f"    • {h['name']:35s} ({h['latitude']:.5f}, {h['longitude']:.5f})")
             start_lat = all_hubs[0]["latitude"]  - 0.004
             start_lng = all_hubs[0]["longitude"] - 0.004
             end_lat   = all_hubs[-1]["latitude"]  + 0.004
             end_lng   = all_hubs[-1]["longitude"] + 0.004
-            waypoints = [(start_lat, start_lng, "🛫 Start")]
-            waypoints += [(h["latitude"], h["longitude"], f"📍 {h['name']}") for h in all_hubs]
-            waypoints += [(end_lat, end_lng, "🏁 End")]
+            waypoints = [(start_lat, start_lng, "Start")]
+            waypoints += [(h["latitude"], h["longitude"], f"{h['name']}") for h in all_hubs]
+            waypoints += [(end_lat, end_lng, "End")]
 
     route = interpolate_route(waypoints, steps_between=15)
     total = len(route)
 
-    print(f"\n🚁  Bắt đầu giả lập — {total} điểm, mission #{MISSION_ID}")
+    print(f"\nBắt đầu giả lập — {total} điểm, mission #{MISSION_ID}")
     print(f"    Server  : {BASE_URL}")
     print(f"    Interval: {INTERVAL_SEC}s/điểm\n")
 
@@ -244,7 +244,7 @@ def simulate():
                 if cps:
                     names = [c.get("hub_name", "?") for c in cps]
                     dists = [f"{c.get('distance_to_hub_m', 0):.0f}m" for c in cps]
-                    cp_tag = f"  ✅ CHECKPOINT: {', '.join(f'{n} ({d})' for n, d in zip(names, dists))}"
+                    cp_tag = f"  CHECKPOINT: {', '.join(f'{n} ({d})' for n, d in zip(names, dists))}"
 
                 print(
                     f"[{idx+1:>3}/{total}] ({lat:.5f}, {lng:.5f})"
@@ -253,25 +253,25 @@ def simulate():
                     f"{label_tag}{cp_tag}"
                 )
             else:
-                print(f"[{idx+1:>3}/{total}] ❌ HTTP {resp.status_code}: {resp.text[:150]}")
+                print(f"[{idx+1:>3}/{total}] HTTP {resp.status_code}: {resp.text[:150]}")
 
         except requests.exceptions.ConnectionError:
-            print(f"[{idx+1:>3}/{total}] ❌ Không kết nối được tới {BASE_URL}")
+            print(f"[{idx+1:>3}/{total}] Không kết nối được tới {BASE_URL}")
             break
         except requests.exceptions.Timeout:
-            print(f"[{idx+1:>3}/{total}] ⏱  Timeout")
+            print(f"[{idx+1:>3}/{total}] Timeout")
 
         if idx < total - 1:
             time.sleep(INTERVAL_SEC)
 
-    print("\n🏁  Giả lập hoàn thành.")
-    print(f"\n👉  Kiểm tra kết quả:")
+    print("\nGiả lập hoàn thành.")
+    print(f"\nKiểm tra kết quả:")
     print(f"    GET {BASE_URL}/operator/missions/{MISSION_ID}/hub-checkpoints")
     print(f"    GET {BASE_URL}/operator/missions/{MISSION_ID}/telemetry")
 
 
 if __name__ == "__main__":
     if TOKEN == "PASTE_YOUR_ACCESS_TOKEN_HERE":
-        print("❌  Chưa điền TOKEN. Sửa biến TOKEN ở đầu file.")
+        print("Chưa điền TOKEN. Sửa biến TOKEN ở đầu file.")
         exit(1)
     simulate()

@@ -67,16 +67,16 @@ HUBS = [
 
 # email Technician theo phường thực tế (sau sáp nhập quận TP.HCM 2025)
 TECH_MAP = {
-    1:  {"email": "tech.benthanh@droneoptai.com",   "full_name": "Kỹ thuật viên — Phường Bến Thành"},
-    2:  {"email": "tech.vothansu@droneoptai.com",    "full_name": "Kỹ thuật viên — Phường Võ Thị Sáu"},
-    3:  {"email": "tech.tanphong@droneoptai.com",    "full_name": "Kỹ thuật viên — Phường Tân Phong"},
-    4:  {"email": "tech.linhchieu@droneoptai.com",   "full_name": "Kỹ thuật viên — Phường Linh Chiểu"},
-    5:  {"email": "tech.nguyenoanh@droneoptai.com",  "full_name": "Kỹ thuật viên — Phường 17, Gò Vấp"},
-    6:  {"email": "tech.ungvankhiem@droneoptai.com", "full_name": "Kỹ thuật viên — Phường 25, Bình Thạnh"},
-    7:  {"email": "tech.conghoa@droneoptai.com",     "full_name": "Kỹ thuật viên — Phường 4, Tân Bình"},
-    8:  {"email": "tech.anlac@droneoptai.com",       "full_name": "Kỹ thuật viên — Phường An Lạc"},
-    9:  {"email": "tech.nhabe@droneoptai.com",       "full_name": "Kỹ thuật viên — Phường Nhà Bè"},
-    10: {"email": "tech.hoathanh@droneoptai.com",    "full_name": "Kỹ thuật viên — Phường Hòa Thạnh"},
+    1:  {"email": "tech.benthanh@droneoptai.com",   "full_name": "Technician — Ben Thanh Ward"},
+    2:  {"email": "tech.vothansu@droneoptai.com",    "full_name": "Technician — Vo Thi Sau Ward"},
+    3:  {"email": "tech.tanphong@droneoptai.com",    "full_name": "Technician — Tan Phong Ward"},
+    4:  {"email": "tech.linhchieu@droneoptai.com",   "full_name": "Technician — Linh Chieu Ward"},
+    5:  {"email": "tech.nguyenoanh@droneoptai.com",  "full_name": "Technician — Ward 17, Go Vap"},
+    6:  {"email": "tech.ungvankhiem@droneoptai.com", "full_name": "Technician — Ward 25, Binh Thanh"},
+    7:  {"email": "tech.conghoa@droneoptai.com",     "full_name": "Technician — Ward 4, Tan Binh"},
+    8:  {"email": "tech.anlac@droneoptai.com",       "full_name": "Technician — An Lac Ward"},
+    9:  {"email": "tech.nhabe@droneoptai.com",       "full_name": "Technician — Nha Be Ward"},
+    10: {"email": "tech.hoathanh@droneoptai.com",    "full_name": "Technician — Hoa Thanh Ward"},
 }
 
 

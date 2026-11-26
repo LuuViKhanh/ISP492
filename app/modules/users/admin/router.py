@@ -53,10 +53,12 @@ async def create_user(
         db.add(existing)
         await db.flush()
         
+    from app.modules.auth.service import hash_password_async
+    hashed = await hash_password_async(body.password)
     new_user = User(
         email=body.email,
         full_name=body.full_name,
-        hashed_password=hash_password(body.password),
+        hashed_password=hashed,
         role_id=ROLE_NAME_TO_ID[body.role]
     )
     db.add(new_user)
