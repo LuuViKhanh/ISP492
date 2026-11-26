@@ -1003,11 +1003,12 @@ async def get_sla_report(
 @missions_router.post("/{mission_id}/confirm-arrival", summary="Confirm drone arrival at destination hub (complete mission)")
 async def technician_mission_confirm_arrival(
     mission_id: str,
-    body: Optional[ConfirmArrivalRequest] = None,
+    background_tasks: BackgroundTasks,
     user: CurrentUser = Depends(allow_technician),
+    body: Optional[ConfirmArrivalRequest] = None,
     db: AsyncSession = Depends(get_async_db),
 ):
-    return await _fleet_confirm_arrival(mission_id=mission_id, body=body, user=user, db=db)
+    return await _fleet_confirm_arrival(mission_id=mission_id, body=body, background_tasks=background_tasks, user=user, db=db)
 
 
 @missions_router.post("/{mission_id}/confirm-relay-arrival", summary="Confirm drone arrival at intermediate relay hub")
