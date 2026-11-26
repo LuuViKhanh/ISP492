@@ -249,7 +249,7 @@ async def _notify_hub_technicians_drone_arrived(
             select(Account.id).where(
                 Account.role_id == tech_role_id,
                 Account.is_active == True,
-                Account.hub_id == hub.id,
+                Account.hub_id == int(hub.id),
             )
         )
         tech_ids = list(tech_res.scalars().all())
