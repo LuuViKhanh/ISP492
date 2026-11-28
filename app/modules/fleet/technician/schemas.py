@@ -1,7 +1,19 @@
 from pydantic import BaseModel
 from typing import Optional, List, Union
 from datetime import datetime
+from pydantic import BaseModel
 from app.modules.fleet.models import DroneStatus, WorkOrderStatus, PartCategoryType, PartsRequestStatus
+
+
+class ConfirmArrivalRequest(BaseModel):
+    """Request body cho confirm-arrival endpoint"""
+    battery_faulty: Optional[bool] = False
+    has_incident: Optional[bool] = False
+    has_issue: Optional[bool] = False
+    proof_image_url: Optional[str] = None  # Base64 Data URL
+    stage: Optional[str] = "PACKAGE_UNLOADED_FROM_DRONE"  # Mốc lịch sử hình ảnh
+    drone_status: Optional[str] = None  # "available" hoặc "maintenance"
+    issue_description: Optional[str] = None  # Mô tả chi tiết vấn đề
 
 
 class DroneProfileResponse(BaseModel):

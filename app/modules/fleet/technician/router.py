@@ -449,7 +449,7 @@ async def get_transit_history(
 async def confirm_arrival(
     mission_id: str,
     background_tasks: BackgroundTasks,
-    body: Optional[dict] = None,
+    body: Optional[ConfirmArrivalRequest] = None,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -517,9 +517,9 @@ async def confirm_arrival(
 
     has_issue_flag = False
     if body:
-        if body.get("has_issue") or body.get("has_incident"):
+        if body.has_issue or body.has_incident:
             has_issue_flag = True
-        if body.get("drone_status") and str(body.get("drone_status")).strip().lower() == "maintenance":
+        if body.drone_status and str(body.drone_status).strip().lower() == "maintenance":
             has_issue_flag = True
 
     is_crash_flight = (mission.status == MissionStatus.FAILED)
@@ -700,12 +700,12 @@ async def confirm_arrival(
             order_obj = order_result.scalar_one_or_none()
             
             # ── Lưu proof image vào Order.proof_images_json (Crash Recovery) ──
-            if order_obj and body and body.get("proof_image_url"):
-                proof_stage = body.get("stage", "PACKAGE_UNLOADED_FROM_DRONE")
+            if order_obj and body and body.proof_image_url:
+                proof_stage = body.stage or "PACKAGE_UNLOADED_FROM_DRONE"
                 proof_entry = build_order_proof_image_entry(
                     stage=proof_stage,
                     checklist=None,
-                    proof_image_url=body.get("proof_image_url"),
+                    proof_image_url=body.proof_image_url,
                     technician_id=str(user.id),
                     hub_id=receiving_hub_id,
                     mission_id=mission.id,
