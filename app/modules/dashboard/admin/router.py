@@ -6,7 +6,7 @@ from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
 from app.modules.auth.models import User, ROLE_ID_MAP
-from app.modules.missions.models import Mission, MissionStatus, Incident, IncidentStatus, Order, PaymentStatus, DeliveryRating
+from app.modules.missions.models import Mission, MissionStatus, Incident, IncidentStatus, Order, OrderStatus, PaymentStatus, DeliveryRating
 from app.modules.fleet.models import Drone, Battery, MaintenanceAlert
 from app.modules.system.models import ActivityLog
 from app.modules.supplies.models import SupplyTransaction, SupplyTxnReason, PartCategory
