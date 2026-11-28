@@ -456,6 +456,15 @@ async def confirm_arrival(
     """
     Technician confirm drone đã đáp hub đích — kết thúc mission hoàn toàn (Issue #4).
 
+    Request Body (all optional):
+    {
+      "battery_faulty": false,
+      "has_incident": true,
+      "has_issue": true,
+      "proof_image_url": "data:image/jpeg;base64,...",
+      "stage": "PACKAGE_UNLOADED_FROM_DRONE"
+    }
+
     Actions:
     - mission.status → COMPLETED, arrived_at/end_time ghi nhận, handling_status → None (chuyển khỏi danh sách Transit sang History).
     - Tất cả MissionLeg còn lại → COMPLETED (leg cuối chưa mark).
@@ -465,6 +474,7 @@ async def confirm_arrival(
     - Battery (pin trên drone): tháo khỏi drone (drone_id = None), current_hub_id = destination_hub_id
       (chuyển sang Battery Management để sạc hoặc kiểm tra nếu có vấn đề).
     - Order: status → DELIVERED_TO_HUB, gửi email thông báo.
+    - Proof Images: Lưu hình ảnh minh chứng vào Order.proof_images_json (stage=PACKAGE_UNLOADED_FROM_DRONE hoặc theo body.stage).
     """
     from app.modules.missions.models import MissionLeg, MissionLegStatus, Order as OrderModel, OrderStatus, Incident, IncidentStatus
     from app.modules.fleet.models import DroneStatus, batteries_status
@@ -688,6 +698,22 @@ async def confirm_arrival(
                 select(OrderModel).where(OrderModel.id == mission.order_id)
             )
             order_obj = order_result.scalar_one_or_none()
+            
+            # ── Lưu proof image vào Order.proof_images_json (Crash Recovery) ──
+            if order_obj and body and body.get("proof_image_url"):
+                proof_stage = body.get("stage", "PACKAGE_UNLOADED_FROM_DRONE")
+                proof_entry = build_order_proof_image_entry(
+                    stage=proof_stage,
+                    checklist=None,
+                    proof_image_url=body.get("proof_image_url"),
+                    technician_id=str(user.id),
+                    hub_id=receiving_hub_id,
+                    mission_id=mission.id,
+                    note="Crash recovery proof image",
+                )
+                if order_obj.proof_images_json is None:
+                    order_obj.proof_images_json = []
+                order_obj.proof_images_json.append(proof_entry)
             if order_obj:
                 hub = None
                 hub_name = None
