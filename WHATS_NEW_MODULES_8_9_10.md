@@ -219,13 +219,23 @@ status_logs_json: Mapped[list | None] = mapped_column(
     JSON, nullable=True, default=list
 )  # [{old_status, new_status, changed_by, changed_at}, ...]
 
-proof_images_json: Mapped[list | None] = mapped_column(
-    JSON, nullable=True, default=list
-)  # [{type, proof_image_url, description, recorded_at}, ...]
+proof_image_url: Mapped[str | None] = mapped_column(
+    Text, nullable=True
+)  # Single proof image (Base64 Data URL) - before/after/during/incident_recovery
 
-parts_replaced_proof_json: Mapped[list | None] = mapped_column(
-    JSON, nullable=True, default=list
-)  # [{proof_image_url, description, recorded_at}, ...]
+parts_replaced_proof_url: Mapped[str | None] = mapped_column(
+    Text, nullable=True
+)  # Single proof image for parts replaced (Base64 Data URL)
+
+# Drone Model
+image_url: Mapped[str | None] = mapped_column(
+    Text, nullable=True
+)  # Latest status image (Base64 Data URL) - updated when DRONE_STATUS_CHANGED / work order completed
+
+# Battery Model
+image_url: Mapped[str | None] = mapped_column(
+    Text, nullable=True
+)  # Latest status image (Base64 Data URL) - updated when BATTERY_INSTALLED_ON_DRONE / BATTERY_SWAPPED
 ```
 
 #### 3. Endpoints - Activity Logging Pattern
@@ -303,8 +313,8 @@ class InspectionUpdate(BaseModel):
     status: WorkOrderStatus
     diagnosis: Optional[str] = None
     resulting_drone_status: Optional[str] = None
-    proof_image_url: Optional[str]  # Base64 Data URL
-    parts_replaced_proof_url: Optional[str]
+    proof_image_url: Optional[str]  # Base64 Data URL - single proof image
+    parts_replaced_proof_url: Optional[str]  # Base64 Data URL - single proof image
     inspection_items: Optional[list[dict]]  # [{item, checked, status, note}, ...]
 
 # Log to activity_logs (resource_type=drone)
@@ -325,21 +335,14 @@ ActivityLog(
     created_at=now
 )
 
-# Denormalize to WorkOrder
-wo.proof_images_json.append({
-    "type": "before" if status == IN_PROGRESS else "after",
-    "proof_image_url": body.proof_image_url,
-    "description": f"Proof image at {status.value}",
-    "recorded_at": now.isoformat()
-})
-
-wo.parts_replaced_proof_json.append({
-    "proof_image_url": body.parts_replaced_proof_url,
-    "description": "Parts replaced proof",
-    "recorded_at": now.isoformat()
-})
-
+# Save directly to WorkOrder fields
+wo.proof_image_url = body.proof_image_url  # Single URL field
+wo.parts_replaced_proof_url = body.parts_replaced_proof_url  # Single URL field
 wo.inspection_items_json = body.inspection_items
+
+# Update drone.image_url if proof image provided
+if wo.drone_id and body.proof_image_url:
+    drone.image_url = body.proof_image_url
 ```
 
 #### 4. GET Endpoints - Technician & Admin
@@ -396,35 +399,43 @@ Cần triển khai 5 tính năng cho Admin:
 
 ```python
 # GET /admin/fleet/drones/{drone_id}/battery-history
-# Lịch sử gắn/tháo/đổi pin của drone (admin view toàn hệ thống)
-{
-    "id": int,
-    "stage": "BATTERY_INSTALLED_ON_DRONE" | "BATTERY_SWAPPED",
-    "action": "install" | "swap",
-    "details": {...},  # Từ activity_logs.details_json
-    "recorded_at": "2026-10-18T10:30:00",
-    "technician_id": "user123",
-    "removed_battery_id": "BAT-001",  # Nếu là swap
-    "installed_battery_id": "BAT-002",
-    "battery_pct_before": 85.5,
-    "battery_pct_after": 92.0,
-    "proof_image_url": "data:image/jpeg;base64,...",
-    "hub_id": 1
-}
+# Response: Extract fields from activity_logs.details_json
+[
+    {
+        "id": int,
+        "stage": "BATTERY_INSTALLED_ON_DRONE" | "BATTERY_SWAPPED",
+        "action": "install" | "swap",
+        "removed_battery_id": optional[str],
+        "installed_battery_id": optional[str],
+        "battery_pct_before": optional[float],
+        "battery_pct_after": optional[float],
+        "hub_id": optional[int],
+        "mission_id": optional[str],
+        "drone_id": str,
+        "technician_id": optional[str],
+        "note": optional[str],
+        "proof_image_url": optional[str],  # Base64 Data URL
+        "recorded_at": datetime.isoformat()
+    }
+]
 
 # GET /admin/fleet/batteries/{battery_id}/history
-# Lịch sử của từng pin
-{
-    "id": int,
-    "action": "BATTERY_INSTALLED_ON_DRONE" | "BATTERY_SWAPPED" | "BATTERY_CHARGED",
-    "details": {...},
-    "recorded_at": "2026-10-18T10:30:00",
-    "technician_id": "user123",
-    "drone_id": "DRN-001",
-    "hub_id": 1,
-    "proof_image_url": "data:image/jpeg;base64,...",
-    "inspection_items": [{item, checked, status, note}, ...]
-}
+# Response: Extract fields from activity_logs.details_json
+[
+    {
+        "id": int,
+        "action": "BATTERY_INSTALLED_ON_DRONE" | "BATTERY_SWAPPED" | "BATTERY_CHARGED",
+        "drone_id": optional[str],
+        "battery_id": str,
+        "charge_level_pct": optional[float],
+        "hub_id": optional[int],
+        "mission_id": optional[str],
+        "proof_image_url": optional[str],  # Base64 Data URL
+        "note": optional[str],
+        "technician_id": optional[str],
+        "recorded_at": datetime.isoformat()
+    }
+]
 ```
 
 #### 2. 10.1.2 Flight History (tổng quát + detail)

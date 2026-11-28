@@ -204,7 +204,7 @@ async def admin_dashboard(
             .scalar_subquery(),
             select(func.count())
             .select_from(Order)
-            .where(Order.status == "Delivered")
+            .where(Order.status == OrderStatus.DELIVERED_TO_CUSTOMER)
             .scalar_subquery(),
             select(func.count())
             .select_from(Order)
@@ -212,7 +212,7 @@ async def admin_dashboard(
             .scalar_subquery(),
             select(func.count())
             .select_from(Order)
-            .where(Order.status == "Cancelled")
+            .where(Order.status == OrderStatus.CANCELLED)
             .scalar_subquery(),
         )
     )).one()
