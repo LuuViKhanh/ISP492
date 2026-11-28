@@ -2332,6 +2332,7 @@ from app.modules.fleet.technician.service import run_maintenance_alerts_logic, r
 @router.post("/missions/{mission_id}/confirm-relay-arrival", summary="Confirm drone đáp relay hub trung gian")
 async def confirm_relay_arrival(
     mission_id: str,
+    body: Optional[ConfirmArrivalRequest] = None,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -2432,6 +2433,33 @@ async def confirm_relay_arrival(
 
     # Cập nhật mission handling_status → AT_HUB (chờ Technician swap pin)
     mission.handling_status = HandlingStatus.AT_HUB
+
+    # ── Log DRONE_CHECKIN_RELAY hình ảnh vào activity_logs ───────────────────
+    if body and body.proof_image_url:
+        try:
+            from app.modules.system.models import ActivityLog
+            db.add(ActivityLog(
+                resource_type="mission",
+                resource_id=str(mission.id),
+                action="DRONE_CHECKIN_RELAY",
+                user_id=str(user.id),
+                user_email=user.email,
+                description=f"Drone check-in at relay hub #{relay_hub_id} for leg #{current_leg.id}",
+                status="success",
+                details_json={
+                    "mission_id": mission.id,
+                    "leg_id": current_leg.id,
+                    "leg_sequence_no": current_leg.sequence_no,
+                    "hub_id": relay_hub_id,
+                    "stage": "DRONE_CHECKIN_RELAY",
+                    "order_id": mission.order_id,
+                    "proof_image_url": body.proof_image_url,
+                    "technician_id": str(user.id),
+                    "recorded_at": get_vn_naive_datetime().isoformat(),
+                },
+            ))
+        except Exception as e:
+            print(f"[ERROR] Failed to log relay check-in image: {e}")
 
     await db.commit()
 
@@ -3012,6 +3040,33 @@ async def dispatch_drone(
                 ))
             except Exception as e:
                 print(f"[ACTIVITY LOG ERROR] Failed to log proof image for dispatch: {e}")
+
+    # ── Log DRONE_CHECKOUT_RELAY hình ảnh vào activity_logs ─────────────────
+    if body and body.proof_image_url and next_leg:
+        try:
+            from app.modules.system.models import ActivityLog
+            db.add(ActivityLog(
+                resource_type="mission",
+                resource_id=str(mission.id),
+                action="DRONE_CHECKOUT_RELAY",
+                user_id=str(user.id),
+                user_email=user.email,
+                description=f"Drone check-out at relay hub leg #{next_leg.id} dispatch",
+                status="success",
+                details_json={
+                    "mission_id": mission.id,
+                    "leg_id": next_leg.id,
+                    "leg_sequence_no": next_leg.sequence_no,
+                    "hub_id": next_leg.from_hub_id,
+                    "stage": "DRONE_CHECKOUT_RELAY",
+                    "order_id": mission.order_id,
+                    "proof_image_url": body.proof_image_url,
+                    "technician_id": str(user.id),
+                    "recorded_at": now.isoformat(),
+                },
+            ))
+        except Exception as e:
+            print(f"[ERROR] Failed to log relay check-out image: {e}")
 
     await db.commit()
 

@@ -6914,3 +6914,178 @@ async def update_simulator_config(
         "message": "Simulator configuration updated.",
         "config": cfg,
     }
+
+
+# ── Operator: Proof Images ────────────────────────────────────────────────────
+
+@router.get("/orders/{order_id}/proof-images", summary="Hình ảnh minh chứng khách giao đơn tại hub")
+async def get_order_proof_images(
+    order_id: str,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Trả về hình ảnh minh chứng khách hàng giao đơn tại origin hub.
+    Chỉ bao gồm stage PACKAGE_RECEIVED_AT_ORIGIN_HUB.
+    Operator chỉ xem hình ảnh, không có checklist, không có hình ảnh bàn giao cho người nhận.
+
+    Trả về list:
+    - stage
+    - hub_id
+    - proof_image_url
+    - technician_id
+    - recorded_at
+    - mission_id (nếu có)
+    """
+    from app.modules.missions.models import Order
+    from app.modules.auth.models import User as UserModel
+
+    order = await db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    proof_images = order.proof_images_json or []
+
+    # Chỉ lấy stage PACKAGE_RECEIVED_AT_ORIGIN_HUB (lúc khách giao hàng tại hub)
+    filtered = [
+        img for img in proof_images
+        if isinstance(img, dict) and img.get("stage") == "PACKAGE_RECEIVED_AT_ORIGIN_HUB"
+    ]
+
+    # Enrich technician_name từ DB
+    tech_ids = list({img.get("technician_id") for img in filtered if img.get("technician_id")})
+    tech_map = {}
+    if tech_ids:
+        techs = await db.execute(select(UserModel).where(UserModel.id.in_(tech_ids)))
+        for t in techs.scalars():
+            tech_map[str(t.id)] = t.full_name
+
+    result = []
+    for img in filtered:
+        tech_id = img.get("technician_id")
+        result.append({
+            "mission_id": img.get("mission_id"),
+            "leg_id": None,
+            "hub_id": img.get("hub_id"),
+            "stage": img.get("stage"),
+            "order_id": order_id,
+            "proof_image_url": img.get("proof_image_url"),
+            "technician_id": tech_id,
+            "technician_name": tech_map.get(str(tech_id)) if tech_id else None,
+            "recorded_at": img.get("recorded_at"),
+        })
+
+    return result
+
+
+@router.get("/{mission_id}/proof-images", summary="Hình ảnh minh chứng theo từng Leg của Mission")
+async def get_mission_proof_images(
+    mission_id: str,
+    user: CurrentUser = Depends(allow_operator),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Trả về hình ảnh minh chứng theo từng chặng (Leg) của Mission:
+    - DRONE_CHECKIN_RELAY  : Drone đáp xuống Relay Hub (check-in)
+    - DRONE_CHECKOUT_RELAY : Drone cất cánh khỏi Relay Hub (check-out / dispatch)
+    - PACKAGE_LOADED_TO_DRONE   : Kiện hàng gộp tại Relay Hub (nếu có)
+    - PACKAGE_UNLOADED_FROM_DRONE: Drone đáp Destination Hub, gỡ hàng
+
+    Không bao gồm: CUSTOMER_PICKUP_CONFIRMED (bàn giao cho người nhận).
+    Operator chỉ xem hình ảnh, không checklist.
+
+    Trả về list sorted by recorded_at ASC, mỗi phần tử:
+    - mission_id, leg_id, hub_id, stage, order_id
+    - proof_image_url, technician_id, technician_name, recorded_at
+    """
+    from app.modules.missions.models import Order
+    from app.modules.auth.models import User as UserModel
+    from app.modules.system.models import ActivityLog
+
+    mission = await db.get(Mission, mission_id)
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission not found")
+
+    RELAY_STAGES = {"DRONE_CHECKIN_RELAY", "DRONE_CHECKOUT_RELAY"}
+    ORDER_STAGES = {"PACKAGE_LOADED_TO_DRONE", "PACKAGE_UNLOADED_FROM_DRONE"}
+    ALL_STAGES   = RELAY_STAGES | ORDER_STAGES
+
+    # ── 1. Lấy relay check-in / check-out từ activity_logs ────────────────────
+    logs_result = await db.execute(
+        select(ActivityLog)
+        .where(
+            ActivityLog.resource_type == "mission",
+            ActivityLog.resource_id == mission_id,
+            ActivityLog.action.in_(list(RELAY_STAGES)),
+        )
+        .order_by(ActivityLog.created_at.asc())
+    )
+    activity_logs = logs_result.scalars().all()
+
+    # ── 2. Lấy order proof images (PACKAGE_LOADED / UNLOADED) ─────────────────
+    order_proof_items = []
+    if mission.order_id:
+        order = await db.get(Order, mission.order_id)
+        if order and order.proof_images_json:
+            for img in order.proof_images_json:
+                if isinstance(img, dict) and img.get("stage") in ORDER_STAGES:
+                    order_proof_items.append(img)
+
+    # ── 3. Enrich technician names ──────────────────────────────────────────────
+    tech_ids = set()
+    for log in activity_logs:
+        if log.user_id:
+            tech_ids.add(str(log.user_id))
+    for img in order_proof_items:
+        if img.get("technician_id"):
+            tech_ids.add(str(img["technician_id"]))
+
+    tech_map = {}
+    if tech_ids:
+        techs = await db.execute(select(UserModel).where(UserModel.id.in_(list(tech_ids))))
+        for t in techs.scalars():
+            tech_map[str(t.id)] = t.full_name
+
+    # ── 4. Build response ──────────────────────────────────────────────────────
+    result = []
+
+    # Từ activity_logs (relay check-in / check-out)
+    for log in activity_logs:
+        d = log.details_json or {}
+        result.append({
+            "mission_id": mission_id,
+            "leg_id": d.get("leg_id"),
+            "hub_id": d.get("hub_id"),
+            "stage": d.get("stage") or log.action,
+            "order_id": d.get("order_id"),
+            "proof_image_url": d.get("proof_image_url"),
+            "technician_id": log.user_id,
+            "technician_name": tech_map.get(str(log.user_id)) if log.user_id else None,
+            "recorded_at": d.get("recorded_at") or (log.created_at.isoformat() if log.created_at else None),
+        })
+
+    # Từ order.proof_images_json (PACKAGE_LOADED / UNLOADED)
+    for img in order_proof_items:
+        tech_id = img.get("technician_id")
+        result.append({
+            "mission_id": mission_id,
+            "leg_id": img.get("leg_id"),
+            "hub_id": img.get("hub_id"),
+            "stage": img.get("stage"),
+            "order_id": mission.order_id,
+            "proof_image_url": img.get("proof_image_url"),
+            "technician_id": tech_id,
+            "technician_name": tech_map.get(str(tech_id)) if tech_id else None,
+            "recorded_at": img.get("recorded_at"),
+        })
+
+    # Sort by recorded_at ASC
+    def _sort_key(x):
+        v = x.get("recorded_at")
+        if not v:
+            return ""
+        return str(v)
+
+    result.sort(key=_sort_key)
+
+    return result
