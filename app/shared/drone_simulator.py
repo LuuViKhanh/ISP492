@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func, update, text
 
 from app.core.timezone import get_vn_datetime, get_vn_naive_datetime
 from app.database.db import AsyncSessionLocal
@@ -325,6 +325,66 @@ async def _find_nearest_active_hub(
     return best_hub
 
 
+async def _consume_db_first_flight_incident_flag(mission_id: str, total_points: int) -> Optional[dict]:
+    """
+    Kiểm tra và tiêu thụ 1 lần duy nhất cờ `ARM_FIRST_FLIGHT_INCIDENT` trong `system_logs`
+    (được nạp bởi `reset_db_for_defense.py`). Nhờ lưu trong DB nên bền vững qua restart server,
+    chuyến bay demo đầu tiên sau khi clear sẽ tự động kích hoạt Incident đầy đủ thông tin rồi
+    tự động tắt để mọi chuyến bay tiếp theo thành công 100%.
+    """
+    from app.modules.system.models import SystemLog
+
+    async with AsyncSessionLocal() as db:
+        try:
+            row = (
+                await db.execute(
+                    select(SystemLog)
+                    .where(
+                        SystemLog.event == "ARM_FIRST_FLIGHT_INCIDENT",
+                        text("COALESCE((details_json->>'armed')::boolean, false) = true"),
+                    )
+                    .order_by(SystemLog.id.desc())
+                    .limit(1)
+                    .with_for_update(skip_locked=True)
+                )
+            ).scalars().first()
+            if not row:
+                return None
+
+            details = dict(row.details_json or {})
+            armed_type = str(details.get("incident_type") or "DISCONNECT_CRASH").strip().upper()
+            if armed_type not in VALID_INCIDENT_TYPES:
+                armed_type = "DISCONNECT_CRASH"
+            armed_severity = str(details.get("severity") or "High")
+            armed_step = details.get("trigger_step")
+
+            details["armed"] = False
+            details["consumed_mission_id"] = str(mission_id)
+            details["consumed_at"] = get_vn_datetime().isoformat()
+            row.details_json = details
+            row.message = f"Consumed first-flight incident trigger on mission {mission_id} ({armed_type})."
+            await db.commit()
+
+            if total_points <= 1:
+                trigger_idx = 0
+            elif armed_step is not None:
+                trigger_idx = max(0, min(total_points - 1, int(armed_step) - 1))
+            else:
+                default_idx = max(simulator_config.incident_min_step, int(round(total_points * 0.65)) - 1)
+                trigger_idx = min(max(1, total_points - 2), default_idx)
+
+            return {
+                "armed": True,
+                "trigger_idx": trigger_idx,
+                "severity": armed_severity,
+                "incident_type": armed_type,
+                "source": "db_first_flight_flag",
+            }
+        except Exception as e:
+            print(f"[SIMULATOR] Lỗi kiểm tra cờ DB ARM_FIRST_FLIGHT_INCIDENT: {e}")
+            return None
+
+
 async def _trigger_disconnect_crash(
     mission_id: str,
     incident_lat: float,
@@ -339,9 +399,15 @@ async def _trigger_disconnect_crash(
     """
     from app.modules.auth.models import Account, ROLE_NAME_TO_ID
     from app.modules.fleet.models import DroneStatus, MaintenanceAlert
-    from app.modules.system.models import Notification, NotificationType
+    from app.modules.system.models import Notification, NotificationType, ActivityLog
     from app.shared.roles import UserRole
+    from app.shared.weather import fetch_weather, evaluate_weather_safety
     from app.shared.workers import get_operator_and_admin_ids
+
+    # Lấy dữ liệu thời tiết thực tế từ Open-Meteo tại tọa độ sự cố TRƯỚC khi mở DB session
+    crash_weather = await fetch_weather(incident_lat, incident_lng)
+    crash_weather_eval = evaluate_weather_safety(crash_weather, altitude_m=45.0)
+    weather_summary_txt = crash_weather_eval.get("weather_summary") or "Weather data unavailable"
 
     async with AsyncSessionLocal() as db:
         try:
@@ -353,7 +419,22 @@ async def _trigger_disconnect_crash(
             now_tz = get_vn_datetime()
             recovery_hub = await _find_nearest_active_hub(db, incident_lat, incident_lng, fallback_hub=from_hub)
 
-            # 1. Ghi 1 TelemetryLog cuối cùng tại tọa độ rơi (altitude=0, speed=0)
+            # Lấy điểm telemetry gần nhất để tổng hợp đầy đủ vào mô tả sự cố
+            last_tel = (
+                await db.execute(
+                    select(TelemetryLog)
+                    .where(TelemetryLog.mission_id == str(mission_id))
+                    .order_by(TelemetryLog.id.desc())
+                    .limit(1)
+                )
+            ).scalars().first()
+            last_alt = round(float(last_tel.altitude), 1) if (last_tel and last_tel.altitude is not None) else 45.0
+            last_spd = round(float(last_tel.speed), 1) if (last_tel and last_tel.speed is not None) else 12.0
+            last_bat_pct = round(float(last_tel.battery_pct), 1) if (last_tel and last_tel.battery_pct is not None) else 78.0
+            last_volt = round(float(last_tel.battery_voltage), 2) if (last_tel and last_tel.battery_voltage is not None) else 22.8
+            last_energy = round(float(last_tel.energy_consumed_wh), 2) if (last_tel and last_tel.energy_consumed_wh is not None) else 24.5
+
+            # 1. Ghi 1 TelemetryLog cuối cùng tại tọa độ rơi (altitude=0, speed=0, đầy đủ Weather Open-Meteo)
             db.add(TelemetryLog(
                 mission_id=mission_id,
                 timestamp=now_naive,
@@ -363,8 +444,18 @@ async def _trigger_disconnect_crash(
                 speed=0.0,
                 battery_voltage=0.0,
                 battery_pct=0.0,
-                energy_consumed_wh=None,
-                wind_speed=None,
+                energy_consumed_wh=last_energy,
+                wind_speed=crash_weather.wind_speed if crash_weather else None,
+                weather_temperature=crash_weather.temperature if crash_weather else None,
+                weather_apparent_temp=crash_weather.apparent_temperature if crash_weather else None,
+                weather_dew_point=crash_weather.dew_point if crash_weather else None,
+                weather_humidity=crash_weather.humidity if crash_weather else None,
+                weather_wind_speed=crash_weather.wind_speed if crash_weather else None,
+                weather_wind_gust=crash_weather.wind_gust if crash_weather else None,
+                weather_wind_direction=crash_weather.wind_direction if crash_weather else None,
+                weather_precipitation=crash_weather.precipitation if crash_weather else None,
+                weather_pressure=crash_weather.pressure if crash_weather else None,
+                weather_cloud_cover=crash_weather.cloud_cover if crash_weather else None,
             ))
 
             # 2. Chuyển Mission → FAILED + CANNOT_CONTINUE (chưa đặt arrived_at để chờ Technician xác nhận thu hồi qua confirm-arrival)
@@ -394,7 +485,24 @@ async def _trigger_disconnect_crash(
                 if drone:
                     drone.status = DroneStatus.MAINTENANCE
 
-            # 4. Tạo Incident mức HIGH & MaintenanceAlert Pending
+            # 4. Tạo Incident mức HIGH & MaintenanceAlert Pending (đầy đủ GPS, Telemetry, Weather, Checklist ✓ ...)
+            checklist_block = (
+                "Required Technical Inspection Checklist:\n"
+                "✓ Inspect Motor #2 & ESC module for thermal damage or wiring burn\n"
+                "✓ Verify propeller blades and airframe structural integrity after hard landing\n"
+                "✓ Check battery pack casing, voltage balance, and BMS fault logs\n"
+                "✓ Run telemetry/RC link diagnostics and hover stability test before returning to Available"
+            )
+            inc_full_desc = (
+                f"[DISCONNECT / CRASH] Hardware component failure (Motor #2 / ESC overheat & thrust loss) — "
+                f"complete telemetry signal loss / drone crash at GPS ({incident_lat:.5f}, {incident_lng:.5f}) "
+                f"near {recovery_hub.name}.\n"
+                f"Last Telemetry: Altitude {last_alt}m, Speed {last_spd} m/s, Battery {last_bat_pct}% ({last_volt}V), "
+                f"Energy Consumed {last_energy} Wh.\n"
+                f"Weather (Open-Meteo): {weather_summary_txt}.\n"
+                f"Recovery Hub: {recovery_hub.name}.\n"
+                f"{checklist_block}"
+            )
             inc_res = await db.execute(
                 select(Incident).where(Incident.mission_id == str(mission_id)).limit(1)
             )
@@ -405,10 +513,7 @@ async def _trigger_disconnect_crash(
                     drone_id=str(mission.drone_id) if mission.drone_id else None,
                     reporter_id=mission.operator_id,
                     severity=IncidentSeverity.HIGH,
-                    description=(
-                        f"[DISCONNECT / CRASH] Complete telemetry signal loss / suspected drone crash at GPS "
-                        f"({incident_lat:.5f}, {incident_lng:.5f}). Field recovery assigned to {recovery_hub.name}."
-                    ),
+                    description=inc_full_desc,
                     status=IncidentStatus.OPEN,
                     reported_at=now_tz,
                     requires_technical_inspection=True,
@@ -421,20 +526,42 @@ async def _trigger_disconnect_crash(
                 source="Incident",
                 incident_id=inc.id,
                 mission_id=str(mission_id),
-                title=f"Signal lost — Potential drone crash at ({incident_lat:.5f}, {incident_lng:.5f})",
+                title=f"Motor/ESC failure & crash at ({incident_lat:.5f}, {incident_lng:.5f}) — Drone {mission.drone_id}",
                 description=(
                     f"Mission: {mission_id}\n"
                     f"Order: {mission.order_id}\n"
                     f"Drone: {mission.drone_id}\n"
-                    f"Incident Type: DISCONNECT_CRASH\n"
+                    f"Incident Type: DISCONNECT_CRASH (Motor/ESC Failure)\n"
                     f"Location: GPS ({incident_lat:.5f}, {incident_lng:.5f})\n"
+                    f"Last Telemetry: Alt {last_alt}m | Speed {last_spd} m/s | Battery {last_bat_pct}% ({last_volt}V)\n"
+                    f"Weather (Open-Meteo): {weather_summary_txt}\n"
                     f"Recovery Hub: {recovery_hub.name}\n"
-                    f"Details: Complete telemetry signal loss / suspected drone crash. Field recovery assigned."
+                    f"{checklist_block}"
                 ),
                 status="Pending",
                 created_at=now_naive,
             )
             db.add(alert)
+            db.add(ActivityLog(
+                user_id=None,
+                user_email="system@droneoptai.com",
+                role="SYSTEM",
+                action="INCIDENT_TRIGGERED",
+                resource_type="incident",
+                resource_id=str(inc.id),
+                description=inc_full_desc[:500],
+                status="warning",
+                details_json={
+                    "mission_id": str(mission_id),
+                    "order_id": mission.order_id,
+                    "drone_id": mission.drone_id,
+                    "gps": {"lat": incident_lat, "lng": incident_lng},
+                    "weather": crash_weather_eval,
+                    "recovery_hub_id": recovery_hub.id,
+                    "recovery_hub_name": recovery_hub.name,
+                },
+                created_at=now_tz,
+            ))
             await db.flush()
 
             # 5. Bắn Notification khẩn tới Operator, Admin, Technician tại Hub thu hồi và Customer
@@ -595,6 +722,153 @@ async def _trigger_incident(
             print(f"[SIMULATOR] Lỗi kích hoạt Failsafe RTH: {e}")
 
 
+def _next_step_and_sleep(
+    idx: int,
+    total_points: int,
+    armed_trigger_idx: Optional[int] = None,
+) -> tuple[int, float]:
+    """
+    Tính (next_idx, sleep_sec) theo `simulator_config.speed_multiplier` hiện tại (đọc động mỗi bước).
+    - Khi speed_multiplier > 1: tự động nhảy bước (stride = round(speed_multiplier)) thay vì ghi đủ 60 lần
+      tuần tự xuống Supabase, giúp x2/x8/x32 tăng tốc thực sự thay vì bị nghẽn bởi DB RTT.
+    - Luôn đảm bảo không nhảy qua `armed_trigger_idx` và luôn chạm điểm cuối `total_points - 1`.
+    """
+    base_interval = max(0.2, float(simulator_config.interval_sec or 1))
+    mult = max(0.1, float(simulator_config.speed_multiplier or 1.0))
+    if mult <= 1.0:
+        stride = 1
+        sleep_sec = base_interval / mult
+    else:
+        stride = max(1, int(round(mult)))
+        sleep_sec = max(0.05, base_interval / min(mult, 4.0))
+
+    if idx >= total_points - 1:
+        return total_points, sleep_sec
+
+    next_idx = min(total_points - 1, idx + stride)
+    if armed_trigger_idx is not None and idx < armed_trigger_idx < next_idx:
+        next_idx = armed_trigger_idx
+    return next_idx, sleep_sec
+
+
+async def _write_telemetry_step_single_query(
+    db: AsyncSession,
+    *,
+    mission_id: str,
+    require_flying: bool,
+    write_telemetry: bool,
+    lat: float,
+    lng: float,
+    altitude: float,
+    speed: float,
+    battery_volt: float,
+    new_charge_pct: int,
+    energy_wh: float,
+    wind_speed: float,
+    weather,
+    active_battery_id: Optional[str],
+    active_drone_id: Optional[str],
+) -> Optional[tuple[str, Optional[datetime]]]:
+    """
+    [PERF NOTE] Gộp toàn bộ (SELECT mission + INSERT telemetry_logs + UPDATE batteries + UPDATE drones)
+    vào 1 câu SQL CTE duy nhất thay vì 5–6 round-trip tuần tự qua Supabase Pooler.
+    Trả về (status_str, arrived_at) nếu mission tồn tại, ngược lại None.
+    """
+    now_naive = get_vn_naive_datetime()
+    guard = "m.status_str = 'Flying'" if require_flying else "TRUE"
+    ins_cte = (
+        f"""
+        ins AS (
+            INSERT INTO telemetry_logs (
+                mission_id, timestamp, latitude, longitude, altitude, speed,
+                battery_voltage, battery_pct, energy_consumed_wh, wind_speed,
+                weather_temperature, weather_apparent_temp, weather_dew_point,
+                weather_humidity, weather_wind_speed, weather_wind_gust,
+                weather_wind_direction, weather_precipitation, weather_pressure,
+                weather_cloud_cover
+            )
+            SELECT
+                :mid, :ts, :lat, :lng, :alt, :spd,
+                :bvolt, :bpct, :ewh, :wspd,
+                :w_temp, :w_app, :w_dew,
+                :w_hum, :w_wspd, :w_gust,
+                :w_dir, :w_prec, :w_pres,
+                :w_cloud
+            FROM m WHERE {guard}
+            RETURNING id
+        ),
+        """
+        if write_telemetry
+        else ""
+    )
+    bat_cte = (
+        f"""
+        u_bat AS (
+            UPDATE batteries SET charge_level_pct = :bpct_int
+            WHERE id = :bid AND EXISTS (SELECT 1 FROM m WHERE {guard})
+            RETURNING id
+        ),
+        """
+        if active_battery_id
+        else ""
+    )
+    drn_cte = (
+        f"""
+        u_drn AS (
+            UPDATE drones SET battery_level_pct = :bpct_int
+            WHERE id = :did AND EXISTS (SELECT 1 FROM m WHERE {guard})
+            RETURNING id
+        ),
+        """
+        if active_drone_id
+        else ""
+    )
+    sql = text(
+        f"""
+        WITH m AS (
+            SELECT status::text AS status_str, arrived_at
+            FROM missions
+            WHERE id = :mid
+        ),
+        {ins_cte}
+        {bat_cte}
+        {drn_cte}
+        _done AS (SELECT 1)
+        SELECT status_str, arrived_at FROM m
+        """
+    )
+    params = {
+        "mid": mission_id,
+        "ts": now_naive,
+        "lat": lat,
+        "lng": lng,
+        "alt": altitude,
+        "spd": speed,
+        "bvolt": battery_volt,
+        "bpct": float(new_charge_pct),
+        "bpct_int": int(new_charge_pct),
+        "ewh": energy_wh,
+        "wspd": wind_speed,
+        "w_temp": weather.temperature if weather else None,
+        "w_app": weather.apparent_temperature if weather else None,
+        "w_dew": weather.dew_point if weather else None,
+        "w_hum": weather.humidity if weather else None,
+        "w_wspd": weather.wind_speed if weather else None,
+        "w_gust": weather.wind_gust if weather else None,
+        "w_dir": weather.wind_direction if weather else None,
+        "w_prec": weather.precipitation if weather else None,
+        "w_pres": weather.pressure if weather else None,
+        "w_cloud": weather.cloud_cover if weather else None,
+        "bid": active_battery_id,
+        "did": active_drone_id,
+    }
+    row = (await db.execute(sql, params)).first()
+    await db.commit()
+    if not row:
+        return None
+    return (row[0], row[1])
+
+
 async def _fly_incident_return(
     mission_id: str,
     waypoints: list[tuple[float, float]],
@@ -609,65 +883,49 @@ async def _fly_incident_return(
     battery_volt = 22.0
     energy_wh = 0.0
 
-    for idx, (lat, lng) in enumerate(waypoints):
-        # ── Áp dụng speed_multiplier vào interval_sec ──
-        effective_interval = simulator_config.interval_sec / simulator_config.speed_multiplier
-        await asyncio.sleep(effective_interval)
+    idx = 0
+    while idx < total:
+        lat, lng = waypoints[idx]
+        next_idx, sleep_sec = _next_step_and_sleep(idx, total)
+        await asyncio.sleep(sleep_sec)
 
         altitude    = round(40.0 + math.sin(idx * 0.3) * 3, 2)
         speed       = round(8.0 + math.cos(idx * 0.2) * 2, 2)
-        battery_volt = round(max(18.0, battery_volt - 0.05), 2)
-        energy_wh   = round(energy_wh + 0.9, 3)
-        step_wh = 0.9
-        pct_consumed = (step_wh / battery_capacity_wh) * 100.0
-        current_battery_pct = max(1.0, current_battery_pct - pct_consumed)
-        new_charge_pct = int(round(current_battery_pct))
+        battery_volt = round(max(18.0, 22.0 - 0.05 * (idx + 1)), 2)
+        energy_wh   = round(0.9 * (idx + 1), 3)
+        pct_consumed = (energy_wh / battery_capacity_wh) * 100.0
+        step_battery_pct = max(1.0, current_battery_pct - pct_consumed)
+        new_charge_pct = int(round(step_battery_pct))
 
         from app.shared.weather import fetch_weather
         weather = await fetch_weather(lat, lng)
 
         async with AsyncSessionLocal() as db:
             try:
-                m_exists = (await db.execute(select(Mission.id).where(Mission.id == mission_id))).scalar_one_or_none()
-                if not m_exists:
-                    return
-
-                log = TelemetryLog(
+                m_row = await _write_telemetry_step_single_query(
+                    db,
                     mission_id=mission_id,
-                    timestamp=get_vn_naive_datetime(),
-                    latitude=lat, longitude=lng,
-                    altitude=altitude, speed=speed,
-                    battery_voltage=battery_volt,
-                    battery_pct=float(new_charge_pct),
-                    energy_consumed_wh=energy_wh,
+                    require_flying=False,
+                    write_telemetry=True,
+                    lat=lat,
+                    lng=lng,
+                    altitude=altitude,
+                    speed=speed,
+                    battery_volt=battery_volt,
+                    new_charge_pct=new_charge_pct,
+                    energy_wh=energy_wh,
                     wind_speed=round(3.0 + random.uniform(-0.5, 0.5), 2),
-                    weather_temperature=weather.temperature if weather else None,
-                    weather_apparent_temp=weather.apparent_temperature if weather else None,
-                    weather_dew_point=weather.dew_point if weather else None,
-                    weather_humidity=weather.humidity if weather else None,
-                    weather_wind_speed=weather.wind_speed if weather else None,
-                    weather_wind_gust=weather.wind_gust if weather else None,
-                    weather_wind_direction=weather.wind_direction if weather else None,
-                    weather_precipitation=weather.precipitation if weather else None,
-                    weather_pressure=weather.pressure if weather else None,
-                    weather_cloud_cover=weather.cloud_cover if weather else None,
+                    weather=weather,
+                    active_battery_id=active_battery_id,
+                    active_drone_id=active_drone_id,
                 )
-                db.add(log)
-
-                if active_battery_id:
-                    await db.execute(
-                        update(Battery).where(Battery.id == active_battery_id).values(charge_level_pct=new_charge_pct)
-                    )
-                if active_drone_id:
-                    await db.execute(
-                        update(Drone).where(Drone.id == active_drone_id).values(battery_level_pct=new_charge_pct)
-                    )
-
-                await db.commit()
+                if not m_row:
+                    return
                 print(f"[SIMULATOR] [RETURN {idx+1:>3}/{total}] ({lat:.6f}, {lng:.6f}) pin={new_charge_pct}%")
-
             except Exception as e:
                 print(f"[SIMULATOR] Lỗi telemetry lúc quay về: {e}")
+
+        idx = next_idx
 
     # Đáp về from_hub
     async with AsyncSessionLocal() as db:
@@ -841,6 +1099,8 @@ async def simulate_mission_flight(mission_id: str) -> None:
     energy_wh     = 0.0
     total_points  = len(waypoints)
     armed_incident = simulator_config.consume_next_flight_incident(total_points)
+    if not armed_incident:
+        armed_incident = await _consume_db_first_flight_incident_flag(mission_id, total_points)
     if armed_incident:
         print(
             f"[SIMULATOR] Chuyến bay {mission_id} nhận kịch bản incident 1 lần: "
@@ -850,26 +1110,27 @@ async def simulate_mission_flight(mission_id: str) -> None:
     signal_loss_triggered = False  # ← Track nếu SIGNAL_LOSS đã trigger
     signal_loss_duration = 0  # ← Đếm bao nhiêu điểm mất kết nối (tạm thời)
 
-    for idx, (lat, lng) in enumerate(waypoints):
-        # ── Áp dụng speed_multiplier vào interval_sec ──
-        effective_interval = simulator_config.interval_sec / simulator_config.speed_multiplier
-        await asyncio.sleep(effective_interval)
+    idx = 0
+    while idx < total_points:
+        lat, lng = waypoints[idx]
+        # ── Áp dụng speed_multiplier động: giảm sleep + nhảy bước (stride) để tăng tốc thật ──
+        armed_idx = armed_incident["trigger_idx"] if (armed_incident and not signal_loss_triggered) else None
+        next_idx, sleep_sec = _next_step_and_sleep(idx, total_points, armed_trigger_idx=armed_idx)
+        await asyncio.sleep(sleep_sec)
 
-        # ── Hạ cánh mượt mà: Bắt đầu giảm từ 50% quãng đường ──
+        # ── Hạ cánh mượt mà: Bắt đầu giảm từ 80% quãng đường ──
         progress = (idx + 1) / total_points  # 0.0 → 1.0
-        is_descending = progress >= 0.5  # Bắt đầu giảm từ 50% (mượt mà hơn)
+        is_descending = progress >= 0.8
         
         if is_descending:
-            # descent_factor: từ 0.0 (50%) → 1.0 (100%)
-            descent_factor = (progress - 0.5) / 0.5  
-            speed = round(CRUISE_SPEED * (1 - descent_factor), 2)  # Giảm từ cruise → 0 m/s
-            altitude = round(CRUISE_ALTITUDE * (1 - descent_factor), 2)  # Giảm → 0m
+            descent_factor = (progress - 0.8) / 0.2
+            speed = round(CRUISE_SPEED * (1 - descent_factor), 2)
+            altitude = round(CRUISE_ALTITUDE * (1 - descent_factor), 2)
         else:
-            # Giả lập sensor values chuẩn hóa lúc bay bình thường
             altitude     = round(CRUISE_ALTITUDE + math.sin(idx * 0.3) * 3, 2)
             speed        = round(CRUISE_SPEED + math.cos(idx * 0.2) * 1.5, 2)
         
-        battery_volt = round(max(18.0, battery_volt - 0.04), 2)
+        battery_volt = round(max(18.0, 24.0 - 0.04 * (idx + 1)), 2)
         wind_speed   = round(2.0 + math.sin(idx * 0.5) * 1.5 + random.uniform(-0.2, 0.2), 2)
 
         # Khấu trừ mức pin theo năng lượng tiêu hao kế hoạch
@@ -904,13 +1165,12 @@ async def simulate_mission_flight(mission_id: str) -> None:
                     )
                     return
                 if trigger_type == "SIGNAL_LOSS":
-                    # Mất kết nối tạm thời: drone vẫn bay tiếp nhưng telemetry dừng khoảng 20 điểm (~60s)
                     print(f"[SIMULATOR] Mất tín hiệu cho Mission {mission_id} — drone vẫn bay tiếp, telemetry dừng (duration: ~20 points).")
                     signal_loss_triggered = True
-                    signal_loss_duration = 20  # ← Mất 20 điểm rồi có lại
-                    continue  # ← Bỏ qua ghi telemetry lần này, bay tiếp
+                    signal_loss_duration = 20
+                    idx = next_idx
+                    continue
 
-                # FAILSAFE_RTH hoặc incident khác
                 async with AsyncSessionLocal() as db_hub:
                     target_hub = await _find_nearest_active_hub(db_hub, lat, lng, fallback_hub=from_hub)
 
@@ -922,7 +1182,6 @@ async def simulate_mission_flight(mission_id: str) -> None:
                     from_hub=from_hub,
                     severity=trigger_sev,
                 )
-                # Bay tới Hub gần nhất (target_hub)
                 target_lat = target_hub.latitude if target_hub.latitude is not None else from_hub.latitude
                 target_lng = target_hub.longitude if target_hub.longitude is not None else from_hub.longitude
                 return_waypoints = _interpolate(lat, lng, target_lat, target_lng, max(5, (total_points - idx)))
@@ -935,103 +1194,68 @@ async def simulate_mission_flight(mission_id: str) -> None:
             from app.shared.weather import fetch_weather
             weather = await fetch_weather(lat, lng)
 
+        write_tel = True
+        if signal_loss_triggered:
+            signal_loss_duration -= max(1, next_idx - idx)
+            if signal_loss_duration > 0:
+                write_tel = False
+            else:
+                signal_loss_triggered = False
+                print(
+                    f"[SIMULATOR] [{idx+1:>3}/{total_points}] "
+                    f"({lat:.6f}, {lng:.6f}) "
+                    f"SIGNAL RECOVERED — telemetry restored, pin={new_charge_pct}%"
+                )
+
         async with AsyncSessionLocal() as db:
             try:
-                # Kiểm tra mission còn FLYING không (chỉ lấy 2 cột cần thiết)
-                m_row = (await db.execute(
-                    select(Mission.status, Mission.arrived_at).where(Mission.id == mission_id)
-                )).first()
+                m_row = await _write_telemetry_step_single_query(
+                    db,
+                    mission_id=mission_id,
+                    require_flying=True,
+                    write_telemetry=write_tel,
+                    lat=lat,
+                    lng=lng,
+                    altitude=altitude,
+                    speed=speed,
+                    battery_volt=battery_volt,
+                    new_charge_pct=new_charge_pct,
+                    energy_wh=energy_wh,
+                    wind_speed=wind_speed,
+                    weather=weather,
+                    active_battery_id=active_battery_id,
+                    active_drone_id=active_drone_id,
+                )
                 if not m_row:
                     return
                 m_status, m_arrived_at = m_row
-                if m_status == MissionStatus.INCIDENT_RETURN and m_arrived_at is None:
+                if m_status == MissionStatus.INCIDENT_RETURN.value and m_arrived_at is None:
                     print(f"[SIMULATOR] Mission {mission_id} đã kích hoạt INCIDENT_RETURN, bắt đầu bay quay về trạm.")
                     return_waypoints = _interpolate(lat, lng, from_hub.latitude, from_hub.longitude, max(5, (total_points - idx)))
                     await _fly_incident_return(mission_id, return_waypoints, from_hub, active_battery_id, active_drone_id, battery_capacity_wh, current_battery_pct)
                     return
-                elif m_status != MissionStatus.FLYING:
+                elif m_status != MissionStatus.FLYING.value:
                     print(f"[SIMULATOR] Mission {mission_id} không còn FLYING ({m_status}), dừng simulator.")
                     return
 
-                # ── Nếu SIGNAL_LOSS đã trigger, chỉ update pin, không ghi telemetry ──
-                if signal_loss_triggered:
-                    signal_loss_duration -= 1  # ← Đếm ngược
-                    
-                    # Direct UPDATE không cần db.get() trước
-                    if active_battery_id:
-                        await db.execute(
-                            update(Battery).where(Battery.id == active_battery_id).values(charge_level_pct=new_charge_pct)
-                        )
-                    if active_drone_id:
-                        await db.execute(
-                            update(Drone).where(Drone.id == active_drone_id).values(battery_level_pct=new_charge_pct)
-                        )
-                    await db.commit()
-                    
-                    if signal_loss_duration > 0:
-                        # Vẫn mất kết nối
-                        print(
-                            f"[SIMULATOR] [{idx+1:>3}/{total_points}] "
-                            f"({lat:.6f}, {lng:.6f}) "
-                            f"[NO TELEMETRY] pin={new_charge_pct}% (signal lost, {signal_loss_duration} points remaining)"
-                        )
-                        continue
-                    else:
-                        # Kết nối phục hồi
-                        print(
-                            f"[SIMULATOR] [{idx+1:>3}/{total_points}] "
-                            f"({lat:.6f}, {lng:.6f}) "
-                            f"SIGNAL RECOVERED — telemetry restored, pin={new_charge_pct}%"
-                        )
-                        signal_loss_triggered = False  # ← Kết nối bình thường lại
-                        # Tiếp tục ghi telemetry bình thường ở dưới
-
-                # Ghi nhận Telemetry Log (chỉ khi không mất kết nối)
-                log = TelemetryLog(
-                    mission_id=mission_id,
-                    timestamp=get_vn_naive_datetime(),
-                    latitude=lat,
-                    longitude=lng,
-                    altitude=altitude,
-                    speed=speed,
-                    battery_voltage=battery_volt,
-                    battery_pct=float(new_charge_pct),
-                    energy_consumed_wh=energy_wh,
-                    wind_speed=wind_speed,
-                    weather_temperature=weather.temperature if weather else None,
-                    weather_apparent_temp=weather.apparent_temperature if weather else None,
-                    weather_dew_point=weather.dew_point if weather else None,
-                    weather_humidity=weather.humidity if weather else None,
-                    weather_wind_speed=weather.wind_speed if weather else None,
-                    weather_wind_gust=weather.wind_gust if weather else None,
-                    weather_wind_direction=weather.wind_direction if weather else None,
-                    weather_precipitation=weather.precipitation if weather else None,
-                    weather_pressure=weather.pressure if weather else None,
-                    weather_cloud_cover=weather.cloud_cover if weather else None,
-                )
-                db.add(log)
-
-                # Cập nhật mức pin trực tiếp vào Database (direct UPDATE bỏ 2 SELECT thừa)
-                if active_battery_id:
-                    await db.execute(
-                        update(Battery).where(Battery.id == active_battery_id).values(charge_level_pct=new_charge_pct)
+                if not write_tel:
+                    print(
+                        f"[SIMULATOR] [{idx+1:>3}/{total_points}] "
+                        f"({lat:.6f}, {lng:.6f}) "
+                        f"[NO TELEMETRY] pin={new_charge_pct}% (signal lost, {signal_loss_duration} points remaining)"
                     )
-                if active_drone_id:
-                    await db.execute(
-                        update(Drone).where(Drone.id == active_drone_id).values(battery_level_pct=new_charge_pct)
+                else:
+                    print(
+                        f"[SIMULATOR] [{idx+1:>3}/{total_points}] "
+                        f"({lat:.6f}, {lng:.6f}) "
+                        f"alt={altitude}m spd={speed}m/s bat={battery_volt}V pin={new_charge_pct}% "
+                        f"(x{simulator_config.speed_multiplier:g})"
+                        + (f" [FAILSAFE WARNING: PIN THẤP < 20%]" if new_charge_pct < SAFE_BATTERY_RESERVE_PCT else "")
                     )
-
-                await db.commit()
-
-                print(
-                    f"[SIMULATOR] [{idx+1:>3}/{total_points}] "
-                    f"({lat:.6f}, {lng:.6f}) "
-                    f"alt={altitude}m spd={speed}m/s bat={battery_volt}V pin={new_charge_pct}%"
-                    + (f" [FAILSAFE WARNING: PIN THẤP < 20%]" if new_charge_pct < SAFE_BATTERY_RESERVE_PCT else "")
-                )
-
             except Exception as e:
                 print(f"[SIMULATOR] Lỗi insert TelemetryLog & cập nhật pin điểm {idx+1}: {e}")
+
+        idx = next_idx
 
     # ── Hết điểm → drone đã đến hub đích của leg này ─────────────────────────
     async with AsyncSessionLocal() as db:

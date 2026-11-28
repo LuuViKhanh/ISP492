@@ -424,7 +424,17 @@ async def _build_order_response_detail(
     order_resp.priority_score = prio_score
     order_resp.priority_level = prio_level
     order_resp.created_at = order.created_at
-        
+
+    order_resp.refund_amount = order.refund_amount
+    order_resp.refund_reason = order.refund_reason
+    order_resp.refund_status = (
+        order.refund_status.value if hasattr(order.refund_status, "value") else order.refund_status
+    ) if order.refund_status else None
+    from app.modules.missions.compensation_service import extract_mission_override_and_compensation
+    comp_meta = extract_mission_override_and_compensation(latest_mission, order)
+    if comp_meta.get("route_override") or comp_meta.get("late_delivery_compensation") or order.refund_amount:
+        order_resp.late_delivery_info = comp_meta
+
     return order_resp
 
 

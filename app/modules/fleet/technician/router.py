@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timezone, timedelta
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text, cast, String, and_, or_, func
 
@@ -29,6 +29,7 @@ from app.modules.fleet.technician.schemas import (
 )
 from app.modules.missions.models import Mission, MissionStatus, HandlingStatus, Incident, IncidentStatus, Order, MissionLeg, MissionLegStatus
 from app.modules.missions.schemas import OrderProofImageCreate, build_order_proof_image_entry
+from app.shared.image_storage import normalize_and_store_image
 from app.core.config import settings
 
 router = APIRouter(prefix="/technician/fleet", tags=["Fleet"])
@@ -310,11 +311,14 @@ async def get_incoming_drones(
 
 @router.get("/history", summary="Lịch sử các chuyến bay đã hoàn thành tiếp nhận tại Hub")
 async def get_transit_history(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
     from sqlalchemy import cast, String, or_, and_
     from app.modules.missions.models import MissionLeg
+    from app.modules.missions.bundle_service import get_all_hubs_cached
     import traceback
     try:
         query = (
@@ -335,12 +339,15 @@ async def get_transit_history(
                 Mission.battery_charge_at_arrival.label("battery_percent"),
                 Mission.arrival_confirmed_at,
                 Order.destination_received_at,
-                Hub.name.label("origin_hub_name"),  # ← Thêm tên hub gốc
+                Hub.name.label("origin_hub_name"),
+                Order.proof_images_json.label("proof_images_json"),
+                Drone.image_url.label("drone_image_url"),
+                Battery.image_url.label("battery_image_url"),
             )
             .outerjoin(Drone, Mission.drone_id == Drone.id)
             .outerjoin(Battery, Mission.battery_id == Battery.id)
             .outerjoin(Order, Mission.order_id == Order.id)
-            .outerjoin(Hub, Mission.origin_hub_id == Hub.id)  # ← Join Hub gốc
+            .outerjoin(Hub, Mission.origin_hub_id == Hub.id)
             .where(
                 or_(
                     Mission.status.in_([
@@ -360,21 +367,23 @@ async def get_transit_history(
             leg_mission_ids_subq = (
                 select(MissionLeg.mission_id)
                 .where(
-                    MissionLeg.to_hub_id == tech_hub_id  # Chỉ hub tiếp nhận, không phải gửi đi
+                    MissionLeg.to_hub_id == tech_hub_id
                 )
             )
             query = query.where(
                 or_(
-                    # Show mission if technician at this hub confirmed arrival
                     Mission.arrival_confirmed_by == str(user.id),
-                    # OR Multi-leg missions: show at any hub involved
                     Mission.id.in_(leg_mission_ids_subq),
                 )
             )
 
-        query = query.order_by(Mission.arrived_at.desc().nullslast(), Mission.id.desc())
-        result = await db.execute(query)
-        rows = result.all()
+        query = (
+            query.order_by(Mission.arrived_at.desc().nullslast(), Mission.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        rows = (await db.execute(query)).all()
+        hub_name_map = {h.id: h.name for h in await get_all_hubs_cached(db)}
 
         response = []
         for row in rows:
@@ -396,12 +405,12 @@ async def get_transit_history(
                 arrival_confirmed_at,
                 destination_received_at,
                 origin_hub_name,
+                proof_images,
+                drone_image_url,
+                battery_image_url,
             ) = row
-            
-            # Lấy tên hub đích từ DB
-            dest_hub = await db.get(Hub, dest_hub_id) if dest_hub_id else None
-            dest_hub_name = dest_hub.name if dest_hub else None
-            
+
+            dest_hub_name = hub_name_map.get(dest_hub_id) if dest_hub_id else None
             status_val = m_status.value if hasattr(m_status, "value") else m_status
             handling_val = m_handling.value if hasattr(m_handling, "value") else m_handling
             response.append({
@@ -410,9 +419,9 @@ async def get_transit_history(
                 "mission_code": str(m_id),
                 "order_id": order_id,
                 "origin_hub_id": origin_hub_id,
-                "origin_hub_name": origin_hub_name,  # ← Thêm tên hub gốc
+                "origin_hub_name": origin_hub_name,
                 "destination_hub_id": dest_hub_id,
-                "destination_hub_name": dest_hub_name,  # ← Thêm tên hub đích
+                "destination_hub_name": dest_hub_name,
                 "arrived_at": arrived_at.isoformat() if arrived_at else None,
                 "end_time": end_time.isoformat() if end_time else None,
                 "drone_id": drone_id,
@@ -426,6 +435,9 @@ async def get_transit_history(
                 "handling_status": handling_val if m_handling else None,
                 "arrival_confirmed_at": arrival_confirmed_at.isoformat() if arrival_confirmed_at else None,
                 "destination_received_at": destination_received_at.isoformat() if destination_received_at else None,
+                "proof_images": proof_images,
+                "drone_image_url": drone_image_url,
+                "battery_image_url": battery_image_url,
             })
         return response
     except Exception as e:
@@ -666,6 +678,7 @@ async def confirm_arrival(
 
     # ── 5. Order: DELIVERED_TO_HUB (nếu bình thường hoặc sự cố đáp đúng Hub Đích) hoặc AT_HUB + replan (nếu đáp Hub khác) ──
     confirm_msg = "Arrival confirmed. Mission completed, drone returned to Hub Fleet, and battery moved to Battery Management."
+    late_comp_result = None
     if is_incident_flight and receiving_hub_id:
         mission.destination_hub_id = receiving_hub_id
 
@@ -676,6 +689,7 @@ async def confirm_arrival(
             )
             order_obj = order_result.scalar_one_or_none()
             if order_obj:
+                hub = None
                 hub_name = None
                 if receiving_hub_id:
                     hub = await db.get(HubModel, receiving_hub_id)
@@ -825,6 +839,51 @@ async def confirm_arrival(
                     order_obj.status = OrderStatus.DELIVERED_TO_HUB
                     order_obj.updated_at = now
 
+                    # ── Mục 6: Kiểm tra giao trễ hạn & tính đền bù khi chọn Route khác EXPRESS ──
+                    try:
+                        from app.modules.missions.compensation_service import (
+                            apply_late_delivery_compensation_if_applicable,
+                            extract_mission_override_and_compensation,
+                        )
+                        orig_hub_comp = (
+                            await db.get(HubModel, order_obj.origin_hub_id)
+                            if order_obj.origin_hub_id else None
+                        )
+                        actual_arr_ts = mission.arrived_at or now
+                        late_comp_result = await apply_late_delivery_compensation_if_applicable(
+                            db=db,
+                            mission=mission,
+                            order_obj=order_obj,
+                            actual_arrival_at=actual_arr_ts,
+                            origin_hub=orig_hub_comp,
+                            dest_hub=hub,
+                        )
+                        # Xử lý thêm cho các đơn gộp EXPRESS khác (nếu có) trong route_override
+                        ro_meta = extract_mission_override_and_compensation(mission).get("route_override") or {}
+                        extra_exp_ids = [
+                            str(eid) for eid in (ro_meta.get("affected_express_order_ids") or [])
+                            if str(eid) != str(order_obj.id)
+                        ]
+                        if extra_exp_ids:
+                            extra_orders = list(
+                                (await db.execute(select(OrderModel).where(OrderModel.id.in_(extra_exp_ids)))).scalars().all()
+                            )
+                            for eo in extra_orders:
+                                eo_orig = (
+                                    await db.get(HubModel, eo.origin_hub_id)
+                                    if eo.origin_hub_id else orig_hub_comp
+                                )
+                                await apply_late_delivery_compensation_if_applicable(
+                                    db=db,
+                                    mission=mission,
+                                    order_obj=eo,
+                                    actual_arrival_at=actual_arr_ts,
+                                    origin_hub=eo_orig,
+                                    dest_hub=hub,
+                                )
+                    except Exception as _comp_err:
+                        print(f"[ARRIVAL] Failed to evaluate late delivery compensation: {_comp_err}")
+
                     if order_obj.receiver_email:
                         pending_bg_emails.append((
                             send_hub_arrival_email,
@@ -924,10 +983,8 @@ async def confirm_arrival(
                 recorded_at=now,
             )
             
-            # Thêm vào mảng proof_images_json của order
-            if not order_obj.proof_images_json:
-                order_obj.proof_images_json = []
-            order_obj.proof_images_json.append(proof_entry)
+            # Thêm vào mảng proof_images_json của order (re-assign để SQLAlchemy luôn đánh dấu dirty)
+            order_obj.proof_images_json = list(order_obj.proof_images_json or []) + [proof_entry]
             
             # Ghi log vào activity_logs
             try:
@@ -974,6 +1031,7 @@ async def confirm_arrival(
         "hub_id": receiving_hub_id,
         "battery_released": released_battery_id,
         "legs_completed": len(legs),
+        "late_delivery_compensation": late_comp_result,
     }
 
 
@@ -1586,7 +1644,11 @@ async def get_work_order_logs(
     if not wo:
         raise HTTPException(status_code=404, detail="Work order not found")
     logs = list(reversed(wo.status_logs_json or []))
-    return logs
+    # Thêm diagnosis vào logs
+    return {
+        "diagnosis": wo.diagnosis,
+        "status_logs": logs
+    }
 
 
 @router.get("/work-orders/{work_order_id}/proof-images", response_model=dict, summary="Lịch ảnh minh chứng công việc")
@@ -1612,6 +1674,7 @@ async def get_work_order_proof_images(
         "work_order_id": wo.id,
         "drone_id": wo.drone_id,
         "status": wo.status.value if wo.status else None,
+        "diagnosis": wo.diagnosis,  # ← Thêm diagnosis
         "proof_images": list(reversed(wo.proof_images_json or [])),
         "parts_replaced_images": list(reversed(wo.parts_replaced_proof_json or [])),
         "inspection_items": wo.inspection_items_json or [],
@@ -2093,26 +2156,41 @@ async def update_inspection(
         wo.resulting_drone_status = body.resulting_drone_status
     now = get_vn_naive_datetime()
     
-    # ── Log proof images to work_order fields ──────────────────────────
-    if body.proof_image_url:
-        wo.proof_image_url = body.proof_image_url
-    
-    if body.parts_replaced_proof_url:
-        wo.parts_replaced_proof_url = body.parts_replaced_proof_url
-    
+    # ── Log proof images to work_order fields (chuyển Base64 -> file tĩnh + URL ngắn 1 lần) ──
+    normalized_wo_proof_url = (
+        normalize_and_store_image(body.proof_image_url, category="work_orders")
+        if body.proof_image_url
+        else None
+    )
+    normalized_parts_proof_url = (
+        normalize_and_store_image(body.parts_replaced_proof_url, category="work_orders")
+        if body.parts_replaced_proof_url
+        else None
+    )
+    if normalized_wo_proof_url:
+        wo.proof_image_url = normalized_wo_proof_url
+
+    if normalized_parts_proof_url:
+        wo.parts_replaced_proof_url = normalized_parts_proof_url
+
     # ── Update inspection_items_json if provided ──────────────────────────────
+    # Priority: 1. Explicit inspection_items, 2. Auto-generate from defect_type
     if body.inspection_items:
         wo.inspection_items_json = body.inspection_items
-    
+    elif body.defect_type:
+        # Auto-generate inspection checklist from defect type
+        from app.modules.fleet.technician.schemas import build_inspection_items_from_defect_type
+        wo.inspection_items_json = build_inspection_items_from_defect_type(body.defect_type)
+
     if body.status == WorkOrderStatus.COMPLETED:
         wo.resolved_at = now
-        
+
         # Clear work_order_id từ battery (pin không còn dùng)
         if wo.battery_id:
             battery = await db.get(Battery, wo.battery_id)
             if battery:
                 battery.work_order_id = None
-        
+
         # Update drone status based on resulting_drone_status (technician chọn)
         if wo.drone_id and body.resulting_drone_status:
             drone = await db.get(Drone, wo.drone_id)
@@ -2120,15 +2198,15 @@ async def update_inspection(
                 try:
                     old_drone_status = drone.status
                     drone.status = DroneStatus(body.resulting_drone_status)
-                    # Update drone.image_url with proof image
-                    if body.proof_image_url:
-                        drone.image_url = body.proof_image_url
+                    # Update drone.image_url with short proof URL
+                    if normalized_wo_proof_url:
+                        drone.image_url = normalized_wo_proof_url
                     print(f"[DEBUG] Drone {wo.drone_id}: {old_drone_status} → {drone.status}")
                 except ValueError as e:
                     print(f"[ERROR] Invalid resulting_drone_status '{body.resulting_drone_status}': {e}")
         else:
             print(f"[DEBUG] Skipped drone update: wo.drone_id={wo.drone_id}, resulting_drone_status={body.resulting_drone_status}")
-        
+
         # ── Tự động acknowledge maintenance alert liên quan ──
         # Tìm alert gắn với work order này (nếu có) và chuyển sang Acknowledged
         if wo.alert_id:
@@ -2138,7 +2216,7 @@ async def update_inspection(
                 alert.acknowledged_by = user.id
                 alert.acknowledged_at = now
                 print(f"[MAINTENANCE] Alert #{alert.id} acknowledged by technician {user.id}")
-        
+
         # ── Log to activity_logs with resource_type=drone ──────────────────────
         try:
             from app.modules.system.models import ActivityLog
@@ -2153,8 +2231,9 @@ async def update_inspection(
                         "action_taken": body.action_taken,
                         "diagnosis": body.diagnosis,
                         "resulting_drone_status": body.resulting_drone_status,
-                        "proof_image_url": body.proof_image_url,
-                        "parts_replaced_proof_url": body.parts_replaced_proof_url,
+                        "defect_type": body.defect_type,
+                        "proof_image_url": normalized_wo_proof_url,
+                        "parts_replaced_proof_url": normalized_parts_proof_url,
                         "inspection_items": body.inspection_items,
                         "timestamp": now.isoformat() if hasattr(now, "isoformat") else str(now),
                     },
@@ -2639,10 +2718,11 @@ async def swap_battery_at_relay(
                 created_at=now,
             ))
             
-            # Update battery image URLs if provided
+            # Update battery & drone image URLs if provided (chuyển Base64 -> URL ngắn 1 lần)
             if body and body.proof_image_url:
-                new_battery.image_url = body.proof_image_url
-                drone.image_url = body.proof_image_url
+                stored_swap_url = normalize_and_store_image(body.proof_image_url, category="fleet")
+                new_battery.image_url = stored_swap_url
+                drone.image_url = stored_swap_url
                 
         except Exception as e:
             print(f"[ACTIVITY LOG ERROR] Failed to log battery swap: {e}")
@@ -2879,10 +2959,8 @@ async def dispatch_drone(
                 recorded_at=now,
             )
             
-            # Thêm vào mảng proof_images_json của order
-            if not order_obj.proof_images_json:
-                order_obj.proof_images_json = []
-            order_obj.proof_images_json.append(proof_entry)
+            # Thêm vào mảng proof_images_json của order (re-assign để SQLAlchemy luôn đánh dấu dirty)
+            order_obj.proof_images_json = list(order_obj.proof_images_json or []) + [proof_entry]
             
             # Ghi log vào activity_logs
             try:
@@ -3415,26 +3493,32 @@ async def fulfill_parts_request(
 
 @router.get("/outbound-history", summary="Lịch sử gửi hàng đi từ Hub")
 async def get_outbound_history(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db),
 ):
     """
     Lịch sử gửi hàng đi từ hub của technician.
-    
+
     Hiển thị:
     - Khi khách hàng gửi hàng tại hub (order.origin_received_at)
     - Khi drone xuất phát (mission.start_time)
     - Status hiện tại chuyến bay
-    
+
     Sorted by order.origin_received_at descending (gửi mới nhất trước)
     """
     from sqlalchemy import cast, String
-    
+    from app.modules.missions.bundle_service import get_all_hubs_cached
+
     try:
         tech_hub_id = None
         if user.hub_id and str(user.hub_id).isdigit():
             tech_hub_id = int(user.hub_id)
-        
+
+        if tech_hub_id is None:
+            return []
+
         query = (
             select(
                 Mission.id,
@@ -3443,33 +3527,27 @@ async def get_outbound_history(
                 Mission.destination_hub_id,
                 Mission.start_time,
                 cast(Mission.status, String).label("status"),
-                Order.origin_received_at,  # Lúc khách gửi hàng tại hub
+                Order.origin_received_at,
                 Order.receiver_name,
                 Drone.id.label("drone_id"),
                 Drone.name.label("drone_code"),
                 Battery.id.label("battery_id"),
                 Battery.serial_number.label("battery_code"),
-                Hub.name.label("origin_hub_name"),  # ← Thêm tên hub gốc
+                Hub.name.label("origin_hub_name"),
+                Order.proof_images_json.label("proof_images_json"),
+                Drone.image_url.label("drone_image_url"),
             )
             .outerjoin(Drone, Mission.drone_id == Drone.id)
             .outerjoin(Battery, Mission.battery_id == Battery.id)
             .outerjoin(Order, Mission.order_id == Order.id)
-            .outerjoin(Hub, Mission.origin_hub_id == Hub.id)  # ← Join Hub
+            .outerjoin(Hub, Mission.origin_hub_id == Hub.id)
+            .where(Mission.origin_hub_id == tech_hub_id)
+            .order_by(Order.origin_received_at.desc().nullslast(), Mission.id.desc())
+            .limit(limit)
+            .offset(offset)
         )
-        
-        # Filter: chỉ chuyến bay từ hub của technician
-        if tech_hub_id is not None:
-            query = query.where(Mission.origin_hub_id == tech_hub_id)
-        else:
-            return []
-        
-        # Order by order.origin_received_at descending (khách gửi mới nhất trước)
-        query = query.order_by(Order.origin_received_at.desc().nullslast(), Mission.id.desc())
-        
-        result = await db.execute(query)
-        rows = result.all()
 
-        from app.modules.missions.bundle_service import get_all_hubs_cached
+        rows = (await db.execute(query)).all()
         hub_name_map = {h.id: h.name for h in await get_all_hubs_cached(db)}
 
         response = []
@@ -3478,31 +3556,143 @@ async def get_outbound_history(
                 m_id, order_id, origin_hub_id, dest_hub_id,
                 start_time, m_status, origin_received_at, receiver_name,
                 drone_id, drone_code, battery_id, battery_code, origin_hub_name,
+                proof_images, drone_image_url,
             ) = row
 
-            # Lấy tên hub đích từ RAM cache (diệt N+1 db.get(Hub))
             dest_hub_name = hub_name_map.get(dest_hub_id) if dest_hub_id else None
-            
             response.append({
                 "mission_id": str(m_id) if m_id else None,
                 "order_id": order_id,
                 "origin_hub_id": origin_hub_id,
-                "origin_hub_name": origin_hub_name,  # ← Thêm tên hub gốc
+                "origin_hub_name": origin_hub_name,
                 "destination_hub_id": dest_hub_id,
-                "destination_hub_name": dest_hub_name,  # ← Thêm tên hub đích
-                "customer_dropoff_at": origin_received_at.isoformat() if origin_received_at else None,  # Lúc khách gửi tại hub
-                "drone_departed_at": start_time.isoformat() if start_time else None,  # Lúc drone xuất phát
+                "destination_hub_name": dest_hub_name,
+                "customer_dropoff_at": origin_received_at.isoformat() if origin_received_at else None,
+                "drone_departed_at": start_time.isoformat() if start_time else None,
                 "status": m_status,
                 "receiver_name": receiver_name,
                 "drone_id": drone_id,
                 "drone_code": drone_code,
                 "battery_id": battery_id,
                 "battery_code": battery_code,
+                "proof_images": proof_images,
+                "drone_image_url": drone_image_url,
             })
-        
+
         return response
-        
+
     except Exception as e:
         import traceback
         print(f"[OUTBOUND_HISTORY] Error: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Lỗi lấy lịch sử gửi hàng: {str(e)}")
+
+
+# ── Confirmation History (Lịch sử xác nhận khách hàng nhận hàng) ────────────────
+@router.get("/confirmation-history", summary="Lịch sử xác nhận khách nhận hàng (kèm hình ảnh)")
+async def get_confirmation_history(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user: CurrentUser = Depends(allow_technician),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Lịch sử các lần khách hàng nhận hàng thành công tại hub của technician.
+
+    Hiển thị:
+    - Lúc khách hàng nhận hàng (order.destination_received_at)
+    - Hình ảnh khách nhận hàng (proof_images_json stage=CUSTOMER_PICKUP_CONFIRMED)
+    - Thông tin drone, pin, hành trình
+
+    Sorted by order.destination_received_at descending (nhận hàng mới nhất trước)
+    """
+    from sqlalchemy import cast, String
+    from app.modules.missions.bundle_service import get_all_hubs_cached
+
+    try:
+        tech_hub_id = None
+        if user.hub_id and str(user.hub_id).isdigit():
+            tech_hub_id = int(user.hub_id)
+
+        if tech_hub_id is None:
+            return []
+
+        query = (
+            select(
+                Mission.id,
+                Mission.order_id,
+                Mission.origin_hub_id,
+                Mission.destination_hub_id,
+                Mission.start_time,
+                Mission.arrived_at,
+                cast(Mission.status, String).label("status"),
+                Order.destination_received_at,
+                Order.receiver_name,
+                Drone.id.label("drone_id"),
+                Drone.name.label("drone_code"),
+                Battery.id.label("battery_id"),
+                Battery.serial_number.label("battery_code"),
+                Hub.name.label("destination_hub_name"),
+                Order.proof_images_json.label("proof_images_json"),
+                Drone.image_url.label("drone_image_url"),
+                Battery.image_url.label("battery_image_url"),
+            )
+            .outerjoin(Drone, Mission.drone_id == Drone.id)
+            .outerjoin(Battery, Mission.battery_id == Battery.id)
+            .outerjoin(Order, Mission.order_id == Order.id)
+            .outerjoin(Hub, Mission.destination_hub_id == Hub.id)
+            .where(
+                Mission.status == MissionStatus.MISSION_COMPLETED,
+                Mission.destination_hub_id == tech_hub_id,
+            )
+            .order_by(Order.destination_received_at.desc().nullslast(), Mission.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+
+        rows = (await db.execute(query)).all()
+        hub_name_map = {h.id: h.name for h in await get_all_hubs_cached(db)}
+
+        response = []
+        for row in rows:
+            (
+                m_id, order_id, origin_hub_id, dest_hub_id,
+                start_time, arrived_at, m_status, destination_received_at, receiver_name,
+                drone_id, drone_code, battery_id, battery_code, dest_hub_name,
+                proof_images, drone_image_url, battery_image_url,
+            ) = row
+
+            origin_hub_name = hub_name_map.get(origin_hub_id) if origin_hub_id else None
+            customer_pickup_image = None
+            if proof_images:
+                for img in proof_images:
+                    if isinstance(img, dict) and img.get("stage") == "CUSTOMER_PICKUP_CONFIRMED":
+                        customer_pickup_image = img
+                        break
+
+            response.append({
+                "mission_id": str(m_id) if m_id else None,
+                "order_id": order_id,
+                "origin_hub_id": origin_hub_id,
+                "origin_hub_name": origin_hub_name,
+                "destination_hub_id": dest_hub_id,
+                "destination_hub_name": dest_hub_name,
+                "drone_departed_at": start_time.isoformat() if start_time else None,
+                "drone_arrived_at": arrived_at.isoformat() if arrived_at else None,
+                "customer_pickup_at": destination_received_at.isoformat() if destination_received_at else None,
+                "status": m_status,
+                "receiver_name": receiver_name,
+                "drone_id": drone_id,
+                "drone_code": drone_code,
+                "battery_id": battery_id,
+                "battery_code": battery_code,
+                "customer_pickup_proof": customer_pickup_image,
+                "drone_image_url": drone_image_url,
+                "battery_image_url": battery_image_url,
+            })
+
+        return response
+
+    except Exception as e:
+        import traceback
+        print(f"[CONFIRMATION_HISTORY] Error: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Lỗi lấy lịch sử xác nhận: {str(e)}")

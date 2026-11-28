@@ -46,6 +46,11 @@ from app.modules.orders.customer.addresses import router as addresses_router
 from app.modules.payments.router import router as payments_router
 from app.modules.chatbot.rag.router import router as rag_router
 from app.modules.reports.router import router as reports_router
+from app.shared.image_storage import (
+    router as uploads_router,
+    set_request_base_url,
+    reset_request_base_url,
+)
 
 # Developer Database API (dùng chung server, prefix /dev/db/...)
 from app.database.router import router as db_router
@@ -223,6 +228,12 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
     lifespan=lifespan,
+    swagger_ui_parameters={
+        "filter": True,                  # Bật thanh tìm kiếm/lọc nhanh API ngay đầu /docs
+        "persistAuthorization": True,    # Giữ nguyên JWT Bearer token khi F5 lại /docs
+        "docExpansion": "none",          # Thu gọn các tag mặc định giúp dễ tìm & load nhanh
+        "displayRequestDuration": True,  # Hiển thị thời gian phản hồi (ms) cho mỗi request
+    },
 )
 
 
@@ -272,6 +283,32 @@ app.openapi = custom_openapi
 # Bật ProxyHeadersMiddleware để giữ nguyên HTTPS và Host từ Cloudflare Tunnel / Reverse Proxy
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
+
+class PublicBaseURLMiddleware:
+    """Pure ASGI middleware lưu public base URL vào ContextVar (không buffer stream)."""
+
+    def __init__(self, asgi_app):
+        self.app = asgi_app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers") or [])
+        proto_raw = headers.get(b"x-forwarded-proto")
+        proto = proto_raw.decode("latin1").split(",")[0].strip() if proto_raw else (scope.get("scheme") or "http")
+        host_raw = headers.get(b"x-forwarded-host") or headers.get(b"host")
+        host = host_raw.decode("latin1").split(",")[0].strip() if host_raw else ""
+        base = f"{proto}://{host}" if host else ""
+        token = set_request_base_url(base)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            reset_request_base_url(token)
+
+
+app.add_middleware(PublicBaseURLMiddleware)
+
 # [PERF NOTE] Nén JSON payload >= 1KB (GZip) để giảm dung lượng chiều upload từ laptop server qua Cloudflare Tunnel.
 # Đặt trước CORSMiddleware để CORS headers luôn được áp dụng đầy đủ.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
@@ -314,6 +351,7 @@ app.include_router(addresses_router, prefix=settings.API_V1_STR)
 app.include_router(payments_router, prefix=settings.API_V1_STR)
 app.include_router(rag_router, prefix=settings.API_V1_STR)
 app.include_router(reports_router, prefix=settings.API_V1_STR)
+app.include_router(uploads_router, prefix=settings.API_V1_STR)
 if os.getenv("ENABLE_DEV_DB_ROUTER", "").lower() == "true":
     app.include_router(db_router)
 

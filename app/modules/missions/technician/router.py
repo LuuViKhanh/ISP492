@@ -18,6 +18,7 @@ from app.modules.missions.models import (
     PaymentStatus,
 )
 from app.modules.missions.schemas import OrderProofImageCreate, build_order_proof_image_entry
+from app.shared.image_storage import normalize_and_store_image
 from app.modules.system.models import Hub
 from app.modules.fleet.models import Drone, Battery, batteries_status
 from app.modules.auth.models import User
@@ -142,6 +143,7 @@ async def get_outbound_deliveries(
                 Order.delivery_mode,
                 Order.created_at,
                 Order.receiver_phone,
+                Order.proof_images_json.label("proof_images_json"),
                 Hub.name.label("destination_hub_name"),
                 Mission.id.label("mission_id"),
                 Mission.status.label("mission_status"),
@@ -225,21 +227,8 @@ async def get_outbound_deliveries(
                 "battery": row.battery_serial if is_at_hub else None,
                 "battery_model": row.battery_model if is_at_hub else None,
                 "created_at": row.created_at.isoformat() if row.created_at else None,
-                "order_proof_images": [],  # Will be populated below
+                "order_proof_images": row.proof_images_json or [],
             })
-
-        # ── Mục 8: Populate order_proof_images for each order ───────────────
-        order_ids = [item["order_id"] for item in items]
-        if order_ids:
-            orders_res = await db.execute(
-                select(Order).where(Order.id.in_(order_ids))
-            )
-            orders_map = {o.id: o for o in orders_res.scalars().all()}
-            for item in items:
-                order_obj = orders_map.get(item["order_id"])
-                if order_obj and order_obj.proof_images_json:
-                    item["order_proof_images"] = order_obj.proof_images_json
-
 
         return items
     except Exception as e:
@@ -362,10 +351,8 @@ async def receive_outbound_delivery(
             recorded_at=now,
         )
         
-        # Thêm vào mảng proof_images_json của order
-        if not order.proof_images_json:
-            order.proof_images_json = []
-        order.proof_images_json.append(proof_entry)
+        # Thêm vào mảng proof_images_json của order (re-assign để SQLAlchemy luôn đánh dấu dirty)
+        order.proof_images_json = list(order.proof_images_json or []) + [proof_entry]
         
         # Ghi log vào activity_logs với resource_type="order"
         try:
@@ -718,20 +705,16 @@ async def prepare_battery_for_delivery(
                 created_at=get_vn_naive_datetime(),
             ))
             
-            # Update battery image_url (most recent state)
-            if body and body.proof_image_url:
-                battery.image_url = body.proof_image_url
-            
-            # Update drone image_url
-            if body and body.proof_image_url:
-                drone.image_url = body.proof_image_url
-                
+            # Update battery & drone image_url (chuyển Base64 -> file tĩnh + URL ngắn 1 lần duy nhất)
+            if body and getattr(body, "proof_image_url", None):
+                stored_fleet_url = normalize_and_store_image(body.proof_image_url, category="fleet")
+                battery.image_url = stored_fleet_url
+                drone.image_url = stored_fleet_url
+
         except Exception as e:
             print(f"[ACTIVITY LOG ERROR] Failed to log battery installation: {e}")
 
     await db.commit()
-    await db.refresh(mission)
-    await db.refresh(battery)
 
     handling_status_val = mission.handling_status.value if hasattr(mission.handling_status, "value") else str(mission.handling_status)
     status_val = mission.status.value if hasattr(mission.status, "value") else str(mission.status)
@@ -780,7 +763,8 @@ async def get_confirmations(
             OriginHub.name.label("origin_hub_name"),  # ← Hub gốc (nơi drone bay từ)
             Drone.name.label("drone_name"),
             Battery.serial_number.label("battery_serial"),
-            User.full_name.label("customer_name")
+            User.full_name.label("customer_name"),
+            Order.proof_images_json.label("proof_images_json"),
         ).outerjoin(
             Hub, Mission.destination_hub_id == Hub.id  # ← Join với destination hub
         ).outerjoin(
@@ -806,16 +790,7 @@ async def get_confirmations(
             
         result = await db.execute(query.order_by(Mission.id.desc()))
         rows = result.all()
-        
-        # ── Mục 8: Populate order_proof_images ───────────────────────────────
-        order_ids = [row.order_id for row in rows if row.order_id]
-        orders_map = {}
-        if order_ids:
-            orders_res = await db.execute(
-                select(Order).where(Order.id.in_(order_ids))
-            )
-            orders_map = {o.id: o for o in orders_res.scalars().all()}
-        
+
         return [
             {
                 "id": row.id,
@@ -829,7 +804,7 @@ async def get_confirmations(
                 "customer_name": row.customer_name,
                 "status": getattr(row.status, "value", row.status),
                 "handling_status": getattr(row.handling_status, "value", row.handling_status),
-                "order_proof_images": orders_map.get(row.order_id).proof_images_json if row.order_id and orders_map.get(row.order_id) else [],
+                "order_proof_images": row.proof_images_json or [],
             } for row in rows
         ]
     except Exception as e:
@@ -888,10 +863,8 @@ async def confirm_pickup(
                     recorded_at=now,
                 )
                 
-                # Thêm vào mảng proof_images_json của order
-                if not order.proof_images_json:
-                    order.proof_images_json = []
-                order.proof_images_json.append(proof_entry)
+                # Thêm vào mảng proof_images_json của order (re-assign để SQLAlchemy luôn đánh dấu dirty)
+                order.proof_images_json = list(order.proof_images_json or []) + [proof_entry]
                 
                 # Ghi log vào activity_logs
                 try:

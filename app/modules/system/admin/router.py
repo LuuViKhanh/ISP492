@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, cast, Date, and_, or_
+from sqlalchemy import select, func, cast, Date, String, and_, or_, case, text
+from sqlalchemy.dialects.postgresql import aggregate_order_by
 from typing import Optional
 from datetime import datetime, timezone
 import re
+import time
 
 from app.core.timezone import get_vn_naive_datetime
 from app.database.db import get_async_db
@@ -35,14 +37,36 @@ from app.modules.system.models import Hub, Notification, NotificationType
 from app.modules.fleet.models import Drone, Battery
 from app.modules.auth.models import User
 from app.modules.missions.models import Mission, MissionStatus
+from app.modules.missions.bundle_service import (
+    register_route_cache_invalidator,
+    invalidate_planning_metadata_caches,
+    invalidate_route_analysis_cache,
+)
 from app.modules.system import service
-from app.shared.dependencies import RoleChecker, CurrentUser
+from app.shared.dependencies import RoleChecker, CurrentUser, invalidate_user_auth_cache
 from app.shared.roles import UserRole
 from app.shared.drone_simulator import simulator_config, apply_simulator_config_update
 
 router = APIRouter(tags=["System"])
 
 require_admin = RoleChecker([UserRole.ADMIN])
+
+# [PERF NOTE] Cache nhẹ 15s cho các màn hình Hub Admin (summary, list, detail) để phản hồi <50ms,
+# tự động xóa ngay khi có thay đổi Hub, Drone, Pin, Mission hoặc Technician qua invalidate_route_analysis_cache().
+_HUB_ADMIN_CACHE_TTL_SEC = 15.0
+_HUB_SUMMARY_CACHE: Optional[tuple[float, HubSummaryResponse]] = None
+_HUB_LIST_CACHE: dict[tuple[str, str], tuple[float, list[HubListItemResponse]]] = {}
+_HUB_DETAIL_CACHE: dict[int, tuple[float, HubDetailResponse]] = {}
+
+
+def _invalidate_admin_hub_caches() -> None:
+    global _HUB_SUMMARY_CACHE
+    _HUB_SUMMARY_CACHE = None
+    _HUB_LIST_CACHE.clear()
+    _HUB_DETAIL_CACHE.clear()
+
+
+register_route_cache_invalidator(_invalidate_admin_hub_caches)
 
 
 def extract_area(address: Optional[str]) -> str:
@@ -140,6 +164,11 @@ async def get_system_logs(
 @router.get("/admin/fleet/hubs/summary", response_model=HubSummaryResponse, dependencies=[Depends(require_admin)], include_in_schema=False)
 async def get_hubs_summary(db: AsyncSession = Depends(get_async_db)):
     """Trả về 4 KPI tổng quan đầu trang Hub network map."""
+    global _HUB_SUMMARY_CACHE
+    now_mono = time.monotonic()
+    if _HUB_SUMMARY_CACHE is not None and (now_mono - _HUB_SUMMARY_CACHE[0]) <= _HUB_ADMIN_CACHE_TTL_SEC:
+        return _HUB_SUMMARY_CACHE[1].model_copy(deep=True)
+
     row = (await db.execute(
         select(
             select(func.count(Hub.id)).scalar_subquery(),
@@ -149,12 +178,14 @@ async def get_hubs_summary(db: AsyncSession = Depends(get_async_db)):
         )
     )).one()
 
-    return HubSummaryResponse(
+    res = HubSummaryResponse(
         total_hubs=int(row[0] or 0),
         active_hubs=int(row[1] or 0),
         total_drones=int(row[2] or 0),
         total_batteries=int(row[3] or 0),
     )
+    _HUB_SUMMARY_CACHE = (now_mono, res)
+    return res.model_copy(deep=True)
 
 
 @router.get("/admin/system/hubs", response_model=list[HubListItemResponse], dependencies=[Depends(require_admin)])
@@ -165,9 +196,66 @@ async def get_admin_hubs(
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Danh sách Hubs kèm số lượng Drones, Batteries, Technicians và danh sách Drones tại Hub.
+    Danh sách Hubs kèm số lượng Drones, Batteries, Technicians và danh sách Drones tại Hub (gộp 1 SQL round-trip + cache 15s).
     """
-    query = select(Hub)
+    cache_key = ((search or "").strip().lower(), (status or "").strip().lower())
+    now_mono = time.monotonic()
+    cached = _HUB_LIST_CACHE.get(cache_key)
+    if cached is not None and (now_mono - cached[0]) <= _HUB_ADMIN_CACHE_TTL_SEC:
+        return [item.model_copy(deep=True) for item in cached[1]]
+
+    drones_agg_sq = (
+        select(
+            Drone.current_hub_id.label("hub_id"),
+            func.json_agg(
+                aggregate_order_by(
+                    func.json_build_object(
+                        "id", Drone.id,
+                        "name", Drone.name,
+                        "model", Drone.model,
+                        "status", cast(Drone.status, String),
+                        "serial_number", Drone.serial_number,
+                        "battery_level_pct", Drone.battery_level_pct,
+                        "payload_capacity_kg", Drone.payload_capacity_kg,
+                    ),
+                    Drone.id.asc(),
+                )
+            ).label("drones_json"),
+        )
+        .where(Drone.current_hub_id.isnot(None))
+        .group_by(Drone.current_hub_id)
+        .subquery()
+    )
+    bat_cnt_sq = (
+        select(
+            Battery.current_hub_id.label("hub_id"),
+            func.count(Battery.id).label("cnt"),
+        )
+        .where(Battery.current_hub_id.isnot(None))
+        .group_by(Battery.current_hub_id)
+        .subquery()
+    )
+    tech_cnt_sq = (
+        select(
+            User.hub_id.label("hub_id"),
+            func.count(User.id).label("cnt"),
+        )
+        .where(User.hub_id.isnot(None), User.role_id == "TECHNICIAN")
+        .group_by(User.hub_id)
+        .subquery()
+    )
+
+    query = (
+        select(
+            Hub,
+            func.coalesce(drones_agg_sq.c.drones_json, text("'[]'::json")),
+            func.coalesce(bat_cnt_sq.c.cnt, 0),
+            func.coalesce(tech_cnt_sq.c.cnt, 0),
+        )
+        .outerjoin(drones_agg_sq, drones_agg_sq.c.hub_id == Hub.id)
+        .outerjoin(bat_cnt_sq, bat_cnt_sq.c.hub_id == Hub.id)
+        .outerjoin(tech_cnt_sq, tech_cnt_sq.c.hub_id == Hub.id)
+    )
     if status:
         query = query.where(func.lower(Hub.status) == status.lower())
     if search:
@@ -180,53 +268,14 @@ async def get_admin_hubs(
             )
         )
     query = query.order_by(Hub.id.asc())
-    hubs = (await db.execute(query)).scalars().all()
-    if not hubs:
-        return []
+    rows = (await db.execute(query)).all()
 
-    hub_ids = [h.id for h in hubs]
-
-    # Lấy danh sách drones chi tiết cho từng hub (tính luôn drone_count_map trong RAM, bỏ 1 query GROUP BY dư)
-    drones_res = await db.execute(
-        select(Drone).where(Drone.current_hub_id.in_(hub_ids)).order_by(Drone.id.asc())
-    )
-    drones_by_hub: dict[int, list[HubAssignedDroneItem]] = {}
-    for d in drones_res.scalars().all():
-        drones_by_hub.setdefault(d.current_hub_id, []).append(
-            HubAssignedDroneItem(
-                id=d.id,
-                name=d.name,
-                model=d.model,
-                status=d.status.value if hasattr(d.status, "value") else str(d.status),
-                serial_number=d.serial_number,
-                battery_level_pct=d.battery_level_pct,
-                payload_capacity_kg=d.payload_capacity_kg,
-            )
-        )
-    drone_count_map = {hid: len(lst) for hid, lst in drones_by_hub.items()}
-
-    # Đếm Batteries theo hub
-    bat_counts_res = await db.execute(
-        select(Battery.current_hub_id, func.count(Battery.id))
-        .where(Battery.current_hub_id.in_(hub_ids))
-        .group_by(Battery.current_hub_id)
-    )
-    bat_count_map = {row[0]: row[1] for row in bat_counts_res.all()}
-
-    # Đếm Technicians theo hub
-    tech_counts_res = await db.execute(
-        select(User.hub_id, func.count(User.id))
-        .where(User.hub_id.in_(hub_ids), User.role_id == "TECHNICIAN")
-        .group_by(User.hub_id)
-    )
-    tech_count_map = {row[0]: row[1] for row in tech_counts_res.all()}
-
-    items = []
-    for h in hubs:
-        d_cnt = drone_count_map.get(h.id, 0)
-        b_cnt = bat_count_map.get(h.id, 0)
-        t_cnt = tech_count_map.get(h.id, 0)
-        assigned_d = drones_by_hub.get(h.id, [])
+    items: list[HubListItemResponse] = []
+    for h, drones_json, b_cnt_raw, t_cnt_raw in rows:
+        assigned_d = [HubAssignedDroneItem(**item) for item in (drones_json or [])]
+        d_cnt = len(assigned_d)
+        b_cnt = int(b_cnt_raw or 0)
+        t_cnt = int(t_cnt_raw or 0)
         items.append(
             HubListItemResponse(
                 id=h.id,
@@ -249,71 +298,108 @@ async def get_admin_hubs(
                 updated_at=h.updated_at,
             )
         )
-    return items
+
+    if len(_HUB_LIST_CACHE) >= 32:
+        _HUB_LIST_CACHE.clear()
+    _HUB_LIST_CACHE[cache_key] = (now_mono, items)
+    return [item.model_copy(deep=True) for item in items]
 
 
 @router.get("/admin/system/hubs/{hub_id}", response_model=HubDetailResponse, dependencies=[Depends(require_admin)])
 @router.get("/admin/fleet/hubs/{hub_id}", response_model=HubDetailResponse, dependencies=[Depends(require_admin)], include_in_schema=False)
 async def get_admin_hub_detail(hub_id: int, db: AsyncSession = Depends(get_async_db)):
     """
-    Chi tiết Hub kèm Assigned Technician, danh sách Drones và Batteries tại Hub.
+    Chi tiết Hub kèm Assigned Technician, danh sách Drones và Batteries tại Hub (gộp 1 SQL round-trip + cache 15s).
     """
-    hub = await db.get(Hub, hub_id)
-    if not hub:
+    now_mono = time.monotonic()
+    cached = _HUB_DETAIL_CACHE.get(hub_id)
+    if cached is not None and (now_mono - cached[0]) <= _HUB_ADMIN_CACHE_TTL_SEC:
+        return cached[1].model_copy(deep=True)
+
+    tech_sq = (
+        select(
+            func.coalesce(
+                func.json_agg(
+                    aggregate_order_by(
+                        func.json_build_object(
+                            "id", User.id,
+                            "full_name", func.coalesce(User.full_name, "Technician"),
+                            "email", User.email,
+                        ),
+                        User.created_at.asc(),
+                    )
+                ),
+                text("'[]'::json"),
+            )
+        )
+        .where(User.hub_id == Hub.id, User.role_id == "TECHNICIAN")
+        .scalar_subquery()
+    )
+    drones_sq = (
+        select(
+            func.coalesce(
+                func.json_agg(
+                    aggregate_order_by(
+                        func.json_build_object(
+                            "id", Drone.id,
+                            "name", Drone.name,
+                            "model", Drone.model,
+                            "status", cast(Drone.status, String),
+                            "serial_number", Drone.serial_number,
+                            "battery_level_pct", Drone.battery_level_pct,
+                            "payload_capacity_kg", Drone.payload_capacity_kg,
+                        ),
+                        Drone.id.asc(),
+                    )
+                ),
+                text("'[]'::json"),
+            )
+        )
+        .where(Drone.current_hub_id == Hub.id)
+        .scalar_subquery()
+    )
+    bats_sq = (
+        select(
+            func.coalesce(
+                func.json_agg(
+                    aggregate_order_by(
+                        func.json_build_object(
+                            "id", Battery.id,
+                            "serial_number", func.coalesce(Battery.serial_number, Battery.id),
+                            "battery_model", Battery.battery_model,
+                            "status", case(
+                                (and_(Battery.drone_id.isnot(None), Battery.drone_id != ""), "Installed"),
+                                (Battery.work_order_id.isnot(None), "Maintenance"),
+                                (func.coalesce(Battery.charge_level_pct, 0) >= 100, "Ready"),
+                                else_="Charging",
+                            ),
+                            "capacity_wh", Battery.capacity_wh,
+                            "charge_level_pct", Battery.charge_level_pct,
+                            "drone_id", Battery.drone_id,
+                        ),
+                        Battery.id.asc(),
+                    )
+                ),
+                text("'[]'::json"),
+            )
+        )
+        .where(Battery.current_hub_id == Hub.id)
+        .scalar_subquery()
+    )
+
+    row = (await db.execute(
+        select(Hub, tech_sq, drones_sq, bats_sq).where(Hub.id == hub_id)
+    )).one_or_none()
+    if row is None:
         raise HTTPException(status_code=404, detail="Hub not found")
 
-    # Kỹ thuật viên phụ trách từ bảng accounts
-    tech_res = await db.execute(
-        select(User)
-        .where(User.hub_id == hub.id, User.role_id == "TECHNICIAN")
-        .order_by(User.created_at.asc())
-    )
-    tech_users = tech_res.scalars().all()
-    technicians = [
-        HubAssignedTechnician(
-            id=u.id,
-            full_name=u.full_name or "Technician",
-            email=u.email,
-        )
-        for u in tech_users
-    ]
+    hub, techs_json, drones_json, bats_json = row
+    technicians = [HubAssignedTechnician(**t) for t in (techs_json or [])]
     primary_tech = technicians[0] if technicians else None
+    assigned_drones = [HubAssignedDroneItem(**d) for d in (drones_json or [])]
+    assigned_batteries = [HubAssignedBatteryItem(**b) for b in (bats_json or [])]
 
-    # Drones tại Hub
-    drones_res = await db.execute(
-        select(Drone).where(Drone.current_hub_id == hub.id).order_by(Drone.id.asc())
-    )
-    assigned_drones = [
-        HubAssignedDroneItem(
-            id=d.id,
-            name=d.name,
-            model=d.model,
-            status=d.status.value if hasattr(d.status, "value") else str(d.status),
-            serial_number=d.serial_number,
-            battery_level_pct=d.battery_level_pct,
-            payload_capacity_kg=d.payload_capacity_kg,
-        )
-        for d in drones_res.scalars().all()
-    ]
-
-    # Batteries tại Hub
-    bat_res = await db.execute(
-        select(Battery).where(Battery.current_hub_id == hub.id).order_by(Battery.id.asc())
-    )
-    assigned_batteries = [
-        HubAssignedBatteryItem(
-            id=b.id,
-            serial_number=b.serial_number or b.id,
-            battery_model=b.battery_model,
-            status=compute_battery_ui_status(b),
-            capacity_wh=b.capacity_wh,
-            charge_level_pct=b.charge_level_pct,
-            drone_id=b.drone_id,
-        )
-        for b in bat_res.scalars().all()
-    ]
-
-    return HubDetailResponse(
+    detail = HubDetailResponse(
         id=hub.id,
         code=hub.code,
         name=hub.name,
@@ -330,6 +416,10 @@ async def get_admin_hub_detail(hub_id: int, db: AsyncSession = Depends(get_async
         assigned_drones=assigned_drones,
         assigned_batteries=assigned_batteries,
     )
+    if len(_HUB_DETAIL_CACHE) >= 64:
+        _HUB_DETAIL_CACHE.clear()
+    _HUB_DETAIL_CACHE[hub_id] = (now_mono, detail)
+    return detail.model_copy(deep=True)
 
 
 @router.post("/admin/system/hubs", response_model=HubResponse, dependencies=[Depends(require_admin)], status_code=201)
@@ -474,6 +564,8 @@ async def assign_technician_to_hub(
         created_at=now_utc,
     ))
     await db.commit()
+    invalidate_user_auth_cache(tech.id)
+    invalidate_route_analysis_cache()
 
     await service.log_activity(
         db,
@@ -540,6 +632,8 @@ async def unassign_technician_from_hub(
         created_at=now_utc,
     ))
     await db.commit()
+    invalidate_user_auth_cache(tech.id)
+    invalidate_route_analysis_cache()
 
     await service.log_activity(
         db,
@@ -612,6 +706,8 @@ async def transfer_technician_hub(
         created_at=now_utc,
     ))
     await db.commit()
+    invalidate_user_auth_cache(tech.id)
+    invalidate_route_analysis_cache()
 
     await service.log_activity(
         db,

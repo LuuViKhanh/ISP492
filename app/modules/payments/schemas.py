@@ -29,3 +29,4 @@ class RefundListResponse(BaseModel):
     reason: str
     status: str  # "PENDING", "COMPLETED", "FAILED", "CANCELLED"
     processed_at: Optional[datetime] = None  # refund_at
+    late_delivery_info: Optional[dict] = None

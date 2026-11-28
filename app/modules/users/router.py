@@ -5,7 +5,7 @@ from sqlalchemy import select
 from app.database.db import get_async_db
 from app.modules.auth.service import get_user_by_id
 from app.modules.users.schemas import ProfileResponse, ProfileUpdateRequest
-from app.shared.dependencies import RoleChecker, CurrentUser, get_current_user
+from app.shared.dependencies import RoleChecker, CurrentUser, get_current_user, invalidate_user_auth_cache
 from app.shared.roles import UserRole
 
 router = APIRouter(prefix="/users", tags=["Users"])
@@ -59,6 +59,9 @@ async def update_profile(
         user.full_name = body.full_name
     db.add(user)
     await db.commit()
+    invalidate_user_auth_cache(user.id)
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
     return user
 
 
@@ -126,6 +129,9 @@ async def delete_my_account(
     user.is_active = False
     db.add(user)
     await db.commit()
+    invalidate_user_auth_cache(user.id)
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
 
     # 4. Ghi audit log
     from app.modules.system.service import log_action

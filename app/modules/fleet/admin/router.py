@@ -2,9 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, and_
 from typing import Optional, Union, Any
+from dataclasses import dataclass
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime, timezone
 import re
+import time
 
 from app.database.db import get_async_db
 from app.shared.dependencies import RoleChecker, CurrentUser
@@ -25,11 +27,45 @@ from app.modules.fleet.models import (
 from app.modules.system.models import Hub, Notification, NotificationType
 from app.modules.auth.models import User, Account
 from app.modules.missions.models import Mission, MissionStatus, TelemetryLog
+from app.modules.missions.bundle_service import (
+    get_all_hubs_cached,
+    register_route_cache_invalidator,
+    invalidate_planning_metadata_caches,
+    invalidate_route_analysis_cache,
+)
 from app.modules.ai_predictions.models import AIPrediction
 
 router = APIRouter(prefix="/admin/fleet", tags=["Fleet"])
 
 allow_admin = RoleChecker([UserRole.ADMIN])
+
+
+@dataclass(frozen=True)
+class _CachedBatteryModel:
+    name: str
+    compatible_drone_models: Optional[list]
+    capacity_wh: float
+    unit_cost: Optional[float]
+
+
+_FLEET_ADMIN_CACHE_TTL_SEC = 15.0
+_DRONES_SUMMARY_CACHE: Optional[tuple[float, "DroneAdminSummaryResponse"]] = None
+_DRONES_LIST_CACHE: dict[tuple, tuple[float, list["DroneAdminListItemResponse"]]] = {}
+_BATTERIES_LIST_CACHE: dict[tuple, tuple[float, list["BatteryResponse"]]] = {}
+
+_CATALOG_MAP_TTL_SEC = 300.0
+_CATALOG_MAP_CACHE: Optional[tuple[float, dict[str, _CachedBatteryModel]]] = None
+
+
+def _invalidate_fleet_admin_caches() -> None:
+    global _DRONES_SUMMARY_CACHE, _CATALOG_MAP_CACHE
+    _DRONES_SUMMARY_CACHE = None
+    _DRONES_LIST_CACHE.clear()
+    _BATTERIES_LIST_CACHE.clear()
+    _CATALOG_MAP_CACHE = None
+
+
+register_route_cache_invalidator(_invalidate_fleet_admin_caches)
 
 
 # ── Helper Functions ──────────────────────────────────────────────────────────
@@ -336,18 +372,25 @@ async def get_drones_summary(
     db: AsyncSession = Depends(get_async_db),
 ):
     """Trả về 4 KPI đầu trang Drones list."""
+    global _DRONES_SUMMARY_CACHE
+    now_mono = time.monotonic()
+    if _DRONES_SUMMARY_CACHE is not None and (now_mono - _DRONES_SUMMARY_CACHE[0]) <= _FLEET_ADMIN_CACHE_TTL_SEC:
+        return _DRONES_SUMMARY_CACHE[1].model_copy(deep=True)
+
     rows = (await db.execute(
         select(Drone.status, func.count(Drone.id)).group_by(Drone.status)
     )).all()
     counts = {st: int(cnt) for st, cnt in rows}
     total = sum(counts.values())
 
-    return DroneAdminSummaryResponse(
+    res = DroneAdminSummaryResponse(
         total_drones=total,
         available_drones=counts.get(DroneStatus.AVAILABLE, 0),
         maintenance_drones=counts.get(DroneStatus.MAINTENANCE, 0),
         in_flight_drones=counts.get(DroneStatus.IN_FLIGHT, 0),
     )
+    _DRONES_SUMMARY_CACHE = (now_mono, res)
+    return res.model_copy(deep=True)
 
 
 @router.get("/drones", response_model=list[DroneAdminListItemResponse], summary="Lấy danh sách tất cả drone kèm bộ lọc Admin")
@@ -360,18 +403,30 @@ async def list_drones(
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Trả về toàn bộ drone trong hệ thống với đầy đủ thông tin giao diện Admin:
-    Tên Hub, Pin, Tải trọng, Admin State (ACTIVE/INACTIVE), Serial number.
+    Trả về toàn bộ drone trong hệ thống với đầy đủ thông tin giao diện Admin (dùng Hub RAM cache + 1 SQL round-trip + cache 15s).
     """
-    # Lấy danh sách Hubs để map tên
-    hubs_res = await db.execute(select(Hub))
-    hub_map = {h.id: h for h in hubs_res.scalars().all()}
+    cache_key = (
+        (search or "").strip().lower(),
+        hub_id,
+        (status or "").strip().lower(),
+        (admin_state or "").strip().upper(),
+    )
+    now_mono = time.monotonic()
+    cached = _DRONES_LIST_CACHE.get(cache_key)
+    if cached is not None and (now_mono - cached[0]) <= _FLEET_ADMIN_CACHE_TTL_SEC:
+        return [item.model_copy(deep=True) for item in cached[1]]
 
-    # Lấy danh sách Pin đang gắn trên drone
-    bats_res = await db.execute(select(Battery).where(Battery.drone_id.isnot(None)))
-    drone_bat_map = {b.drone_id: b.id for b in bats_res.scalars().all()}
+    # Dùng RAM cache cho Hubs (0 DB round-trip khi warm)
+    hub_map = {h.id: h for h in await get_all_hubs_cached(db)}
 
-    query = select(Drone)
+    # Gộp Drone + installed_battery_id thành 1 SQL query duy nhất
+    bat_id_sq = (
+        select(Battery.id)
+        .where(Battery.drone_id == Drone.id)
+        .limit(1)
+        .scalar_subquery()
+    )
+    query = select(Drone, bat_id_sq.label("installed_battery_id"))
     if hub_id is not None:
         query = query.where(Drone.current_hub_id == hub_id)
     if status:
@@ -393,10 +448,10 @@ async def list_drones(
         )
 
     query = query.order_by(Drone.id.asc())
-    drones = (await db.execute(query)).scalars().all()
+    drone_rows = (await db.execute(query)).all()
 
     results: list[DroneAdminListItemResponse] = []
-    for d in drones:
+    for d, installed_bat_id in drone_rows:
         h = hub_map.get(d.current_hub_id)
         hub_name = h.name if h else (f"Hub #{d.current_hub_id}" if d.current_hub_id else None)
         hub_code = h.code if h else None
@@ -415,11 +470,15 @@ async def list_drones(
                 admin_state=get_drone_admin_state(d.status),
                 payload_capacity_kg=d.payload_capacity_kg,
                 max_speed=d.max_speed,
-                installed_battery_id=drone_bat_map.get(d.id),
+                installed_battery_id=installed_bat_id,
                 utilization_pct=d.utilization_pct or 0.0,
             )
         )
-    return results
+
+    if len(_DRONES_LIST_CACHE) >= 32:
+        _DRONES_LIST_CACHE.clear()
+    _DRONES_LIST_CACHE[cache_key] = (now_mono, results)
+    return [item.model_copy(deep=True) for item in results]
 
 
 @router.patch("/drones/{drone_id}/admin-state", summary="Cập nhật trạng thái quản trị (Kích hoạt / Vô hiệu hóa Drone)")
@@ -1279,10 +1338,25 @@ def _battery_to_response(battery: Battery, catalog_map: dict | None = None) -> B
     )
 
 
-async def _get_catalog_map(db: AsyncSession) -> dict:
-    """Load toàn bộ BatteryModelCatalog vào dict {name: obj}."""
+async def _get_catalog_map(db: AsyncSession) -> dict[str, _CachedBatteryModel]:
+    """Load toàn bộ BatteryModelCatalog với RAM TTL cache 300s (object detached an toàn qua các request)."""
+    global _CATALOG_MAP_CACHE
+    now_mono = time.monotonic()
+    if _CATALOG_MAP_CACHE is not None and (now_mono - _CATALOG_MAP_CACHE[0]) <= _CATALOG_MAP_TTL_SEC:
+        return _CATALOG_MAP_CACHE[1]
+
     rows = (await db.execute(select(BatteryModelCatalog))).scalars().all()
-    return {r.name: r for r in rows}
+    cmap = {
+        r.name: _CachedBatteryModel(
+            name=r.name,
+            compatible_drone_models=list(r.compatible_drone_models) if r.compatible_drone_models is not None else None,
+            capacity_wh=float(r.capacity_wh),
+            unit_cost=float(r.unit_cost) if r.unit_cost is not None else None,
+        )
+        for r in rows
+    }
+    _CATALOG_MAP_CACHE = (now_mono, cmap)
+    return cmap
 
 
 @router.get("/batteries", response_model=list[BatteryResponse], summary="Lấy danh sách tất cả pin")
@@ -1293,6 +1367,16 @@ async def list_batteries(
     user: CurrentUser = Depends(allow_admin),
     db: AsyncSession = Depends(get_async_db),
 ):
+    cache_key = (
+        hub_id,
+        (battery_model or "").strip().lower(),
+        (status or "").strip().lower(),
+    )
+    now_mono = time.monotonic()
+    cached = _BATTERIES_LIST_CACHE.get(cache_key)
+    if cached is not None and (now_mono - cached[0]) <= _FLEET_ADMIN_CACHE_TTL_SEC:
+        return [item.model_copy(deep=True) for item in cached[1]]
+
     q = select(Battery)
     if hub_id:
         q = q.where(Battery.current_hub_id == hub_id)
@@ -1302,7 +1386,12 @@ async def list_batteries(
         q = q.where(Battery.status == status)
     result = await db.execute(q.order_by(Battery.id))
     catalog_map = await _get_catalog_map(db)
-    return [_battery_to_response(b, catalog_map) for b in result.scalars().all()]
+    items = [_battery_to_response(b, catalog_map) for b in result.scalars().all()]
+
+    if len(_BATTERIES_LIST_CACHE) >= 32:
+        _BATTERIES_LIST_CACHE.clear()
+    _BATTERIES_LIST_CACHE[cache_key] = (now_mono, items)
+    return [item.model_copy(deep=True) for item in items]
 
 
 @router.get("/batteries/{battery_id}", response_model=BatteryResponse, summary="Xem chi tiết một pin")

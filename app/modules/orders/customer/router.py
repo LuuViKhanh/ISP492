@@ -861,7 +861,10 @@ async def track_delivery(
             )
 
         resp.travelled_path = [RoutePointSchema(latitude=r.latitude, longitude=r.longitude) for r in path_rows]
-        resp.checkpoints_passed = len(mission.checkpoints_json or [])
+        resp.checkpoints_passed = sum(
+            1 for cp in (mission.checkpoints_json or [])
+            if isinstance(cp, dict) and cp.get("drone_latitude") is not None and cp.get("passed_at") is not None
+        )
 
         # 3. Legs & Current Leg
         legs_list = []

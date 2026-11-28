@@ -62,6 +62,9 @@ class ActivityLog(Base):
     Ví dụ: LOGIN, CREATE_ORDER, APPROVE_REQUEST, CANCEL_MISSION...
     """
     __tablename__ = "activity_logs"
+    __table_args__ = (
+        Index("idx_activity_logs_resource_created", "resource_type", "resource_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     # Người thực hiện

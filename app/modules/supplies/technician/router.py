@@ -171,10 +171,12 @@ async def create_parts_request(
     has_stock = inv is not None and inv.quantity >= body.quantity_needed
     status = PartsRequestStatus.AUTO_APPROVED if has_stock else PartsRequestStatus.PENDING
 
+    from app.shared.image_storage import normalize_image_list
     req = PartsRequest(
         requested_by=user.id, hub_id=hub_id, drone_id=body.drone_id,
         part_category_id=body.part_category_id, quantity_needed=body.quantity_needed,
-        description=body.description, photo_urls=body.photo_urls,
+        description=body.description,
+        photo_urls=normalize_image_list(body.photo_urls, category="supplies"),
         status=status, created_at=now,
     )
     if has_stock:

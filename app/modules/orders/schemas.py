@@ -48,6 +48,10 @@ class OrderResponse(BaseModel):
     is_aging_priority: Optional[bool] = False
     aging_deadline: Optional[datetime] = None
     created_at: Optional[datetime] = None
+    refund_amount: Optional[float] = None
+    refund_reason: Optional[str] = None
+    refund_status: Optional[str] = None
+    late_delivery_info: Optional[dict] = None
 
     class Config:
         from_attributes = True

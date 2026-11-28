@@ -634,6 +634,8 @@ async def get_refunds(
     Chỉ lấy Orders có refund_amount > 0.
     """
     from app.modules.payments.schemas import RefundListResponse
+    from app.modules.missions.models import Mission, MissionStatus
+    from app.modules.missions.compensation_service import extract_mission_override_and_compensation
 
     result = await db.execute(
         select(
@@ -646,16 +648,33 @@ async def get_refunds(
     )
     rows = result.all()
 
-    refunds = [
-        RefundListResponse(
-            refund_id=r.id,
-            order_id=r.id,
-            refund_amount=r.refund_amount or 0,
-            reason=r.refund_reason or "N/A",
-            status=r.refund_status.value if hasattr(r.refund_status, "value") else (r.refund_status or "PENDING"),
-            processed_at=r.refund_at,
+    refund_order_ids = [r.id for r in rows]
+    mission_by_order: dict[str, Mission] = {}
+    if refund_order_ids:
+        m_res = await db.execute(
+            select(Mission)
+            .where(Mission.order_id.in_(refund_order_ids), Mission.status != MissionStatus.CANCELLED)
+            .order_by(Mission.id.desc())
         )
-        for r in rows
-    ]
+        for m in m_res.scalars().all():
+            if m.order_id and m.order_id not in mission_by_order:
+                mission_by_order[m.order_id] = m
+
+    refunds = []
+    for r in rows:
+        m_obj = mission_by_order.get(r.id)
+        comp_meta = extract_mission_override_and_compensation(m_obj) if m_obj else {}
+        has_meta = bool(comp_meta.get("route_override") or comp_meta.get("late_delivery_compensation"))
+        refunds.append(
+            RefundListResponse(
+                refund_id=r.id,
+                order_id=r.id,
+                refund_amount=r.refund_amount or 0,
+                reason=r.refund_reason or "N/A",
+                status=r.refund_status.value if hasattr(r.refund_status, "value") else (r.refund_status or "PENDING"),
+                processed_at=r.refund_at,
+                late_delivery_info=comp_meta if has_meta else None,
+            )
+        )
 
     return refunds

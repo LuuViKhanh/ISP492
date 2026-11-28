@@ -694,6 +694,14 @@ async def _build_full_order_status_payload(
             }
         )
 
+    from app.modules.missions.compensation_service import extract_mission_override_and_compensation
+    comp_meta = extract_mission_override_and_compensation(mission, order)
+    has_late_or_refund = bool(
+        comp_meta.get("route_override")
+        or comp_meta.get("late_delivery_compensation")
+        or order.refund_amount
+    )
+
     return {
         "type": "order_status",
         "success": True,
@@ -719,6 +727,13 @@ async def _build_full_order_status_payload(
         "destination_received_at": times_info["destination_received_at"],
         "mission_id": mission.id if mission else None,
         "drone_id": mission.drone_id if mission else None,
+        "refund_amount": order.refund_amount,
+        "refund_reason": order.refund_reason,
+        "refund_status": (
+            order.refund_status.value if hasattr(order.refund_status, "value") else order.refund_status
+        ) if order.refund_status else None,
+        "refund_at": order.refund_at.isoformat() if order.refund_at else None,
+        "late_delivery_info": comp_meta if has_late_or_refund else None,
         "_actions": actions,
     }
 

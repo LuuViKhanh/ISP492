@@ -14,7 +14,7 @@ from app.shared.dependencies import RoleChecker, CurrentUser
 from app.shared.roles import UserRole
 from app.core.config import settings
 from app.modules.missions.models import Mission, MissionStatus, HandlingStatus, Incident, IncidentStatus, IncidentSeverity, TelemetryLog, MissionLeg, MissionLegStatus
-from app.modules.system.models import Hub
+from app.modules.system.models import Hub, ActivityLog
 from app.modules.fleet.models import MaintenanceAlert
 import heapq
 from app.modules.missions.schemas import (
@@ -32,6 +32,12 @@ from app.modules.missions.auto_dispatch_service import (
     run_auto_dispatch_selection,
     recommend_resources_for_order,
     build_route_nl_explanation,
+    build_route_business_rule_check,
+    build_analyze_drone_explanation,
+)
+from app.modules.missions.compensation_service import (
+    validate_and_build_route_override_entry,
+    extract_mission_override_and_compensation,
 )
 from app.modules.missions.bundle_service import (
     get_pre_analyze_bundle_candidates,
@@ -271,7 +277,13 @@ async def get_live_tracking(
         return LiveTrackingResponse(active_count=0, drones=[])
 
     mission_ids = [m.id for m in flying_missions]
-    cp_counts = {m.id: len(m.checkpoints_json or []) for m in flying_missions}
+    cp_counts = {
+        m.id: sum(
+            1 for cp in (m.checkpoints_json or [])
+            if isinstance(cp, dict) and cp.get("drone_latitude") is not None and cp.get("passed_at") is not None
+        )
+        for m in flying_missions
+    }
 
     # Lấy thông tin Legs cho các mission đang bay
     legs_result = await db.execute(
@@ -903,7 +915,7 @@ async def collect_telemetry(
             # Cooldown: kiểm tra xem hub này đã được log trong 60s qua chưa
             in_cooldown = False
             for cp in reversed(current_checkpoints):
-                if cp.get("hub_id") == h.id:
+                if isinstance(cp, dict) and cp.get("drone_latitude") is not None and cp.get("hub_id") == h.id:
                     cp_ts_str = cp.get("passed_at")
                     if cp_ts_str:
                         try:
@@ -995,7 +1007,11 @@ async def get_hub_checkpoints(
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found")
 
-    return [HubCheckpointResponse(**cp) for cp in (mission.checkpoints_json or [])]
+    return [
+        HubCheckpointResponse(**cp)
+        for cp in (mission.checkpoints_json or [])
+        if isinstance(cp, dict) and cp.get("drone_latitude") is not None and cp.get("passed_at") is not None
+    ]
 
 
 # ── Hubs & Locations ──────────────────────────────────────────────────────────────
@@ -3847,6 +3863,45 @@ async def compute_mission_routes_internal(
             rec_idx=best_idx if best_idx is not None else 0,
         )
 
+    # Kiểm tra BR đầy đủ trên cả 3 tuyến bay (trạng thái Available, tải trọng, pin + 20% safety buffer)
+    d_status_val = (
+        drone_obj.status.value if hasattr(drone_obj.status, "value") else str(drone_obj.status or "")
+    ) if drone_obj else "Available"
+    d_is_avail = (d_status_val == DroneStatus.AVAILABLE.value) if drone_obj else True
+    d_max_payload = float(drone_obj.payload_capacity_kg or 0.0) if drone_obj else effective_payload
+    d_payload_ok = (d_max_payload >= effective_payload) if drone_obj else True
+
+    for s in routes_schemas:
+        same_selected_drone = (
+            drone_obj is None
+            or not s.suggestedDroneId
+            or str(s.suggestedDroneId) == str(drone_obj.id)
+        )
+        route_avail = d_is_avail if same_selected_drone else True
+        route_payload_ok = d_payload_ok if same_selected_drone else True
+        if not route_avail or not route_payload_ok:
+            br_fail_msg = (
+                f"Drone {drone_obj.id} status is '{d_status_val}' (must be 'Available')."
+                if not route_avail
+                else f"Drone {drone_obj.id} max payload ({d_max_payload:.2f} kg) is below order payload ({effective_payload:.2f} kg)."
+            )
+            s.feasible = False
+            s.is_selectable = False
+            s.recommended = False
+            s.infeasible_reason = br_fail_msg
+            s.unselectable_reason = br_fail_msg
+            if not s.reason or not s.reason.startswith("Infeasible"):
+                s.reason = f"Infeasible route (Unselectable): {br_fail_msg}"
+
+        s.business_rule_check = build_route_business_rule_check(
+            route=s,
+            payload_ok=route_payload_ok,
+            is_available=route_avail,
+            drone_status_label=d_status_val,
+            order_payload_kg=effective_payload,
+            max_payload_kg=d_max_payload,
+        )
+
     # Luôn trả về đầy đủ cả 3 tuyến đường để Operator quan sát toàn diện và so sánh các phương án
     # (các tuyến không đủ pin vẫn được hiển thị trên bảng điều khiển kèm cờ feasible=False, is_selectable=False và lý do chi tiết)
     if raw_data_list:
@@ -4175,6 +4230,9 @@ async def build_missions_response_list(
         m_dict["suggestedDroneId"] = m.drone_id
         m_dict["scheduled_route"] = scheduled_route
         m_dict["routes"] = [scheduled_route]
+        meta_info = extract_mission_override_and_compensation(m)
+        m_dict["route_override_info"] = meta_info.get("route_override")
+        m_dict["late_delivery_compensation"] = meta_info.get("late_delivery_compensation")
 
         responses.append(MissionResponse(**m_dict))
 
@@ -4455,6 +4513,25 @@ async def analyze_mission_planning(
                 optimization_objective=opt_obj,
             )
 
+        resolved_drone_id = clean_drone_id or (
+            str(first_route.suggestedDroneId) if (first_route and first_route.suggestedDroneId) else None
+        )
+        resolved_drone_obj = None
+        if resolved_drone_id:
+            if preloaded_drone is not None and str(preloaded_drone.id) == resolved_drone_id:
+                resolved_drone_obj = preloaded_drone
+            else:
+                resolved_drone_obj = await db.get(Drone, resolved_drone_id)
+
+        drone_expl, br_summary = await build_analyze_drone_explanation(
+            db=db,
+            order=order,
+            drone_obj=resolved_drone_obj,
+            routes_schemas=routes_schemas,
+            total_payload_kg=cache_payload,
+            eff_origin_hub_id=int(eff_origin_hub_id),
+        )
+
         return MissionPlanningAnalyzeResponse(
             orderId=order.id,
             bundledOrderIds=request.bundledOrderIds if request.bundledOrderIds else None,
@@ -4475,6 +4552,8 @@ async def analyze_mission_planning(
             pickupHubCode=first_route.pickup_hub_code if (first_route and is_cross) else None,
             routes=routes_schemas,
             route_explanation=route_expl,
+            drone_explanation=drone_expl,
+            business_rules_summary=br_summary,
         )
     except HTTPException:
         raise
@@ -4960,6 +5039,8 @@ def _build_created_mission_response(
         "routes": [scheduled_route],
         "bundled_order_ids": all_mission_order_ids,
         "total_orders_count": len(all_mission_order_ids),
+        "route_override_info": extract_mission_override_and_compensation(mission).get("route_override"),
+        "late_delivery_compensation": extract_mission_override_and_compensation(mission).get("late_delivery_compensation"),
     })
     return MissionResponse(**m_dict)
 
@@ -5313,6 +5394,23 @@ async def _create_mission_internal(
 
     mission_id = await generate_sequential_id(db, Mission, "MSN")
 
+    hub_list = await get_all_hubs_cached(db)
+    hub_by_id = {h.id: h for h in hub_list}
+    orig_hub_obj = hub_by_id.get(eff_origin_hub_id or order.origin_hub_id)
+    dest_hub_obj = hub_by_id.get(order.destination_hub_id)
+
+    # Kiểm tra ràng buộc lý do khi chọn Route khác Delivery Mode (VD: EXPRESS nhưng chọn ECO/DETOUR)
+    route_override_entry = await validate_and_build_route_override_entry(
+        orders_list=bundled_order_objs,
+        selected_schema=selected_schema,
+        route_id=request.routeId,
+        reason_type=getattr(request, "route_override_reason_type", None),
+        note=getattr(request, "route_override_note", None),
+        operator_id=user.id,
+        origin_hub=orig_hub_obj,
+        dest_hub=dest_hub_obj,
+    )
+
     total_dist_km = selected_schema.distanceKm if selected_schema else 0.0
     total_energy_wh = selected_schema.predictedEnergyWh if selected_schema else 0.0
     duration_min = selected_schema.predictedDurationMin if selected_schema else 0
@@ -5333,9 +5431,27 @@ async def _create_mission_internal(
         scheduled_time=order.requested_delivery_at or get_vn_naive_datetime(),
         status=MissionStatus.SCHEDULED,
         handling_status=HandlingStatus.AT_HUB,
-        operator_id=user.id
+        operator_id=user.id,
+        checkpoints_json=[route_override_entry] if route_override_entry else [],
     )
     db.add(mission)
+
+    if route_override_entry:
+        db.add(ActivityLog(
+            user_id=user.id,
+            user_email=getattr(user, "email", None),
+            role="OPERATOR",
+            action="ROUTE_OVERRIDE",
+            resource_type="mission",
+            resource_id=mission_id,
+            description=(
+                f"Operator overrode EXPRESS route to {route_override_entry.get('selected_strategy_code')} "
+                f"(reason: {route_override_entry.get('reason_type')})."
+            ),
+            status="success",
+            details_json=route_override_entry,
+            created_at=get_vn_datetime(),
+        ))
 
     # 2. Tạo các chặng bay (MissionLeg) và chỉ định chính xác viên pin cho từng chặng (kể cả Relay Hub)
     used_mission_bat_ids: set[str] = {assigned_battery.id}
@@ -5487,8 +5603,7 @@ async def _create_mission_internal(
         if o_item.receiver_email:
             emails_to_send.append((o_item.receiver_email, o_item.id))
 
-    hub_list = await get_all_hubs_cached(db)
-    hub_by_id = {h.id: h for h in hub_list}
+    # hub_list & hub_by_id đã được tải ở trên khi kiểm tra route_override
 
     # 6. Notify Technicians at origin hub: new mission assigned (strictly inside ACID tx)
     try:

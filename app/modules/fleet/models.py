@@ -1,4 +1,5 @@
 import enum
+import json
 from datetime import datetime
 from sqlalchemy import BigInteger, Integer, Float, String, Text, DateTime, Boolean, ForeignKey, Enum as SAEnum, JSON, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -197,6 +198,64 @@ class WorkOrder(Base):
     proof_image_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # Proof image for work order (before/after/during/incident_recovery) - Base64 Data URL
     parts_replaced_proof_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # Proof image for parts replaced - Base64 Data URL
     # parts_replaced_json: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)  # Column does not exist in DB work_orders
+
+    @property
+    def proof_images_json(self) -> list:
+        """Tương thích Mục 9: đọc/ghi mảng ảnh minh chứng lưu trong cột TEXT `proof_image_url`."""
+        raw = self.proof_image_url
+        if not raw:
+            return []
+        if isinstance(raw, list):
+            return raw
+        if isinstance(raw, str):
+            s = raw.strip()
+            if s.startswith("["):
+                try:
+                    parsed = json.loads(s)
+                    if isinstance(parsed, list):
+                        return parsed
+                except Exception:
+                    pass
+            return [{"proof_image_url": s}]
+        return []
+
+    @proof_images_json.setter
+    def proof_images_json(self, value: list | None) -> None:
+        if not value:
+            self.proof_image_url = None
+        else:
+            from app.shared.image_storage import normalize_proof_entries
+            normalized = normalize_proof_entries(value, category="work_orders")
+            self.proof_image_url = json.dumps(normalized, ensure_ascii=False)
+
+    @property
+    def parts_replaced_proof_json(self) -> list:
+        """Tương thích Mục 9: đọc/ghi mảng ảnh thay linh kiện lưu trong cột TEXT `parts_replaced_proof_url`."""
+        raw = self.parts_replaced_proof_url
+        if not raw:
+            return []
+        if isinstance(raw, list):
+            return raw
+        if isinstance(raw, str):
+            s = raw.strip()
+            if s.startswith("["):
+                try:
+                    parsed = json.loads(s)
+                    if isinstance(parsed, list):
+                        return parsed
+                except Exception:
+                    pass
+            return [{"proof_image_url": s}]
+        return []
+
+    @parts_replaced_proof_json.setter
+    def parts_replaced_proof_json(self, value: list | None) -> None:
+        if not value:
+            self.parts_replaced_proof_url = None
+        else:
+            from app.shared.image_storage import normalize_proof_entries
+            normalized = normalize_proof_entries(value, category="work_orders")
+            self.parts_replaced_proof_url = json.dumps(normalized, ensure_ascii=False)
 
 
 class MaintenanceAlert(Base):

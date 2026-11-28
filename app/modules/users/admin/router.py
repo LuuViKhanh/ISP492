@@ -7,7 +7,7 @@ from app.database.db import get_async_db
 from app.modules.auth.service import get_user_by_id, get_user_by_email, hash_password
 from app.modules.auth.models import User, ROLE_NAME_TO_ID
 from app.modules.users.schemas import ProfileResponse, UserCreate, UserAdminUpdate
-from app.shared.dependencies import RoleChecker
+from app.shared.dependencies import RoleChecker, invalidate_user_auth_cache
 from app.shared.roles import UserRole
 
 router = APIRouter(
@@ -110,6 +110,9 @@ async def update_user(
     db.add(user)
     await db.commit()
     await db.refresh(user)
+    invalidate_user_auth_cache(user.id)
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
     return user
 
 @router.delete("/{user_id}")
@@ -129,6 +132,9 @@ async def delete_user(user_id: str, db: AsyncSession = Depends(get_async_db)):
     db.add(user)
     await db.commit()
     await db.refresh(user)
+    invalidate_user_auth_cache(user.id)
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
 
     from app.modules.system.service import log_action
     await log_action(db, user.id, "ADMIN_SOFT_DELETE", "users", {"email": user.email})
@@ -167,6 +173,9 @@ async def restore_user(user_id: str, db: AsyncSession = Depends(get_async_db)):
     db.add(user)
     await db.commit()
     await db.refresh(user)
+    invalidate_user_auth_cache(user.id)
+    from app.modules.missions.bundle_service import invalidate_route_analysis_cache
+    invalidate_route_analysis_cache()
 
     from app.modules.system.service import log_action
     await log_action(db, user.id, "ADMIN_RESTORE", "users", {"email": user.email})

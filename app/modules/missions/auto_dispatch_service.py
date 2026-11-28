@@ -50,6 +50,8 @@ from app.modules.missions.schemas import (
     DecisionShapExplanation,
     NaturalLanguageShapExplanation,
     RecommendResourcesResponse,
+    RouteBusinessRuleCheck,
+    DroneBusinessRuleSummary,
     RouteOptionSchema,
     ShapFeatureAttribution,
 )
@@ -715,6 +717,280 @@ def build_route_nl_explanation(
     )
 
 
+def build_route_business_rule_check(
+    route: RouteOptionSchema,
+    payload_ok: bool = True,
+    is_available: bool = True,
+    drone_status_label: str = "Available",
+    order_payload_kg: float = 0.0,
+    max_payload_kg: float = 0.0,
+) -> RouteBusinessRuleCheck:
+    """Tổng hợp kết quả kiểm tra Business Rule (tải trọng, pin + 20% safety buffer, relay & thời tiết) cho 1 tuyến."""
+    strategy = (
+        route.strategy_code
+        or (route.routeId.rsplit("-", 1)[-1] if route.routeId else "ROUTE")
+    )
+    if strategy == "ENG":
+        strategy = "ECO"
+
+    legs = route.legs_detail or []
+    is_multi_leg = len(legs) > 1
+    leg1_energy = (
+        float(legs[0].energy_wh or 0.0)
+        if (is_multi_leg and legs[0].energy_wh is not None)
+        else float(route.predictedEnergyWh or 0.0)
+    )
+    req_wh = round(leg1_energy, 2)
+    req_with_buf_wh = round(req_wh / 0.80, 2) if req_wh > 0 else 0.0
+    avail_wh = round(float(route.assignedBatteryEnergyWh or 0.0), 2)
+
+    relay_ok = all(bool(st.feasible) for st in (route.relay_battery_status or []))
+    weather_safe = not bool(route.weather and route.weather.is_bad_weather)
+    meets_buf = bool(
+        avail_wh > 0
+        and req_wh <= (avail_wh * 0.80 + 0.05)
+        and int(route.remainingBatteryPct or 0) >= 20
+        and relay_ok
+    )
+
+    feasible = bool(route.feasible and payload_ok and is_available)
+    infeas_reason = route.infeasible_reason
+    if not is_available:
+        infeas_reason = f"Drone status is '{drone_status_label}' (must be 'Available')."
+    elif not payload_ok:
+        infeas_reason = (
+            f"Drone max payload ({max_payload_kg:.2f} kg) is below order payload ({order_payload_kg:.2f} kg)."
+        )
+
+    return RouteBusinessRuleCheck(
+        route_id=route.routeId,
+        strategy_code=strategy,
+        display_title=route.display_title or route.speed_profile_label or route.routeId,
+        route_string=route.route_string,
+        required_energy_wh=req_wh,
+        safety_buffer_pct=20,
+        required_with_buffer_wh=req_with_buf_wh,
+        available_energy_wh=avail_wh,
+        battery_consumption_pct=int(route.batteryConsumptionPct or 0),
+        remaining_battery_pct=int(route.remainingBatteryPct or 0),
+        meets_20pct_buffer=meets_buf,
+        relay_batteries_ok=relay_ok,
+        weather_safe=weather_safe,
+        feasible=feasible,
+        infeasible_reason=infeas_reason,
+    )
+
+
+def build_drone_business_rule_summary(
+    drone: Drone,
+    order_payload_kg: float,
+    compatible_battery_models: list[str],
+    routes_schemas: list[RouteOptionSchema],
+    assigned_battery: Optional[Battery] = None,
+) -> DroneBusinessRuleSummary:
+    """Tạo bảng Business Rule tổng hợp của Drone được chọn trên tất cả các tuyến bay."""
+    d_status = drone.status.value if hasattr(drone.status, "value") else str(drone.status or "")
+    is_avail = d_status == DroneStatus.AVAILABLE.value
+    max_kg = float(drone.payload_capacity_kg or 0.0)
+    payload_ok = max_kg >= float(order_payload_kg or 0.0)
+
+    routes_br: list[RouteBusinessRuleCheck] = []
+    for r in routes_schemas:
+        br = build_route_business_rule_check(
+            route=r,
+            payload_ok=payload_ok,
+            is_available=is_avail,
+            drone_status_label=d_status,
+            order_payload_kg=float(order_payload_kg or 0.0),
+            max_payload_kg=max_kg,
+        )
+        r.business_rule_check = br
+        routes_br.append(br)
+
+    first_r = routes_schemas[0] if routes_schemas else None
+    bat_id = (assigned_battery.id if assigned_battery else None) or (first_r.assignedBatteryId if first_r else None)
+    bat_serial = (assigned_battery.serial_number if assigned_battery else None) or (first_r.assignedBatterySerial if first_r else None)
+    bat_model = (assigned_battery.battery_model if assigned_battery else None) or (first_r.assignedBatteryModel if first_r else None)
+    bat_energy = (
+        _compute_battery_wh_local(assigned_battery)[2]
+        if assigned_battery is not None
+        else (first_r.assignedBatteryEnergyWh if first_r else None)
+    )
+
+    return DroneBusinessRuleSummary(
+        drone_id=drone.id,
+        drone_name=drone.name or drone.id,
+        drone_model=drone.model or "",
+        operational_status=d_status,
+        is_available=is_avail,
+        max_payload_kg=round(max_kg, 2),
+        order_payload_kg=round(float(order_payload_kg or 0.0), 2),
+        payload_ok=payload_ok,
+        compatible_battery_models=list(compatible_battery_models or []),
+        has_compatible_battery=bool(bat_id),
+        assigned_battery_id=bat_id,
+        assigned_battery_serial=bat_serial,
+        assigned_battery_model=bat_model,
+        assigned_battery_energy_wh=round(float(bat_energy), 2) if bat_energy is not None else None,
+        safety_buffer_pct=20,
+        all_routes_count=len(routes_br),
+        feasible_routes_count=sum(1 for b in routes_br if b.feasible),
+        routes_br=routes_br,
+    )
+
+
+async def build_analyze_drone_explanation(
+    db: AsyncSession,
+    order: Order,
+    drone_obj: Optional[Drone],
+    routes_schemas: list[RouteOptionSchema],
+    total_payload_kg: float,
+    eff_origin_hub_id: int,
+    compat_models_map: Optional[dict[str, list[str]]] = None,
+    assigned_battery: Optional[Battery] = None,
+) -> tuple[Optional[NaturalLanguageShapExplanation], Optional[DroneBusinessRuleSummary]]:
+    """
+    Sinh `drone_explanation` (SHAP tự nhiên) và `business_rules_summary` cho bước `/mission-planning/analyze`
+    kể cả khi Operator giữ mặc định hoặc tự đổi Drone/Pin trên UI.
+    """
+    if drone_obj is None:
+        return None, None
+
+    if compat_models_map is None:
+        compat_models_map = await get_compatible_battery_models_map(db)
+    compat_models = resolve_compatible_models_from_map(compat_models_map, drone_obj.model)
+    br_summary = build_drone_business_rule_summary(
+        drone=drone_obj,
+        order_payload_kg=total_payload_kg,
+        compatible_battery_models=compat_models,
+        routes_schemas=routes_schemas,
+        assigned_battery=assigned_battery,
+    )
+
+    hubs = await get_all_hubs_cached(db)
+    hub_dict = {h.id: h for h in hubs}
+    origin_hub = hub_dict.get(eff_origin_hub_id)
+    d_hub = hub_dict.get(drone_obj.current_hub_id)
+
+    rec_route = next((r for r in routes_schemas if r.recommended and r.feasible), None) or (
+        routes_schemas[0] if routes_schemas else None
+    )
+    is_local = drone_obj.current_hub_id == eff_origin_hub_id
+    deadhead_km = 0.0
+    if not is_local and d_hub and origin_hub:
+        deadhead_km = round(
+            haversine_distance(d_hub.latitude or 0.0, d_hub.longitude or 0.0, origin_hub.latitude or 0.0, origin_hub.longitude or 0.0),
+            2,
+        )
+
+    cap_kg = float(drone_obj.payload_capacity_kg or 0.0)
+    fit_ratio = (total_payload_kg / cap_kg) if (cap_kg > 0 and total_payload_kg > 0) else 1.0
+    util_pct = float(drone_obj.utilization_pct or 0.0)
+    rem_pct = int(rec_route.remainingBatteryPct or 0) if rec_route else 0
+    is_feasible_any = br_summary.feasible_routes_count > 0
+
+    reasons_selected: list[str] = []
+    if br_summary.is_available:
+        reasons_selected.append(f"Operational status is '{br_summary.operational_status}' (ready for mission assignment).")
+    else:
+        reasons_selected.append(f"Business Rule warning: operational status is '{br_summary.operational_status}' (not Available).")
+
+    if br_summary.payload_ok:
+        reasons_selected.append(
+            f"Airframe payload capacity ({cap_kg:.1f} kg) satisfies the {total_payload_kg:.2f} kg order load ({min(100, int(round(fit_ratio * 100)))}% load ratio)."
+        )
+    else:
+        reasons_selected.append(
+            f"Business Rule violation: max payload ({cap_kg:.2f} kg) is below order weight ({total_payload_kg:.2f} kg)."
+        )
+
+    if is_local:
+        reasons_selected.append(f"Stationed at departure hub ({origin_hub.name if origin_hub else f'Hub #{eff_origin_hub_id}'}) with 0.0 km positioning flight.")
+    else:
+        reasons_selected.append(f"Dispatched cross-hub from {d_hub.name if d_hub else f'Hub #{drone_obj.current_hub_id}'} ({deadhead_km:.2f} km deadhead).")
+
+    if br_summary.assigned_battery_id and is_feasible_any:
+        reasons_selected.append(
+            f"Battery {br_summary.assigned_battery_id} ({br_summary.assigned_battery_model or 'compatible'}, "
+            f"{br_summary.assigned_battery_energy_wh or 0:.1f} Wh) clears {br_summary.feasible_routes_count}/{br_summary.all_routes_count} routes "
+            f"with >=20% safety buffer ({rem_pct}% reserve on recommended route)."
+        )
+    elif not br_summary.assigned_battery_id:
+        reasons_selected.append(
+            f"No compatible active battery ({', '.join(compat_models) or 'N/A'}) available at departure hub."
+        )
+    else:
+        fail_msg = next((b.infeasible_reason for b in br_summary.routes_br if b.infeasible_reason), "Insufficient 20% battery buffer or weather alert")
+        reasons_selected.append(f"Route energy/safety check failed on all routes: {fail_msg}")
+
+    # So sánh nhanh tối đa 4 drone khác trong hệ thống để tạo why_not_others
+    peers_res = await db.execute(
+        select(Drone)
+        .where(Drone.id != drone_obj.id)
+        .order_by(Drone.current_hub_id == eff_origin_hub_id, Drone.id)
+        .limit(30)
+    )
+    peer_drones = list(peers_res.scalars().all())
+    # Ưu tiên local drones trước, rồi đến cross-hub đủ payload
+    peer_drones.sort(
+        key=lambda pd: (
+            0 if pd.current_hub_id == eff_origin_hub_id else 1,
+            0 if pd.status == DroneStatus.AVAILABLE else 1,
+            0 if float(pd.payload_capacity_kg or 0.0) >= total_payload_kg else 1,
+            pd.id,
+        )
+    )
+
+    why_not_others: list[AlternativeComparisonItem] = []
+    for pd in peer_drones[:5]:
+        pd_status = pd.status.value if hasattr(pd.status, "value") else str(pd.status or "")
+        pd_cap = float(pd.payload_capacity_kg or 0.0)
+        pd_hub = hub_dict.get(pd.current_hub_id)
+        pd_compat = resolve_compatible_models_from_map(compat_models_map, pd.model)
+        pd_label = f"{pd.id} ({pd.name} - {pd.model})"
+        if pd_status != DroneStatus.AVAILABLE.value:
+            pd_feasible = False
+            pd_reason = f"Disqualified: Drone status is '{pd_status}' (not Available)."
+        elif pd_cap < total_payload_kg:
+            pd_feasible = False
+            pd_reason = f"Disqualified: Max payload ({pd_cap:.2f} kg) is below order payload ({total_payload_kg:.2f} kg)."
+        elif pd.current_hub_id != eff_origin_hub_id and is_local:
+            pd_feasible = True
+            pd_reason = f"Alternative at {pd_hub.name if pd_hub else f'Hub #{pd.current_hub_id}'}: requires empty cross-hub positioning flight."
+        else:
+            pd_feasible = True
+            pd_reason = (
+                f"Alternative at {pd_hub.name if pd_hub else f'Hub #{pd.current_hub_id}'}: "
+                f"{pd_cap:.1f} kg capacity, compatible batteries [{', '.join(pd_compat) or 'N/A'}], "
+                f"{float(pd.utilization_pct or 0.0):.1f}% fleet utilization."
+            )
+        why_not_others.append(
+            AlternativeComparisonItem(
+                id=pd.id,
+                label=pd_label,
+                feasible=pd_feasible,
+                reason=pd_reason,
+            )
+        )
+
+    summary = (
+        f"Drone {drone_obj.id} ({drone_obj.name}, {cap_kg:.1f} kg, status '{br_summary.operational_status}') "
+        f"supports compatible batteries [{', '.join(compat_models) or 'Standard'}] and clears "
+        f"{br_summary.feasible_routes_count}/{br_summary.all_routes_count} route options with a 20% safety reserve."
+    )
+
+    return (
+        NaturalLanguageShapExplanation(
+            selected_id=drone_obj.id,
+            selected_label=f"{drone_obj.id} ({drone_obj.name} - {drone_obj.model})",
+            summary=summary,
+            reasons_selected=reasons_selected,
+            why_not_others=why_not_others,
+        ),
+        br_summary,
+    )
+
+
 async def _evaluate_fleet_for_order(
     db: AsyncSession,
     order_id: str,
@@ -1194,6 +1470,7 @@ async def _evaluate_fleet_for_order(
         "raw_list": raw_list,
         "drone_shap": drone_shap,
         "battery_shap": battery_shap,
+        "compat_cache": compat_cache,
     }
 
 
@@ -1370,16 +1647,31 @@ async def recommend_resources_for_order(
             leg1_demand_wh=d_leg1_wh,
             selected_bat_id=(best_battery.id if is_d_rec else None),
         )
+        d_status_str = d_obj.status.value if hasattr(d_obj.status, "value") else str(d_obj.status or "")
+        d_compat_models = resolve_compatible_models_from_map(ctx["compat_cache"], d_obj.model)
+        d_route_brs = [
+            build_route_business_rule_check(
+                route=r_s,
+                payload_ok=float(d_obj.payload_capacity_kg or 0.0) >= total_payload_kg,
+                is_available=(d_status_str == DroneStatus.AVAILABLE.value),
+                drone_status_label=d_status_str,
+                order_payload_kg=total_payload_kg,
+                max_payload_kg=float(d_obj.payload_capacity_kg or 0.0),
+            )
+            for r_s in (ev.get("routes_schemas") or [])
+        ]
         available_drones.append(
             CandidateDroneOption(
                 id=d_obj.id,
                 name=d_obj.name or d_obj.id,
                 model=d_obj.model or "",
+                operational_status=d_status_str,
                 current_hub_id=d_obj.current_hub_id,
                 current_hub_name=ev["hub_name"],
                 is_local=ev["is_local"],
                 deadhead_km=ev["deadhead_km"],
                 payload_capacity_kg=float(d_obj.payload_capacity_kg or 0.0),
+                compatible_battery_models=d_compat_models,
                 is_recommended=is_d_rec,
                 feasible=ev["is_feasible"],
                 infeasible_reason=None if ev["is_feasible"] else ev["infeasible_reason"],
@@ -1388,32 +1680,40 @@ async def recommend_resources_for_order(
                     else _compare_drone_vs_winner(ev, chosen_d_eval, total_payload_kg)
                 ),
                 eligible_batteries=bat_opts,
+                route_br_checks=d_route_brs,
             )
         )
 
     for nbd in ctx["local_no_bat_drones"]:
         d_hub = hub_dict.get(nbd.current_hub_id)
+        nbd_status = nbd.status.value if hasattr(nbd.status, "value") else str(nbd.status or "")
+        nbd_compat = resolve_compatible_models_from_map(ctx["compat_cache"], nbd.model)
         available_drones.append(
             CandidateDroneOption(
                 id=nbd.id,
                 name=nbd.name or nbd.id,
                 model=nbd.model or "",
+                operational_status=nbd_status,
                 current_hub_id=nbd.current_hub_id,
                 current_hub_name=d_hub.name if d_hub else None,
                 is_local=True,
                 deadhead_km=0.0,
                 payload_capacity_kg=float(nbd.payload_capacity_kg or 0.0),
+                compatible_battery_models=nbd_compat,
                 is_recommended=False,
                 feasible=False,
                 infeasible_reason="No unreserved compatible active battery (>0% charge) available at departure hub.",
                 selection_reason="Disqualified: No unreserved compatible active battery available at departure hub.",
                 eligible_batteries=[],
+                route_br_checks=[],
             )
         )
 
     for ud in ctx["under_payload_drones"]:
         d_hub = hub_dict.get(ud.current_hub_id)
         is_u_local = ud.current_hub_id == ctx["eff_origin_hub_id"]
+        ud_status = ud.status.value if hasattr(ud.status, "value") else str(ud.status or "")
+        ud_compat = resolve_compatible_models_from_map(ctx["compat_cache"], ud.model)
         reason_str = (
             f"Maximum payload capacity ({float(ud.payload_capacity_kg or 0):.2f} kg) "
             f"is below order payload ({total_payload_kg:.2f} kg)."
@@ -1423,16 +1723,19 @@ async def recommend_resources_for_order(
                 id=ud.id,
                 name=ud.name or ud.id,
                 model=ud.model or "",
+                operational_status=ud_status,
                 current_hub_id=ud.current_hub_id,
                 current_hub_name=d_hub.name if d_hub else None,
                 is_local=is_u_local,
                 deadhead_km=0.0,
                 payload_capacity_kg=float(ud.payload_capacity_kg or 0.0),
+                compatible_battery_models=ud_compat,
                 is_recommended=False,
                 feasible=False,
                 infeasible_reason=reason_str,
                 selection_reason=f"Disqualified: {reason_str}",
                 eligible_batteries=[],
+                route_br_checks=[],
             )
         )
 

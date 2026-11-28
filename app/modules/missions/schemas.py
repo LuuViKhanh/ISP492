@@ -1,5 +1,5 @@
 ﻿from pydantic import BaseModel, field_validator
-from typing import Dict, Optional, Union, Any
+from typing import Dict, Optional, Union, Any, Literal
 from datetime import datetime
 from app.modules.missions.models import MissionStatus
 
@@ -141,6 +141,47 @@ class AIExplanationSchema(BaseModel):
     summary: str
 
 
+class RouteBusinessRuleCheck(BaseModel):
+    """Bảng kiểm tra Business Rule (BR) cho 1 tuyến bay của Drone."""
+    route_id: str
+    strategy_code: str  # ECO | FAST | DETOUR | SAFE | DISPATCH
+    display_title: Optional[str] = None
+    route_string: Optional[str] = None
+    required_energy_wh: float = 0.0
+    safety_buffer_pct: int = 20
+    required_with_buffer_wh: float = 0.0
+    available_energy_wh: float = 0.0
+    battery_consumption_pct: int = 0
+    remaining_battery_pct: int = 0
+    meets_20pct_buffer: bool = True
+    relay_batteries_ok: bool = True
+    weather_safe: bool = True
+    feasible: bool = True
+    infeasible_reason: Optional[str] = None
+
+
+class DroneBusinessRuleSummary(BaseModel):
+    """Bảng tổng hợp Business Rule (BR) của Drone trên cả 3 tuyến bay."""
+    drone_id: str
+    drone_name: str
+    drone_model: str
+    operational_status: str
+    is_available: bool = True
+    max_payload_kg: float = 0.0
+    order_payload_kg: float = 0.0
+    payload_ok: bool = True
+    compatible_battery_models: list[str] = []
+    has_compatible_battery: bool = True
+    assigned_battery_id: Optional[str] = None
+    assigned_battery_serial: Optional[str] = None
+    assigned_battery_model: Optional[str] = None
+    assigned_battery_energy_wh: Optional[float] = None
+    safety_buffer_pct: int = 20
+    all_routes_count: int = 0
+    feasible_routes_count: int = 0
+    routes_br: list[RouteBusinessRuleCheck] = []
+
+
 class RouteOptionSchema(BaseModel):
     routeId: str
     route_string: str
@@ -191,6 +232,7 @@ class RouteOptionSchema(BaseModel):
     corridor_type: Optional[str] = None
     differentiator_tag: Optional[str] = None
     comparison_vs_recommended: Optional[Dict[str, Any]] = None
+    business_rule_check: Optional[RouteBusinessRuleCheck] = None
 
 
 class MissionResponse(BaseModel):
@@ -258,6 +300,8 @@ class MissionResponse(BaseModel):
     relay_battery_status: list[HubBatteryStatus] = []
     scheduled_route: Optional[RouteOptionSchema] = None
     routes: list[RouteOptionSchema] = []
+    route_override_info: Optional[Dict[str, Any]] = None
+    late_delivery_compensation: Optional[Dict[str, Any]] = None
 
     class Config:
         from_attributes = True
@@ -405,16 +449,19 @@ class CandidateDroneOption(BaseModel):
     id: str
     name: str
     model: str
+    operational_status: Optional[str] = None
     current_hub_id: Optional[int] = None
     current_hub_name: Optional[str] = None
     is_local: bool = True
     deadhead_km: float = 0.0
     payload_capacity_kg: float = 0.0
+    compatible_battery_models: list[str] = []
     is_recommended: bool = False
     feasible: bool = True
     infeasible_reason: Optional[str] = None
     selection_reason: Optional[str] = None
     eligible_batteries: list[CandidateBatteryOption] = []
+    route_br_checks: list[RouteBusinessRuleCheck] = []
 
 
 class RecommendResourcesRequest(BaseModel):
@@ -468,6 +515,11 @@ class MissionPlanningAnalyzeResponse(BaseModel):
     pickupHubCode: Optional[str] = None
     routes: list[RouteOptionSchema]
     route_explanation: Optional[NaturalLanguageShapExplanation] = None
+    drone_explanation: Optional[NaturalLanguageShapExplanation] = None
+    business_rules_summary: Optional[DroneBusinessRuleSummary] = None
+
+RouteOverrideReasonType = Literal["WEATHER_SAFETY", "OPERATOR_DECISION", "RESOURCE_CONSTRAINT"]
+
 
 class MissionCreateRequest(BaseModel):
     orderId: str
@@ -483,6 +535,8 @@ class MissionCreateRequest(BaseModel):
     predicted_energy_wh: Optional[float] = None
     predicted_duration_min: Optional[int] = None
     bundledOrderIds: Optional[list[str]] = None
+    route_override_reason_type: Optional[RouteOverrideReasonType] = None
+    route_override_note: Optional[str] = None
 
 
 
@@ -700,11 +754,14 @@ def build_order_proof_image_entry(
         dict: Phần tử để append vào mảng
     """
     from app.core.timezone import get_vn_naive_datetime
-    
+    from app.shared.image_storage import normalize_and_store_image
+
+    stored_url = normalize_and_store_image(proof_image_url, category="proofs")
+
     return {
         "stage": stage,
         "checklist": checklist or [],
-        "proof_image_url": proof_image_url,
+        "proof_image_url": stored_url,
         "hub_id": hub_id,
         "mission_id": mission_id,
         "drone_id": drone_id,

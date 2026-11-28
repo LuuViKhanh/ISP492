@@ -46,6 +46,8 @@
 | details_json | JSONB | Nullable |
 | created_at | TIMESTAMPTZ | Non-nullable, Default `now()` |
 
+> Index: `idx_activity_logs_resource_created (resource_type, resource_id, created_at DESC)` phục vụ truy vấn nhanh lịch sử hình ảnh minh chứng theo `order_id` / `drone_id` / `battery_id` / `work_order_id`.
+
 ### 3. Bảng ai_predictions
 | Cột | Kiểu dữ liệu | Khóa / Ràng buộc |
 | :--- | :--- | :--- |
@@ -73,6 +75,7 @@
 | battery_model | VARCHAR(100) | Nullable (`DJI TB48D` / `Aurelia UltraPower 12S` / `DJI DB2000`) |
 | last_charged_at | TIMESTAMP | Nullable |
 | work_order_id | INTEGER | **FK** (`work_orders.id`), Nullable |
+| image_url | TEXT | Nullable (Ảnh hiện trạng / minh chứng gắn pin mới nhất) |
 
 ### 5. Bảng battery_model_catalog
 Catalog model pin chuẩn với giá nhập và danh sách dòng drone tương thích.
@@ -103,6 +106,7 @@ Catalog model pin chuẩn với giá nhập và danh sách dòng drone tương t
 | utilization_pct | FLOAT | Nullable |
 | total_flight_hours | FLOAT | Non-nullable, Default `0.0` (Backfill từ giờ bay của các mission đã hoàn thành) |
 | last_maintenance_at | TIMESTAMP | Nullable |
+| image_url | TEXT | Nullable (Ảnh hiện trạng / minh chứng trạng thái Drone mới nhất) |
 
 > **Quy tắc chuẩn hóa tên hiển thị Drone (drones.name):**
 > - **Light (<= 1.0kg - DJI Matrice 100 / Mã ID `M100`)**: Swift XX (Swift 01 - Swift 72)
@@ -283,6 +287,7 @@ Số lượng linh kiện / vật tư tại từng Hub. Không có kho trung tâ
 | refund_reason | VARCHAR(255) | Nullable |
 | refund_status | VARCHAR(50) | Nullable (`refund_status_enum`), Default `'PENDING'` |
 | cancellation_reason | VARCHAR(500) | Nullable |
+| proof_images_json | JSONB | Nullable, Default `'[]'` (Mảng các mốc ảnh & checklist hành trình kiện hàng theo `order_id`) |
 
 ### 16. Bảng part_categories
 Danh mục loại linh kiện / vật tư — dùng chung toàn hệ thống.
@@ -396,6 +401,8 @@ Ghi lại sự kiện tự động của hệ thống: background workers, cron 
 | record_completed_at | TIMESTAMP | Nullable (Hợp nhất từ maintenance_records) |
 | inspection_items_json | JSONB | Nullable, Default `'[]'` (Hợp nhất từ maintenance_inspection_items) |
 | status_logs_json | JSONB | Nullable, Default `'[]'` (Hợp nhất từ work_order_logs) |
+| proof_image_url | TEXT | Nullable (Ảnh minh chứng kiểm tra Work Order) |
+| parts_replaced_proof_url | TEXT | Nullable (Ảnh minh chứng thay linh kiện) |
 | created_at | TIMESTAMPTZ | Nullable, Default `now()` |
 
 ### 22. Bảng replacement_requests
