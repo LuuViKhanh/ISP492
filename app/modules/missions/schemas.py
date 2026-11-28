@@ -627,3 +627,88 @@ class AutoDispatchResponse(BaseModel):
     available_routes: list[RouteOptionSchema] = []
     xai_shap_report: AutoDispatchXAIReport
     mission: Optional[MissionResponse] = None
+
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Mục 8: Order Lifecycle Proof Images & Checklists
+# ═════════════════════════════════════════════════════════════════════════════
+
+class OrderProofImageCreate(BaseModel):
+    """Request body để ghi hình ảnh minh chứng vào 4 mốc trong vòng đời đơn hàng."""
+    stage: str  # PACKAGE_RECEIVED_AT_ORIGIN_HUB | PACKAGE_LOADED_TO_DRONE | PACKAGE_UNLOADED_FROM_DRONE | CUSTOMER_PICKUP_CONFIRMED
+    checklist: Optional[list[dict]] = None  # [{item: str, checked: bool, note: str}]
+    proof_image_url: Optional[str] = None  # Base64 Data URL: "data:image/jpeg;base64,..."
+    hub_id: Optional[int] = None
+    mission_id: Optional[str] = None
+    drone_id: Optional[str] = None
+    note: Optional[str] = None
+
+
+class OrderProofImageResponse(BaseModel):
+    """Một phần tử trong mảng order_proof_images."""
+    stage: str
+    checklist: Optional[list[dict]] = None
+    proof_image_url: Optional[str] = None
+    hub_id: Optional[int] = None
+    mission_id: Optional[str] = None
+    drone_id: Optional[str] = None
+    note: Optional[str] = None
+    technician_id: Optional[str] = None
+    recorded_at: datetime
+
+
+class OrderProofImagesResponse(BaseModel):
+    """Mảng toàn bộ hình ảnh minh chứng của một đơn hàng."""
+    order_id: str
+    proof_images: list[OrderProofImageResponse] = []
+    
+    class Config:
+        from_attributes = True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper functions for Mục 8
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_order_proof_image_entry(
+    stage: str,
+    checklist: Optional[list[dict]] = None,
+    proof_image_url: Optional[str] = None,
+    hub_id: Optional[int] = None,
+    mission_id: Optional[str] = None,
+    drone_id: Optional[str] = None,
+    note: Optional[str] = None,
+    technician_id: Optional[str] = None,
+    recorded_at: Optional[datetime] = None,
+) -> dict:
+    """
+    Xây dựng một phần tử hình ảnh minh chứng để append vào mảng order_proof_images.
+    
+    Args:
+        stage: Mốc vòng đời (PACKAGE_RECEIVED_AT_ORIGIN_HUB, PACKAGE_LOADED_TO_DRONE, etc.)
+        checklist: Danh sách kiểm tra ({item, checked, note})
+        proof_image_url: Base64 URL hình ảnh
+        hub_id: Hub ID nơi xử lý
+        mission_id: Mission ID (nếu có)
+        drone_id: Drone ID (nếu có)
+        note: Ghi chú thêm
+        technician_id: ID technician thực hiện
+        recorded_at: Thời gian ghi nhận
+    
+    Returns:
+        dict: Phần tử để append vào mảng
+    """
+    from app.core.timezone import get_vn_naive_datetime
+    
+    return {
+        "stage": stage,
+        "checklist": checklist or [],
+        "proof_image_url": proof_image_url,
+        "hub_id": hub_id,
+        "mission_id": mission_id,
+        "drone_id": drone_id,
+        "note": note,
+        "technician_id": technician_id,
+        "recorded_at": (recorded_at or get_vn_naive_datetime()).isoformat(),
+    }

@@ -625,6 +625,22 @@ async def create_incident(
             source="INCIDENT",
             incident_id=incident.id,
             title=f"Incident #{incident.id}: {body.description[:50]}",
+            description=(
+                f"INCIDENT REPORT #{incident.id}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Drone: {body.drone_id}\n"
+                f"Mission: {body.mission_id}\n"
+                f"Severity: {body.severity}\n"
+                f"Reported at: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"Reporter: {user.email if 'user' in locals() else 'System'}\n"
+                f"\nINCIDENT DETAILS:\n"
+                f"{body.description}\n"
+                f"\nACTION REQUIRED:\n"
+                f"- Inspect drone #{body.drone_id} for damage\n"
+                f"- Review flight logs and sensor data\n"
+                f"- Document findings and repair if needed\n"
+                f"- Test drone before next flight"
+            ),
             status="PENDING",
             created_at=now.replace(tzinfo=None),
         )
@@ -6097,6 +6113,23 @@ async def emergency_land(
         incident_id=incident.id,
         mission_id=str(mission.id),
         title=f"Emergency Landing — Drone #{mission.drone_id} requires immediate inspection",
+        description=(
+            f"EMERGENCY LANDING ALERT #{incident.id}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Drone: {mission.drone_id}\n"
+            f"Mission: {mission.id}\n"
+            f"Order: {mission.order_id}\n"
+            f"Landing triggered at: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"\nREASON FOR LANDING:\n"
+            f"{body.reason}\n"
+            f"\nCRITICAL ACTIONS:\n"
+            f"✓ Immediate visual inspection of drone for external damage\n"
+            f"✓ Check flight logs, IMU, and sensor data for anomalies\n"
+            f"✓ Verify battery health and electrical connections\n"
+            f"✓ Run full self-test before next flight\n"
+            f"✓ Update maintenance log with findings\n"
+            f"\nDO NOT FLY until inspection completed and approved."
+        ),
         status="Pending",
         created_at=now,
     )
@@ -6506,6 +6539,24 @@ async def execute_mission_failsafe(
             incident_id=incident.id,
             mission_id=str(mission.id),
             title=f"Failsafe Emergency Landing — Drone #{mission.drone_id} requires immediate inspection",
+            description=(
+                f"FAILSAFE EMERGENCY LANDING ALERT #{incident.id}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Drone: {mission.drone_id}\n"
+                f"Mission: {mission.id}\n"
+                f"Order: {mission.order_id}\n"
+                f"Failsafe triggered at: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"\nFAILSAFE TRIGGER REASON:\n"
+                f"{body.reason}\n"
+                f"\nSYSTEM DIAGNOSIS REQUIRED:\n"
+                f"✓ Check failsafe system logs and telemetry data\n"
+                f"✓ Inspect drone for physical damage\n"
+                f"✓ Verify GPS, compass, and barometer calibration\n"
+                f"✓ Test remote link and failsafe thresholds\n"
+                f"✓ Update firmware if necessary\n"
+                f"✓ Perform complete pre-flight check\n"
+                f"\nDO NOT FLY until root cause identified and resolved."
+            ),
             status="Pending",
             created_at=now,
         )
@@ -6622,6 +6673,27 @@ async def execute_mission_failsafe(
         incident_id=incident.id,
         mission_id=str(mission.id),
         title=f"Failsafe Divert — Drone #{mission.drone_id} landed at {target_hub.name} for battery inspection",
+        description=(
+            f"FAILSAFE DIVERT ALERT #{incident.id}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Drone: {mission.drone_id}\n"
+            f"Mission: {mission.id}\n"
+            f"Order: {mission.order_id}\n"
+            f"Divert triggered at: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"\nFLIGHT ROUTE CHANGE:\n"
+            f"Original destination: {mission.destination_hub_id if 'mission' in locals() else 'Unknown'}\n"
+            f"Emergency divert hub: {target_hub.name} (#{target_hub.id})\n"
+            f"\nREASON FOR DIVERT:\n"
+            f"{body.reason}\n"
+            f"\nMAINTENANCE CHECKLIST:\n"
+            f"✓ Inspect battery pack for damage/swelling\n"
+            f"✓ Check battery voltage and cell balance\n"
+            f"✓ Review power draw during flight\n"
+            f"✓ Examine propellers and motor for strain\n"
+            f"✓ Clear any error logs from failsafe system\n"
+            f"✓ Determine if battery replacement needed\n"
+            f"\nDrone grounded until battery inspection completed."
+        ),
         status="Pending",
         created_at=now,
     )

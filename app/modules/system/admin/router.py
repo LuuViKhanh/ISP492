@@ -751,3 +751,89 @@ async def trigger_next_flight_incident_admin(
     )
     return SimulatorTriggerIncidentResponse(message=msg, config=SimulatorConfigResponse(**cfg))
 
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Mục 8: Order Lifecycle Proof Images & Checklists - Full Audit Trail
+# ═════════════════════════════════════════════════════════════════════════════
+
+@router.get("/orders/{order_id}/proof-images", summary="Get Order Proof Images & Checklists Audit Trail")
+async def get_order_proof_images_audit_trail(
+    order_id: str,
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Lấy toàn bộ lịch sử hình ảnh minh chứng & checklist của một đơn hàng theo 4 mốc:
+    1. PACKAGE_RECEIVED_AT_ORIGIN_HUB - nhận tại hub gốc
+    2. PACKAGE_LOADED_TO_DRONE - gắn lên drone
+    3. PACKAGE_UNLOADED_FROM_DRONE - tháo khỏi drone
+    4. CUSTOMER_PICKUP_CONFIRMED - khách tới lấy
+    
+    Trả về:
+    - order_id: Mã đơn hàng
+    - order_status: Trạng thái đơn hàng hiện tại
+    - proof_images: Mảng toàn bộ mốc ảnh theo thứ tự thời gian
+      - stage: Tên mốc (PACKAGE_RECEIVED_AT_ORIGIN_HUB, etc.)
+      - recorded_at: Thời gian ghi nhận
+      - technician_id: ID technician thực hiện
+      - hub_id: Hub nơi xử lý
+      - mission_id: Mission ID (nếu có)
+      - drone_id: Drone ID (nếu có)
+      - checklist: Danh sách kiểm tra
+      - proof_image_url: Base64 URL ảnh
+      - note: Ghi chú thêm
+    - activity_logs: Lịch sử chi tiết từ activity_logs (resource_type=order)
+    """
+    from app.modules.missions.models import Order
+    from app.modules.system.models import ActivityLog
+    
+    # Lấy Order
+    order_res = await db.execute(
+        select(Order).where(Order.id == order_id)
+    )
+    order = order_res.scalar_one_or_none()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Order '{order_id}' not found")
+    
+    # Lấy activity_logs liên quan (resource_type=order, resource_id=order_id)
+    activity_logs_res = await db.execute(
+        select(ActivityLog)
+        .where(
+            ActivityLog.resource_type == "order",
+            ActivityLog.resource_id == order_id,
+            ActivityLog.action == "RECORD_PROOF_IMAGE"
+        )
+        .order_by(ActivityLog.created_at.asc())
+    )
+    activity_logs = activity_logs_res.scalars().all()
+    
+    # Build response
+    proof_images = order.proof_images_json if order.proof_images_json else []
+    
+    return {
+        "order_id": order.id,
+        "order_status": order.status.value if hasattr(order.status, "value") else str(order.status),
+        "payment_status": order.payment_status.value if hasattr(order.payment_status, "value") else str(order.payment_status),
+        "created_at": order.created_at.isoformat() if order.created_at else None,
+        "origin_hub_id": order.origin_hub_id,
+        "destination_hub_id": order.destination_hub_id,
+        "package_label": order.package_label,
+        "package_type": order.package_type,
+        "payload_kg": order.payload_kg,
+        "proof_images": proof_images,
+        "proof_images_count": len(proof_images),
+        "stages_recorded": sorted(list(set(p.get("stage") for p in proof_images if p.get("stage")))),
+        "activity_logs": [
+            {
+                "id": log.id,
+                "user_id": log.user_id,
+                "user_email": log.user_email,
+                "action": log.action,
+                "description": log.description,
+                "details": log.details_json,
+                "created_at": log.created_at.isoformat() if log.created_at else None,
+            }
+            for log in activity_logs
+        ],
+    }

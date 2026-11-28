@@ -21,6 +21,7 @@ from app.modules.dashboard.schemas import (
     AdminAI,
     AdminAlerts,
     AdminRatings,
+    AdminOrders,
 )
 from app.modules.dashboard.service import COMPLETED_STATUSES, now_naive
 
@@ -165,7 +166,7 @@ async def admin_dashboard(
         ai_e_sum += float(e_s or 0.0)
         ai_e_cnt += int(e_c or 0)
 
-    # 6. Gộp toàn bộ scalar counts & sums (Orders pending/refund, Expenses, AI distinct missions, Alerts, Incidents, Audit) vào 1 câu SQL duy nhất
+    # 6. Gộp toàn bộ scalar counts & sums (Orders pending/refund, Expenses, AI distinct missions, Alerts, Incidents, Audit, Order stats) vào 1 câu SQL duy nhất
     scalars_row = (await db.execute(
         select(
             select(func.coalesce(func.sum(Order.delivery_fee), 0.0))
@@ -198,6 +199,21 @@ async def admin_dashboard(
             select(func.count())
             .select_from(ActivityLog)
             .scalar_subquery(),
+            select(func.count())
+            .select_from(Order)
+            .scalar_subquery(),
+            select(func.count())
+            .select_from(Order)
+            .where(Order.status == "Delivered")
+            .scalar_subquery(),
+            select(func.count())
+            .select_from(Order)
+            .where(Order.payment_status == PaymentStatus.REFUNDED)
+            .scalar_subquery(),
+            select(func.count())
+            .select_from(Order)
+            .where(Order.status == "Cancelled")
+            .scalar_subquery(),
         )
     )).one()
 
@@ -208,6 +224,10 @@ async def admin_dashboard(
     pending_alerts = int(scalars_row[5] or 0)
     open_incidents = int(scalars_row[6] or 0)
     total_audit = int(scalars_row[7] or 0)
+    total_orders = int(scalars_row[8] or 0)
+    successful_orders = int(scalars_row[9] or 0)
+    refunded_orders = int(scalars_row[10] or 0)
+    cancelled_orders = int(scalars_row[11] or 0)
 
     gross_total = round(float(total_rev), 2)
     net_total = round(gross_total - total_expenses, 2)
@@ -250,6 +270,13 @@ async def admin_dashboard(
         five_star_pct=r_five_pct,
         low_rating_count=rating_stats.low or 0,
     )
+    
+    orders = AdminOrders(
+        total=total_orders,
+        successful_orders_count=successful_orders,
+        refunded_orders_count=refunded_orders,
+        cancelled_orders_count=cancelled_orders,
+    )
 
     return AdminDashboardResponse(
         revenue=revenue,
@@ -260,4 +287,5 @@ async def admin_dashboard(
         ai=ai,
         alerts=alerts,
         ratings=ratings,
+        orders=orders,
     )

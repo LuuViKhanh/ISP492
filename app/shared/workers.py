@@ -202,6 +202,26 @@ async def run_telemetry_signal_loss_watcher(db: AsyncSession):
             incident_id=inc.id,
             mission_id=str(mission.id),
             title="Telemetry signal lost (>10s)",
+            description=(
+                f"SIGNAL LOSS ALERT #{inc.id}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Drone: {mission.drone_id}\n"
+                f"Mission: {mission.id}\n"
+                f"Order: {mission.order_id}\n"
+                f"Signal lost at: {latest_log.timestamp if 'latest_log' in locals() else 'Unknown'}\n"
+                f"Loss duration: >10 seconds (Critical threshold exceeded)\n"
+                f"\nINCIDENT ANALYSIS:\n"
+                f"Complete telemetry signal loss - drone may be damaged or crashed.\n"
+                f"Last known location: GPS ({latest_log.latitude}, {latest_log.longitude}) if available\n"
+                f"\nIMMEDIATE ACTIONS:\n"
+                f"✓ Locate and visually inspect drone at last known position\n"
+                f"✓ Check for physical damage, battery leaks, water damage\n"
+                f"✓ Test telemetry module and antenna connections\n"
+                f"✓ Verify receiver pairing and signal strength\n"
+                f"✓ Update telemetry firmware if needed\n"
+                f"✓ Replace telemetry module if defective\n"
+                f"\nDrone grounded pending inspection and repair."
+            ),
             status="Pending",
             created_at=now
         )

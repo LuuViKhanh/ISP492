@@ -255,22 +255,28 @@ async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_async
 # ── Google OAuth ─────────────────────────────────────────────────────────────
 
 @router.get("/google")
-async def google_login(client_type: str = "web"):
+async def google_login(client_type: str = None, state: str = None):
     """
     Bắt đầu quá trình đăng nhập qua Google.
     
     Query params:
-    - client_type: "web" (default) hoặc "mobile"
+    - client_type: "web" (default) hoặc "mobile" (alternative: use 'state' parameter)
+    - state: "mobile" hoặc "web" (alias cho client_type, từ FE mobile)
     
     Chuyển hướng người dùng đến trang xác thực của Google kèm state parameter.
     """
-    # Xác thực client_type
-    if client_type not in ("web", "mobile"):
-        client_type = "web"
+    # Determine client_type từ 'state' query param hoặc 'client_type' param
+    # Priority: state > client_type > default "web"
+    if state and state in ("web", "mobile"):
+        client_type = state
+    elif client_type and client_type in ("web", "mobile"):
+        pass  # Dùng client_type đã được set
+    else:
+        client_type = "web"  # Default
     
     # Tạo state token để bảo vệ CSRF
-    state = secrets.token_urlsafe(32)
-    oauth_state_store[state] = {
+    csrf_state = secrets.token_urlsafe(32)
+    oauth_state_store[csrf_state] = {
         "client_type": client_type,
         "timestamp": __import__("time").time()
     }
@@ -282,8 +288,10 @@ async def google_login(client_type: str = "web"):
     url = GOOGLE_AUTH_URL.format(
         client_id=settings.GOOGLE_CLIENT_ID,
         redirect_uri=redirect_uri,
-        state=state,
+        state=csrf_state,
     )
+    
+    print(f"[AUTH] Google Login: client_type={client_type}, csrf_state={csrf_state[:8]}...")
     return RedirectResponse(url)
 
 
@@ -295,26 +303,36 @@ async def google_callback(code: str, state: str, db: AsyncSession = Depends(get_
     
     Query params:
     - code: Authorization code từ Google
-    - state: State parameter để xác định client type (web/mobile)
+    - state: CSRF State parameter từ Google (để xác định client type từ oauth_state_store)
     """
+    print(f"[AUTH] Google Callback received: state={state[:8]}... from Google")
+    
     # Kiểm tra state để xác định client type
     state_info = oauth_state_store.get(state)
     if not state_info:
+        print(f"[AUTH] INVALID STATE: {state} not found in oauth_state_store")
+        print(f"[AUTH] Available states: {list(oauth_state_store.keys())[:3]}...")
         return RedirectResponse(url=f"{settings.GOOGLE_CALLBACK_WEB}?error=invalid_state")
     
     # Xóa state sau khi sử dụng (one-time use)
     del oauth_state_store[state]
     
     client_type = state_info.get("client_type", "web")
+    print(f"[AUTH] State resolved to client_type: {client_type}")
     
     try:
         google_info = await service.exchange_google_code(code)
+        print(f"[AUTH] Google code exchanged successfully for user: {google_info.get('email')}")
     except Exception as e:
         print(f"[AUTH] Google exchange code failed: {e}")
         if client_type == "mobile":
-            return RedirectResponse(url=f"{settings.GOOGLE_CALLBACK_MOBILE}?error=google_failed")
+            error_url = f"{settings.GOOGLE_CALLBACK_MOBILE}?error=google_failed"
+            print(f"[AUTH] Redirect mobile error URL: {error_url}")
+            return RedirectResponse(url=error_url)
         else:
-            return RedirectResponse(url=f"{settings.GOOGLE_CALLBACK_WEB}?error=google_failed")
+            error_url = f"{settings.GOOGLE_CALLBACK_WEB}?error=google_failed"
+            print(f"[AUTH] Redirect web error URL: {error_url}")
+            return RedirectResponse(url=error_url)
 
     user = await service.get_or_create_google_user(db, google_info)
     
@@ -331,6 +349,7 @@ async def google_callback(code: str, state: str, db: AsyncSession = Depends(get_
             f"&token_type=bearer"
             f"&role={user.role.value.lower()}"
         )
+        print(f"[AUTH] Mobile callback: redirect_url={redirect_url[:80]}...")
     else:
         # Web URL
         redirect_url = (
@@ -340,5 +359,6 @@ async def google_callback(code: str, state: str, db: AsyncSession = Depends(get_
             f"&token_type=bearer"
             f"&role={user.role.value.lower()}"
         )
+        print(f"[AUTH] Web callback: redirect_url={redirect_url[:80]}...")
     
     return RedirectResponse(url=redirect_url)

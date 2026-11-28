@@ -132,6 +132,13 @@ class AdminRatings(BaseModel):
     low_rating_count: int      # Số đánh giá <= 2 sao (cần xem xét)
 
 
+class AdminOrders(BaseModel):
+    total: int
+    successful_orders_count: int  # Completed/Delivered orders
+    refunded_orders_count: int    # Refunded orders
+    cancelled_orders_count: int   # Cancelled orders
+
+
 class AdminDashboardResponse(BaseModel):
     revenue: AdminRevenue
     users: AdminUsers
@@ -141,3 +148,4 @@ class AdminDashboardResponse(BaseModel):
     ai: AdminAI
     alerts: AdminAlerts
     ratings: Optional[AdminRatings] = None
+    orders: Optional[AdminOrders] = None  # Order statistics (Mục 10.1.4)

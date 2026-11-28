@@ -17,6 +17,7 @@ from app.modules.missions.models import (
     OrderStatus,
     PaymentStatus,
 )
+from app.modules.missions.schemas import OrderProofImageCreate, build_order_proof_image_entry
 from app.modules.system.models import Hub
 from app.modules.fleet.models import Drone, Battery, batteries_status
 from app.modules.auth.models import User
@@ -224,7 +225,21 @@ async def get_outbound_deliveries(
                 "battery": row.battery_serial if is_at_hub else None,
                 "battery_model": row.battery_model if is_at_hub else None,
                 "created_at": row.created_at.isoformat() if row.created_at else None,
+                "order_proof_images": [],  # Will be populated below
             })
+
+        # ── Mục 8: Populate order_proof_images for each order ───────────────
+        order_ids = [item["order_id"] for item in items]
+        if order_ids:
+            orders_res = await db.execute(
+                select(Order).where(Order.id.in_(order_ids))
+            )
+            orders_map = {o.id: o for o in orders_res.scalars().all()}
+            for item in items:
+                order_obj = orders_map.get(item["order_id"])
+                if order_obj and order_obj.proof_images_json:
+                    item["order_proof_images"] = order_obj.proof_images_json
+
 
         return items
     except Exception as e:
@@ -235,6 +250,7 @@ async def get_outbound_deliveries(
 @deliveries_router.post("/outbound/{orderId}/receive")
 async def receive_outbound_delivery(
     orderId: str,
+    body: Optional[OrderProofImageCreate] = None,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db)
 ):
@@ -331,6 +347,48 @@ async def receive_outbound_delivery(
     order.origin_received_at = now
     order.origin_received_by = str(user.id)
     order.updated_at = now
+
+    # ── Mục 8: Log hình ảnh minh chứng PACKAGE_RECEIVED_AT_ORIGIN_HUB ────────
+    if body and body.proof_image_url:
+        proof_entry = build_order_proof_image_entry(
+            stage="PACKAGE_RECEIVED_AT_ORIGIN_HUB",
+            checklist=body.checklist,
+            proof_image_url=body.proof_image_url,
+            hub_id=order.origin_hub_id,
+            mission_id=None,  # Chưa có mission lúc receive
+            drone_id=None,
+            note=body.note,
+            technician_id=str(user.id),
+            recorded_at=now,
+        )
+        
+        # Thêm vào mảng proof_images_json của order
+        if not order.proof_images_json:
+            order.proof_images_json = []
+        order.proof_images_json.append(proof_entry)
+        
+        # Ghi log vào activity_logs với resource_type="order"
+        try:
+            from app.modules.system.models import ActivityLog
+            db.add(ActivityLog(
+                user_id=str(user.id),
+                user_email=user.email,
+                role=user.role.value if user.role else None,
+                action="RECORD_PROOF_IMAGE",
+                resource_type="order",
+                resource_id=order.id,
+                description=f"Recorded proof image at PACKAGE_RECEIVED_AT_ORIGIN_HUB stage",
+                status="success",
+                details_json={
+                    "stage": "PACKAGE_RECEIVED_AT_ORIGIN_HUB",
+                    "hub_id": order.origin_hub_id,
+                    "has_image": bool(body.proof_image_url),
+                    "checklist_items": len(body.checklist) if body.checklist else 0,
+                },
+                created_at=now,
+            ))
+        except Exception as e:
+            print(f"[ACTIVITY LOG ERROR] Failed to log proof image: {e}")
 
     # ── Gửi Notification báo Customer & Operators: Trạm đã nhận kiện hàng ─────
     try:
@@ -609,6 +667,68 @@ async def prepare_battery_for_delivery(
     if leg1:
         leg1.battery_id = battery.id
 
+    # ── Mục 9: Log battery installation history ────────────────────────────
+    if mission.battery_id:
+        try:
+            from app.modules.system.models import ActivityLog
+            battery_pct_before = None
+            # Get old battery pct if battery was swapped
+            if mission.battery_id != battery.id:
+                old_battery = await db.get(Battery, mission.battery_id)
+                battery_pct_before = old_battery.charge_level_pct if old_battery else None
+            
+            db.add(ActivityLog(
+                user_id=str(user.id),
+                user_email=user.email,
+                role=user.role.value if user.role else None,
+                action="BATTERY_INSTALLED",
+                resource_type="drone",
+                resource_id=mission.drone_id,
+                description=f"Battery {battery.id} installed on Drone {mission.drone_id} for Mission {mission.id}",
+                status="success",
+                details_json={
+                    "stage": "BATTERY_INSTALLED_ON_DRONE",
+                    "installed_battery_id": battery.id,
+                    "battery_pct": battery.charge_level_pct,
+                    "drone_id": mission.drone_id,
+                    "mission_id": mission.id,
+                    "hub_id": hub_id,
+                },
+                created_at=get_vn_naive_datetime(),
+            ))
+            
+            # Also log for battery resource
+            db.add(ActivityLog(
+                user_id=str(user.id),
+                user_email=user.email,
+                role=user.role.value if user.role else None,
+                action="BATTERY_INSTALLED",
+                resource_type="battery",
+                resource_id=battery.id,
+                description=f"Battery {battery.id} installed on Drone {mission.drone_id}",
+                status="success",
+                details_json={
+                    "stage": "BATTERY_INSTALLED_ON_DRONE",
+                    "battery_id": battery.id,
+                    "drone_id": mission.drone_id,
+                    "mission_id": mission.id,
+                    "hub_id": hub_id,
+                    "charge_level_pct": battery.charge_level_pct,
+                },
+                created_at=get_vn_naive_datetime(),
+            ))
+            
+            # Update battery image_url (most recent state)
+            if body and body.proof_image_url:
+                battery.image_url = body.proof_image_url
+            
+            # Update drone image_url
+            if body and body.proof_image_url:
+                drone.image_url = body.proof_image_url
+                
+        except Exception as e:
+            print(f"[ACTIVITY LOG ERROR] Failed to log battery installation: {e}")
+
     await db.commit()
     await db.refresh(mission)
     await db.refresh(battery)
@@ -686,6 +806,16 @@ async def get_confirmations(
             
         result = await db.execute(query.order_by(Mission.id.desc()))
         rows = result.all()
+        
+        # ── Mục 8: Populate order_proof_images ───────────────────────────────
+        order_ids = [row.order_id for row in rows if row.order_id]
+        orders_map = {}
+        if order_ids:
+            orders_res = await db.execute(
+                select(Order).where(Order.id.in_(order_ids))
+            )
+            orders_map = {o.id: o for o in orders_res.scalars().all()}
+        
         return [
             {
                 "id": row.id,
@@ -698,7 +828,8 @@ async def get_confirmations(
                 "battery": row.battery_serial,
                 "customer_name": row.customer_name,
                 "status": getattr(row.status, "value", row.status),
-                "handling_status": getattr(row.handling_status, "value", row.handling_status)
+                "handling_status": getattr(row.handling_status, "value", row.handling_status),
+                "order_proof_images": orders_map.get(row.order_id).proof_images_json if row.order_id and orders_map.get(row.order_id) else [],
             } for row in rows
         ]
     except Exception as e:
@@ -709,6 +840,7 @@ async def get_confirmations(
 @deliveries_router.post("/confirmations/{orderId}/confirm-pickup")
 async def confirm_pickup(
     orderId: str,
+    body: Optional[OrderProofImageCreate] = None,
     user: CurrentUser = Depends(allow_technician),
     db: AsyncSession = Depends(get_async_db)
 ):
@@ -741,6 +873,49 @@ async def confirm_pickup(
             order.destination_received_at = now
             order.destination_received_by = user.id
             order.updated_at = now
+
+            # ── Mục 8: Log hình ảnh minh chứng CUSTOMER_PICKUP_CONFIRMED ────────
+            if body and body.proof_image_url:
+                proof_entry = build_order_proof_image_entry(
+                    stage="CUSTOMER_PICKUP_CONFIRMED",
+                    checklist=body.checklist,
+                    proof_image_url=body.proof_image_url,
+                    hub_id=mission.destination_hub_id,
+                    mission_id=mission.id,
+                    drone_id=mission.drone_id,
+                    note=body.note,
+                    technician_id=str(user.id),
+                    recorded_at=now,
+                )
+                
+                # Thêm vào mảng proof_images_json của order
+                if not order.proof_images_json:
+                    order.proof_images_json = []
+                order.proof_images_json.append(proof_entry)
+                
+                # Ghi log vào activity_logs
+                try:
+                    from app.modules.system.models import ActivityLog
+                    db.add(ActivityLog(
+                        user_id=str(user.id),
+                        user_email=user.email,
+                        role=user.role.value if user.role else None,
+                        action="RECORD_PROOF_IMAGE",
+                        resource_type="order",
+                        resource_id=order.id,
+                        description=f"Recorded proof image at CUSTOMER_PICKUP_CONFIRMED stage for mission {mission.id}",
+                        status="success",
+                        details_json={
+                            "stage": "CUSTOMER_PICKUP_CONFIRMED",
+                            "mission_id": mission.id,
+                            "hub_id": mission.destination_hub_id,
+                            "has_image": bool(body.proof_image_url),
+                            "checklist_items": len(body.checklist) if body.checklist else 0,
+                        },
+                        created_at=now,
+                    ))
+                except Exception as e:
+                    print(f"[ACTIVITY LOG ERROR] Failed to log proof image for confirm-pickup: {e}")
     
     await db.commit()
     await db.refresh(mission)

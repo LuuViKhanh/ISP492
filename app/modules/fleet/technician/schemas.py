@@ -302,3 +302,113 @@ class HubInventoryDetailedResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Mục 9: Drone, Battery & Maintenance Proof Images & Checklists
+# ═════════════════════════════════════════════════════════════════════════════
+
+class BatteryHistoryEntry(BaseModel):
+    """Một bản ghi trong lịch sử pin - gắn/tháo/kiểm tra."""
+    stage: str  # BATTERY_INSTALLED_ON_DRONE | BATTERY_REMOVED_FROM_DRONE
+    action: str  # install | remove | inspection
+    removed_battery_id: Optional[str] = None  # Pin cũ được tháo
+    installed_battery_id: Optional[str] = None  # Pin mới được lắp
+    battery_pct_before: Optional[float] = None  # % pin trước tháo
+    battery_pct_after: Optional[float] = None  # % pin sau lắp
+    hub_id: Optional[int] = None  # Hub nơi xử lý
+    mission_id: Optional[str] = None  # Mission ID (nếu có)
+    drone_id: str  # Drone được xử lý
+    technician_id: Optional[str] = None  # Technician thực hiện
+    note: Optional[str] = None  # Ghi chú thêm
+    recorded_at: datetime  # Thời gian ghi nhận
+
+
+class DroneStatusChangeEntry(BaseModel):
+    """Một bản ghi thay đổi trạng thái drone."""
+    old_status: str  # Trạng thái cũ
+    new_status: str  # Trạng thái mới
+    reason: Optional[str] = None  # Lý do thay đổi
+    incident_id: Optional[int] = None  # Incident ID (nếu liên quan)
+    work_order_id: Optional[int] = None  # Work Order ID (nếu liên quan)
+    technician_id: Optional[str] = None  # Technician thực hiện
+    note: Optional[str] = None  # Ghi chú
+    recorded_at: datetime  # Thời gian ghi nhận
+
+
+class InspectionItem(BaseModel):
+    """Một item trong checklist kiểm tra."""
+    item: str  # Mô tả item (ví dụ: "Check motor left")
+    checked: bool = False  # Đã check hay chưa
+    status: Optional[str] = None  # OK | FAIL | REPAIR_NEEDED
+    note: Optional[str] = None  # Ghi chú chi tiết
+
+
+class WorkOrderProofImage(BaseModel):
+    """Hình ảnh minh chứng cho Work Order."""
+    type: str  # before | after | during | parts_replaced | incident_recovery
+    proof_image_url: Optional[str] = None  # Base64 Data URL
+    description: Optional[str] = None  # Mô tả ảnh
+    recorded_at: datetime  # Thời gian ghi
+
+
+class WorkOrderStatusLog(BaseModel):
+    """Log thay đổi trạng thái của Work Order."""
+    old_status: str
+    new_status: str
+    changed_by: Optional[str] = None  # User ID
+    reason: Optional[str] = None
+    changed_at: datetime
+
+
+class DefectType(str):
+    """Enum loại lỗi để auto-generate inspection_items_json."""
+    MOTOR_ESC = "MOTOR_ESC"  # Motor/ESC
+    SIGNAL_LOSS = "SIGNAL_LOSS"  # Telemetry/Signal Loss
+    BATTERY_BMS = "BATTERY_BMS"  # Battery/BMS
+    SENSOR_GPS = "SENSOR_GPS"  # Sensor/GPS
+    FRAME_DAMAGE = "FRAME_DAMAGE"  # Frame damage
+    PROPELLER_DAMAGE = "PROPELLER_DAMAGE"  # Propeller damage
+    OTHER = "OTHER"  # Other
+
+
+def build_inspection_items_from_defect_type(defect_type: str) -> list:
+    """Tự động sinh inspection_items_json dựa vào loại lỗi."""
+    templates = {
+        "MOTOR_ESC": [
+            {"item": "Check motor left", "checked": False},
+            {"item": "Check motor right", "checked": False},
+            {"item": "Check ESC connections", "checked": False},
+            {"item": "Test motor rotation (no load)", "checked": False},
+        ],
+        "SIGNAL_LOSS": [
+            {"item": "Check telemetry module", "checked": False},
+            {"item": "Check antenna", "checked": False},
+            {"item": "Test signal strength", "checked": False},
+            {"item": "Verify receiver pairing", "checked": False},
+        ],
+        "BATTERY_BMS": [
+            {"item": "Check battery voltage", "checked": False},
+            {"item": "Check battery cells balance", "checked": False},
+            {"item": "Inspect battery case for damage", "checked": False},
+            {"item": "Test BMS communication", "checked": False},
+        ],
+        "SENSOR_GPS": [
+            {"item": "Check GPS module", "checked": False},
+            {"item": "Check compass calibration", "checked": False},
+            {"item": "Check barometer", "checked": False},
+            {"item": "Verify IMU orientation", "checked": False},
+        ],
+        "FRAME_DAMAGE": [
+            {"item": "Inspect frame for cracks", "checked": False},
+            {"item": "Check arm alignment", "checked": False},
+            {"item": "Verify landing gear", "checked": False},
+        ],
+        "PROPELLER_DAMAGE": [
+            {"item": "Inspect all 4 propellers", "checked": False},
+            {"item": "Check propeller balance", "checked": False},
+            {"item": "Verify propeller mounting", "checked": False},
+        ],
+    }
+    return templates.get(defect_type, [{"item": "General inspection", "checked": False}])

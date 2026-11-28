@@ -857,13 +857,93 @@ async def get_drone_flight_history(
     )
 
 
-@router.get("/flights/{flight_id}", response_model=AdminFlightItemResponse, summary="Chi tiết chuyến bay (Modal Chi tiết Flight)")
+@router.get("/flights", response_model=list, summary="Lịch sử di chuyển toàn đội bay")
+async def get_admin_all_flights(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    status: Optional[str] = Query(None, description="Filter by mission status"),
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Lấy lịch sử di chuyển toàn đội bay (Admin view toàn hệ thống).
+    
+    Return danh sách missions kèm:
+    - flight_id, mission_id, route, departure, arrival, duration, energy, status
+    - legs chi tiết (MissionLeg nếu có)
+    - hub trung chuyển
+    - pin từng chặng
+    - telemetry & checkpoints ảnh
+    """
+    hubs_res = await db.execute(select(Hub))
+    hub_map = {h.id: h for h in hubs_res.scalars().all()}
+    
+    query = select(Mission).order_by(Mission.departed_at.desc().nullslast())
+    
+    # Filter by status if provided
+    if status:
+        query = query.where(Mission.status == status)
+    
+    query = query.limit(limit).offset(offset)
+    missions = (await db.execute(query)).scalars().all()
+    
+    flights = []
+    for m in missions:
+        dep = m.departed_at or m.start_time
+        arr = m.arrived_at or m.end_time
+        dur_min = None
+        if dep and arr:
+            delta = arr - dep
+            dur_min = max(1, int(delta.total_seconds() / 60))
+        
+        h1 = hub_map.get(m.origin_hub_id)
+        h2 = hub_map.get(m.destination_hub_id)
+        c1 = format_ui_code(h1.code if h1 else None, "HCM-01")
+        c2 = format_ui_code(h2.code if h2 else None, "HCM-02")
+        route_str = f"{c1} -> {c2}"
+        
+        dep_str = dep.strftime("%d/%m/%Y, %H:%M") if dep else None
+        arr_str = arr.strftime("%d/%m/%Y, %H:%M") if arr else None
+        
+        date_prefix = dep.strftime("%Y%m%d") if dep else "2026"
+        seq = m.id.split("-")[-1] if "-" in m.id else m.id
+        flt_id = f"FLT-{date_prefix}-{seq}"
+        st_val = m.status.value.upper() if hasattr(m.status, "value") else str(m.status).upper()
+        
+        flight_entry = {
+            "flight_id": flt_id,
+            "mission_id": m.id,
+            "drone_id": m.drone_id,
+            "route": route_str,
+            "departure": dep_str,
+            "arrival": arr_str,
+            "duration_minutes": dur_min,
+            "energy_wh": round(float(m.payload_weight or 1.0) * 91.2, 1) if m.payload_weight else None,
+            "status": st_val,
+            "battery_id": m.battery_id,
+            "origin_hub_id": m.origin_hub_id,
+            "destination_hub_id": m.destination_hub_id,
+            "payload_weight_kg": m.payload_weight,
+        }
+        flights.append(flight_entry)
+    
+    return flights
+
+
+@router.get("/flights/{flight_id}", response_model=dict, summary="Chi tiết chuyến bay kèm legs, hub trung chuyển, pin, telemetry")
 async def get_admin_flight_detail(
     flight_id: str,
     user: CurrentUser = Depends(allow_admin),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Xem chi tiết một chuyến bay theo mã FLT-... hoặc MSN-..."""
+    """
+    Xem chi tiết một chuyến bay theo mã FLT-... hoặc MSN-... kèm:
+    - flight_id, mission_id, route, departure, arrival, duration, energy, status
+    - legs chi tiết (MissionLeg nếu có)
+    - hub trung chuyển
+    - pin từng chặng
+    - telemetry & checkpoints ảnh
+    """
     target_msn_id = flight_id
     if flight_id.startswith("FLT-"):
         # Match theo mission ID tương ứng hoặc lấy mission mới nhất
@@ -905,16 +985,53 @@ async def get_admin_flight_detail(
         st_val = mission.status.value.upper() if hasattr(mission.status, "value") else str(mission.status).upper()
         date_prefix = dep.strftime("%Y%m%d") if dep else "2026"
         seq = mission.id.split("-")[-1] if "-" in mission.id else mission.id
-        return AdminFlightItemResponse(
-            flight_id=flight_id if flight_id.startswith("FLT-") else f"FLT-{date_prefix}-{seq}",
-            mission_id=mission.id,
-            route=f"{c1} -> {c2}",
-            departure=dep.strftime("%d/%m/%Y, %H:%M") if dep else None,
-            arrival=arr.strftime("%d/%m/%Y, %H:%M") if arr else None,
-            duration_minutes=dur_min,
-            energy_wh=round(float(energy_wh), 1) if energy_wh is not None else None,
-            status=st_val,
+        
+        # Lấy battery info
+        battery = None
+        if mission.battery_id:
+            battery = await db.get(Battery, mission.battery_id)
+        
+        # Lấy telemetry logs (checkpoints & ảnh)
+        telemetry_logs = []
+        tlog_query = (
+            select(TelemetryLog)
+            .where(TelemetryLog.mission_id == mission.id)
+            .order_by(TelemetryLog.timestamp.asc())
         )
+        tlogs = (await db.execute(tlog_query)).scalars().all()
+        for tlog in tlogs[:10]:  # Giới hạn 10 checkpoints
+            checkpoint = {
+                "timestamp": tlog.timestamp.isoformat() if tlog.timestamp else None,
+                "latitude": tlog.latitude,
+                "longitude": tlog.longitude,
+                "altitude_m": tlog.altitude_m,
+                "battery_pct": tlog.battery_pct,
+                "energy_consumed_wh": tlog.energy_consumed_wh,
+                "image_url": tlog.image_url,
+            }
+            telemetry_logs.append(checkpoint)
+        
+        return {
+            "flight_id": flight_id if flight_id.startswith("FLT-") else f"FLT-{date_prefix}-{seq}",
+            "mission_id": mission.id,
+            "drone_id": mission.drone_id,
+            "route": f"{c1} -> {c2}",
+            "origin_hub_id": mission.origin_hub_id,
+            "origin_hub_name": h1.name if h1 else None,
+            "destination_hub_id": mission.destination_hub_id,
+            "destination_hub_name": h2.name if h2 else None,
+            "departure": dep.strftime("%d/%m/%Y, %H:%M") if dep else None,
+            "arrival": arr.strftime("%d/%m/%Y, %H:%M") if arr else None,
+            "duration_minutes": dur_min,
+            "energy_wh": round(float(energy_wh), 1) if energy_wh is not None else None,
+            "status": st_val,
+            "battery_id": mission.battery_id,
+            "battery_model": battery.battery_model if battery else None,
+            "battery_charge_pct": battery.charge_level_pct if battery else None,
+            "payload_weight_kg": mission.payload_weight,
+            "telemetry_logs": telemetry_logs,
+            "checkpoint_count": len(telemetry_logs),
+        }
 
     raise HTTPException(status_code=404, detail="Flight not found")
 
@@ -1199,6 +1316,152 @@ async def get_battery(
         raise HTTPException(status_code=404, detail="Battery not found")
     catalog_map = await _get_catalog_map(db)
     return _battery_to_response(battery, catalog_map)
+
+
+@router.get("/batteries/{battery_id}/history", response_model=list, summary="Lịch sử pin (install/swap/charge)")
+async def get_admin_battery_history(
+    battery_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Lấy lịch sử tải/dỡ/đổi/kiểm tra của pin (Battery History).
+    
+    Admin view toàn hệ thống - Return danh sách từ activity_logs.
+    Bao gồm: install, remove, swap, inspection actions + proof images.
+    
+    Response schema theo database spec:
+    {
+        "id": int,
+        "action": str,  # BATTERY_INSTALLED_ON_DRONE | BATTERY_SWAPPED | BATTERY_CHARGED
+        "drone_id": optional[str],
+        "battery_id": str,
+        "charge_level_pct": optional[float],
+        "hub_id": optional[int],
+        "mission_id": optional[str],
+        "proof_image_url": optional[str],
+        "note": optional[str],
+        "technician_id": optional[str],
+        "recorded_at": datetime,
+    }
+    """
+    battery = await db.get(Battery, battery_id)
+    if not battery:
+        raise HTTPException(status_code=404, detail="Battery not found")
+    
+    from app.modules.system.models import ActivityLog
+    query = (
+        select(ActivityLog)
+        .where(
+            ActivityLog.resource_type == "battery",
+            ActivityLog.resource_id == battery_id,
+            ActivityLog.action.in_(["BATTERY_INSTALLED_ON_DRONE", "BATTERY_SWAPPED", "BATTERY_CHARGED"])
+        )
+        .order_by(ActivityLog.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    
+    result = await db.execute(query)
+    logs = result.scalars().all()
+    
+    battery_history = []
+    for log in logs:
+        details = log.details_json or {}
+        entry = {
+            "id": log.id,
+            "action": log.action,
+            "drone_id": details.get("drone_id"),
+            "battery_id": battery_id,
+            "charge_level_pct": details.get("charge_level_pct"),
+            "hub_id": details.get("hub_id"),
+            "mission_id": details.get("mission_id"),
+            "proof_image_url": details.get("proof_image_url"),
+            "note": details.get("note"),
+            "technician_id": details.get("technician_id"),
+            "recorded_at": log.created_at.isoformat() if log.created_at else None,
+        }
+        battery_history.append(entry)
+    
+    return battery_history
+
+
+@router.get("/drones/{drone_id}/battery-history", response_model=list, summary="Lịch sử gắn pin của drone")
+async def get_admin_drone_battery_history(
+    drone_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user: CurrentUser = Depends(allow_admin),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Lấy lịch sử gắn/tháo/đổi pin của drone (Admin view toàn hệ thống).
+    
+    Return danh sách BatteryHistoryEntry từ activity_logs.
+    Bao gồm: install, swap actions kèm proof images từ Mục 9.
+    
+    Response schema theo database spec:
+    {
+        "id": int,
+        "stage": str,  # BATTERY_INSTALLED_ON_DRONE | BATTERY_REMOVED_FROM_DRONE | BATTERY_SWAPPED
+        "action": str,  # install | remove | swap
+        "removed_battery_id": optional[str],
+        "installed_battery_id": optional[str],
+        "battery_pct_before": optional[float],
+        "battery_pct_after": optional[float],
+        "hub_id": optional[int],
+        "mission_id": optional[str],
+        "drone_id": str,
+        "technician_id": optional[str],
+        "note": optional[str],
+        "proof_image_url": optional[str],
+        "recorded_at": datetime,
+    }
+    """
+    drone = await db.get(Drone, drone_id)
+    if not drone:
+        raise HTTPException(status_code=404, detail="Drone not found")
+    
+    from app.modules.system.models import ActivityLog
+    query = (
+        select(ActivityLog)
+        .where(
+            ActivityLog.resource_type == "drone",
+            ActivityLog.resource_id == drone_id,
+            ActivityLog.action.in_(["BATTERY_INSTALLED_ON_DRONE", "BATTERY_SWAPPED"])
+        )
+        .order_by(ActivityLog.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    
+    result = await db.execute(query)
+    logs = result.scalars().all()
+    
+    battery_history = []
+    for log in logs:
+        details = log.details_json or {}
+        entry = {
+            "id": log.id,
+            "stage": log.action,
+            "action": "install" if log.action == "BATTERY_INSTALLED_ON_DRONE" else "swap",
+            "removed_battery_id": details.get("removed_battery_id"),
+            "installed_battery_id": details.get("installed_battery_id"),
+            "battery_pct_before": details.get("battery_pct_before"),
+            "battery_pct_after": details.get("battery_pct_after"),
+            "hub_id": details.get("hub_id"),
+            "mission_id": details.get("mission_id"),
+            "drone_id": drone_id,
+            "technician_id": details.get("technician_id"),
+            "note": details.get("note"),
+            "proof_image_url": details.get("proof_image_url"),
+            "recorded_at": log.created_at.isoformat() if log.created_at else None,
+        }
+        battery_history.append(entry)
+    
+    return battery_history
 
 
 @router.post("/batteries", response_model=BatteryResponse, status_code=201, summary="Thêm pin mới vào kho (hỗ trợ đơn chiếc hoặc theo lô)")

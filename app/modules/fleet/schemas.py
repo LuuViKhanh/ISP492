@@ -65,6 +65,9 @@ class InspectionUpdate(BaseModel):
     status: WorkOrderStatus
     diagnosis: Optional[str] = None
     resulting_drone_status: Optional[str] = None
+    proof_image_url: Optional[str] = None  # Base64 Data URL or URL to proof image
+    parts_replaced_proof_url: Optional[str] = None  # Proof image showing parts replaced
+    inspection_items: Optional[list[dict]] = None  # [{item, checked, status, note}, ...]
 
 class WorkOrderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -91,3 +94,7 @@ class WorkOrderResponse(BaseModel):
     assigned_technician_name: Optional[str] = None
     parts_replaced_json: Optional[list] = None  # [{part_category_id, quantity}, ...]
     resulting_drone_status: Optional[str] = None  # Status technician chose after completion
+    inspection_items_json: Optional[list] = None  # [{item, checked, status, note}, ...]
+    status_logs_json: Optional[list] = None  # Log of status changes
+    proof_image_url: Optional[str] = None  # Proof image for work order (before/after/during) - Base64 Data URL
+    parts_replaced_proof_url: Optional[str] = None  # Proof image for parts replaced - Base64 Data URL
